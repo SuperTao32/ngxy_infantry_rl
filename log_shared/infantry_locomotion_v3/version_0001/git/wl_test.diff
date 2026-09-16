@@ -1,0 +1,89 @@
+--- git commit ---
+18634c7c2ad034edb4d0342827164bdf59d17e4f
+
+
+--- git status ---
+On branch locomotion
+Your branch is up to date with 'origin/locomotion'.
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	modified:   experiments/genesis/wheel_leg_infantry/tasks/locomotion/config.py
+
+no changes added to commit (use "git add" and/or "git commit -a") 
+
+
+--- git diff ---
+diff --git a/experiments/genesis/wheel_leg_infantry/tasks/locomotion/config.py b/experiments/genesis/wheel_leg_infantry/tasks/locomotion/config.py
+index d211e98..ba22446 100644
+--- a/experiments/genesis/wheel_leg_infantry/tasks/locomotion/config.py
++++ b/experiments/genesis/wheel_leg_infantry/tasks/locomotion/config.py
+@@ -315,8 +315,9 @@ def _curriculum_cfg() -> dict:
+                         "base_contact": -50.0,
+                         "base_height": -15.0,
+                         "height_gate": 15.0,
+-                        "landing_base_oscillation": -0.3,
+-                        "landing_joint_vel": -0.01,
++                        "joint_vel": -0.1,
++                        # "landing_base_oscillation": -0.3,
++                        # "landing_joint_vel": -0.01,
+                     },
+                 },
+             },
+@@ -327,11 +328,11 @@ def _curriculum_cfg() -> dict:
+                     "reset_ranges": {
+                         "base_init_pos_range": [[0.0, 0.0], [0.0, 0.0], [0.22, 0.24]],
+                         "base_init_rpy_offset_range_deg": [[-3.0, 3.0], [-3.0, 3.0], [-5.0, 5.0]],
+-                        "base_init_lin_vel_range": [[-1.5, 1.5], [-0.05, 0.05], [-0.1, 0.1]],
+-                        "base_init_ang_vel_range": [[-0.1, 0.1], [-0.1, 0.1], [-3.0, 3.0]],
++                        "base_init_lin_vel_range": [[-1.0, 1.0], [-0.05, 0.05], [-0.1, 0.1]],
++                        "base_init_ang_vel_range": [[-0.1, 0.1], [-0.1, 0.1], [-0.0, 0.0]],
+                     },
+                     "command_ranges": {
+-                        "lin_vel_range": [-3.5, 3.5],
++                        "lin_vel_range": [-3.0, 3.0],
+                         "ang_vel_range": [-2.0, 2.0],
+                         "base_height_range": [0.20, 0.38],
+                     },
+@@ -351,8 +352,9 @@ def _curriculum_cfg() -> dict:
+                         "leg_symmetry": -15.0,
+                         "base_height": -15.0,
+                         "height_gate": 15.0,
+-                        "landing_base_oscillation": -0.5,
+-                        "landing_joint_vel": -0.03,
++                        "joint_vel": -0.01,
++                        # "landing_base_oscillation": -0.5,
++                        # "landing_joint_vel": -0.03,
+                     },
+                 },
+             },
+@@ -363,13 +365,13 @@ def _curriculum_cfg() -> dict:
+                     "reset_ranges": {
+                         "base_init_pos_range": [[0.0, 0.0], [0.0, 0.0], [0.22, 0.24]],
+                         "base_init_rpy_offset_range_deg": [[-3.0, 3.0], [-3.0, 3.0], [-5.0, 5.0]],
+-                        "base_init_lin_vel_range": [[-2.5, 2.5], [-0.05, 0.05], [-0.1, 0.1]],
+-                        "base_init_ang_vel_range": [[-0.1, 0.1], [-0.1, 0.1], [-5.1, 5.1]],
++                        "base_init_lin_vel_range": [[-1.5, 1.5], [-0.05, 0.05], [-0.1, 0.1]],
++                        "base_init_ang_vel_range": [[-0.1, 0.1], [-0.1, 0.1], [-0.1, 0.1]],
+                     },
+                     "command_ranges": {
+                         "lin_vel_range": [-4.2, 4.2],
+                         "ang_vel_range": [-4.0, 4.0],
+-                        "base_height_range": [0.20, 0.38],
++                        "base_height_range": [0.20, 0.40],
+                     },
+                     "tracking_gate": {
+                         "height_full_error": 0.01,
+@@ -387,8 +389,9 @@ def _curriculum_cfg() -> dict:
+                         "leg_symmetry": -15.0,
+                         "base_height": -15.0,
+                         "height_gate": 15.0,
+-                        "landing_base_oscillation": -0.7,
+-                        "landing_joint_vel": -0.05,
++                        "joint_vel": -0.05,
++                        # "landing_base_oscillation": -0.7,
++                        # "landing_joint_vel": -0.05,
+                     },
+                 },
+             },

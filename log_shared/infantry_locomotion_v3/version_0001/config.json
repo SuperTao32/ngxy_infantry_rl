@@ -1,0 +1,844 @@
+{
+  "schema_version": 2,
+  "env_cfg": {
+    "num_actions": 6,
+    "num_joints": 4,
+    "num_wheels": 2,
+    "robot_mjcf": "assets/robot/wheelbipeV14_2/mjcf/wheelbipeV14_2.xml",
+    "default_joint_pos": {
+      "left_front1_joint": 0.0,
+      "left_rear1_joint": 0.0,
+      "right_front1_joint": 0.0,
+      "right_rear1_joint": 0.0
+    },
+    "joint_names": [
+      "left_front1_joint",
+      "right_front1_joint",
+      "left_rear1_joint",
+      "right_rear1_joint"
+    ],
+    "leg_front_joint_names": [
+      "left_front1_joint",
+      "right_front1_joint"
+    ],
+    "leg_rear_joint_names": [
+      "left_rear1_joint",
+      "right_rear1_joint"
+    ],
+    "wheel_names": [
+      "left_wheel_joint",
+      "right_wheel_joint"
+    ],
+    "wheel_link_names": [
+      "left_wheel_link",
+      "right_wheel_link"
+    ],
+    "spring_names": [
+      "left_spring2_joint",
+      "right_spring2_joint"
+    ],
+    "base_link_name": "base_link",
+    "leg_upper_link_length": 0.21,
+    "leg_lower_link_length": 0.25,
+    "leg_angle_limit_range": [
+      -0.7853981633974483,
+      0.7853981633974483
+    ],
+    "min_upper_link_angle": 1.5707963267948966,
+    "gas_spring_preload_force": 420.0,
+    "gas_spring_stiffness": 1400.0,
+    "gas_spring_damping": 50.0,
+    "gas_spring_max_compression": 0.06,
+    "wheel_contact_force_threshold": 1.0,
+    "base_contact_force_threshold": 5.0,
+    "landing_penalty_duration_s": 0.3,
+    "joint_kp": 60.0,
+    "joint_kd": 3.0,
+    "wheel_kd": 0.25,
+    "joint_force_limit": 40.0,
+    "wheel_force_limit": 5.0,
+    "joint_pos_scale": 1.0,
+    "wheel_vel_scale": 70.0,
+    "clip_joint_action": 1.0,
+    "clip_wheel_action": 1.0,
+    "simulate_action_latency": true,
+    "termination_if_roll_greater_than": 20.0,
+    "termination_if_pitch_greater_than": 20.0,
+    "tilt_termination_duration_s": 0.3,
+    "base_contact_termination_duration_s": 0.25,
+    "base_init_pos_range": [
+      [
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0
+      ],
+      [
+        0.22,
+        0.22
+      ]
+    ],
+    "base_init_quat": [
+      1.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "base_init_rpy_offset_range_deg": [
+      [
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0
+      ]
+    ],
+    "base_init_lin_vel_range": [
+      [
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0
+      ]
+    ],
+    "base_init_ang_vel_range": [
+      [
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0
+      ]
+    ],
+    "episode_length_s": 100.0,
+    "resampling_time_s": 10.0
+  },
+  "obs_cfg": {
+    "policy_velocity_source": "imu_wheel_estimator",
+    "imu": {
+      "link_name": "base_link",
+      "pos_offset": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "acc_noise": 0.0,
+      "acc_bias": 0.0,
+      "acc_random_walk": 0.0,
+      "gyro_noise": 0.0,
+      "gyro_bias": 0.0,
+      "gyro_random_walk": 0.0,
+      "delay": 0.0,
+      "jitter": 0.0
+    },
+    "velocity_estimator": {
+      "wheel_radius": 0.06,
+      "wheel_velocity_sign": 1.0,
+      "gravity_magnitude": 9.81,
+      "wheel_correction_time_constant_s": 0.5,
+      "max_abs_velocity": 4.2
+    },
+    "obs_scales": {
+      "lin_vel": 0.23809523809523808,
+      "lin_acc": 0.1019367991845056,
+      "ang_vel": 0.5,
+      "joint_pos": 1.0,
+      "joint_vel": 0.1,
+      "wheel_vel": 0.014285714285714285,
+      "base_height": 2.857142857142857,
+      "leg_length": 2.857142857142857,
+      "leg_angle": 1.0
+    }
+  },
+  "reward_cfg": {
+    "tracking_sigma": 0.25,
+    "landing_base_ang_vel_weight": 0.25,
+    "tracking_gate": {
+      "height_full_error": 0.03,
+      "height_zero_error": 0.1,
+      "attitude_full_angle_deg": 5.0,
+      "attitude_zero_angle_deg": 15.0,
+      "floor": 0.3
+    },
+    "reward_scales": {
+      "tracking_lin_vel": -0.5,
+      "tracking_ang_vel": -0.5,
+      "gated_tracking_lin_vel": 5.0,
+      "gated_tracking_ang_vel": 5.0,
+      "base_balance": -5.0,
+      "leg_symmetry": -5.0,
+      "leg_symmetry_bonus": 2.0,
+      "base_height": -10.0,
+      "height_gate": 5.0,
+      "joint_vel": -0.005,
+      "landing_base_oscillation": 0.0,
+      "landing_joint_vel": 0.0,
+      "base_contact": -10.0,
+      "alive": 5.0,
+      "death": -100.0
+    }
+  },
+  "command_cfg": {
+    "num_commands": 3,
+    "lin_vel_range": [
+      0.0,
+      0.0
+    ],
+    "ang_vel_range": [
+      0.0,
+      0.0
+    ],
+    "base_height_range": [
+      0.22,
+      0.22
+    ]
+  },
+  "curriculum_cfg": {
+    "enabled": true,
+    "stages": [
+      {
+        "name": "stand",
+        "start_iteration": 0,
+        "targets": {
+          "reset_ranges": {
+            "base_init_pos_range": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.22,
+                0.22
+              ]
+            ],
+            "base_init_rpy_offset_range_deg": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ]
+            ],
+            "base_init_lin_vel_range": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ]
+            ],
+            "base_init_ang_vel_range": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ]
+            ]
+          },
+          "command_ranges": {
+            "lin_vel_range": [
+              0.0,
+              0.0
+            ],
+            "ang_vel_range": [
+              0.0,
+              0.0
+            ],
+            "base_height_range": [
+              0.22,
+              0.22
+            ]
+          },
+          "termination_limits": {
+            "termination_if_roll_greater_than": 20.0,
+            "termination_if_pitch_greater_than": 20.0,
+            "tilt_termination_duration_s": 0.3,
+            "base_contact_termination_duration_s": 0.25
+          }
+        }
+      },
+      {
+        "name": "gentle_motion",
+        "start_iteration": 1000,
+        "targets": {
+          "reset_ranges": {
+            "base_init_pos_range": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.22,
+                0.24
+              ]
+            ],
+            "base_init_rpy_offset_range_deg": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ]
+            ],
+            "base_init_lin_vel_range": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ]
+            ],
+            "base_init_ang_vel_range": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ]
+            ]
+          },
+          "command_ranges": {
+            "lin_vel_range": [
+              -0.5,
+              0.5
+            ],
+            "ang_vel_range": [
+              -0.3,
+              0.3
+            ],
+            "base_height_range": [
+              0.2,
+              0.24
+            ]
+          },
+          "tracking_gate": {
+            "height_full_error": 0.02,
+            "height_zero_error": 0.06,
+            "attitude_full_angle_deg": 4.0,
+            "attitude_zero_angle_deg": 12.0,
+            "floor": 0.2
+          },
+          "termination_limits": {
+            "termination_if_roll_greater_than": 15.0,
+            "termination_if_pitch_greater_than": 15.0
+          },
+          "reward_scales": {
+            "gated_tracking_lin_vel": 10.0,
+            "gated_tracking_ang_vel": 10.0,
+            "base_balance": -10.0,
+            "base_contact": -20.0,
+            "base_height": -10.0,
+            "height_gate": 5.0
+          }
+        }
+      },
+      {
+        "name": "locomotion",
+        "start_iteration": 2000,
+        "targets": {
+          "reset_ranges": {
+            "base_init_pos_range": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.22,
+                0.24
+              ]
+            ],
+            "base_init_rpy_offset_range_deg": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ]
+            ],
+            "base_init_lin_vel_range": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ]
+            ],
+            "base_init_ang_vel_range": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ]
+            ]
+          },
+          "command_ranges": {
+            "lin_vel_range": [
+              -1.5,
+              1.5
+            ],
+            "ang_vel_range": [
+              -0.6,
+              0.6
+            ],
+            "base_height_range": [
+              0.2,
+              0.3
+            ]
+          },
+          "tracking_gate": {
+            "height_full_error": 0.02,
+            "height_zero_error": 0.06,
+            "attitude_full_angle_deg": 2.0,
+            "attitude_zero_angle_deg": 10.0,
+            "floor": 0.1
+          },
+          "termination_limits": {
+            "termination_if_roll_greater_than": 20.0,
+            "termination_if_pitch_greater_than": 20.0,
+            "tilt_termination_duration_s": 0.3,
+            "base_contact_termination_duration_s": 0.25
+          },
+          "reward_scales": {
+            "gated_tracking_lin_vel": 15.0,
+            "gated_tracking_ang_vel": 15.0,
+            "base_balance": -15.0,
+            "leg_symmetry": -10.0,
+            "base_contact": -30.0,
+            "base_height": -15.0,
+            "height_gate": 10.0
+          }
+        }
+      },
+      {
+        "name": "locomotion2",
+        "start_iteration": 4000,
+        "targets": {
+          "reset_ranges": {
+            "base_init_pos_range": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.22,
+                0.24
+              ]
+            ],
+            "base_init_rpy_offset_range_deg": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ]
+            ],
+            "base_init_lin_vel_range": [
+              [
+                -0.5,
+                0.5
+              ],
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ]
+            ],
+            "base_init_ang_vel_range": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ],
+              [
+                1.0,
+                1.0
+              ]
+            ]
+          },
+          "command_ranges": {
+            "lin_vel_range": [
+              -2.0,
+              2.0
+            ],
+            "ang_vel_range": [
+              -0.9,
+              0.9
+            ],
+            "base_height_range": [
+              0.2,
+              0.34
+            ]
+          },
+          "tracking_gate": {
+            "height_full_error": 0.015,
+            "height_zero_error": 0.05,
+            "attitude_full_angle_deg": 2.0,
+            "attitude_zero_angle_deg": 8.0,
+            "floor": 0.05
+          },
+          "termination_limits": {
+            "termination_if_roll_greater_than": 25.0,
+            "termination_if_pitch_greater_than": 25.0,
+            "tilt_termination_duration_s": 0.5,
+            "base_contact_termination_duration_s": 0.5
+          },
+          "reward_scales": {
+            "gated_tracking_lin_vel": 20.0,
+            "gated_tracking_ang_vel": 20.0,
+            "base_balance": -20.0,
+            "base_contact": -50.0,
+            "base_height": -15.0,
+            "height_gate": 15.0,
+            "joint_vel": -0.1
+          }
+        }
+      },
+      {
+        "name": "locomotion3",
+        "start_iteration": 6000,
+        "targets": {
+          "reset_ranges": {
+            "base_init_pos_range": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.22,
+                0.24
+              ]
+            ],
+            "base_init_rpy_offset_range_deg": [
+              [
+                -3.0,
+                3.0
+              ],
+              [
+                -3.0,
+                3.0
+              ],
+              [
+                -5.0,
+                5.0
+              ]
+            ],
+            "base_init_lin_vel_range": [
+              [
+                -1.0,
+                1.0
+              ],
+              [
+                -0.05,
+                0.05
+              ],
+              [
+                -0.1,
+                0.1
+              ]
+            ],
+            "base_init_ang_vel_range": [
+              [
+                -0.1,
+                0.1
+              ],
+              [
+                -0.1,
+                0.1
+              ],
+              [
+                -0.0,
+                0.0
+              ]
+            ]
+          },
+          "command_ranges": {
+            "lin_vel_range": [
+              -3.0,
+              3.0
+            ],
+            "ang_vel_range": [
+              -2.0,
+              2.0
+            ],
+            "base_height_range": [
+              0.2,
+              0.38
+            ]
+          },
+          "tracking_gate": {
+            "height_full_error": 0.01,
+            "height_zero_error": 0.025,
+            "attitude_full_angle_deg": 0.5,
+            "attitude_zero_angle_deg": 2.0,
+            "floor": 0.05
+          },
+          "reward_scales": {
+            "gated_tracking_lin_vel": 30.0,
+            "gated_tracking_ang_vel": 30.0,
+            "base_balance": -15.0,
+            "base_contact": -40.0,
+            "leg_symmetry": -15.0,
+            "base_height": -15.0,
+            "height_gate": 15.0,
+            "joint_vel": -0.01
+          }
+        }
+      },
+      {
+        "name": "full_range",
+        "start_iteration": 8000,
+        "targets": {
+          "reset_ranges": {
+            "base_init_pos_range": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.22,
+                0.24
+              ]
+            ],
+            "base_init_rpy_offset_range_deg": [
+              [
+                -3.0,
+                3.0
+              ],
+              [
+                -3.0,
+                3.0
+              ],
+              [
+                -5.0,
+                5.0
+              ]
+            ],
+            "base_init_lin_vel_range": [
+              [
+                -1.5,
+                1.5
+              ],
+              [
+                -0.05,
+                0.05
+              ],
+              [
+                -0.1,
+                0.1
+              ]
+            ],
+            "base_init_ang_vel_range": [
+              [
+                -0.1,
+                0.1
+              ],
+              [
+                -0.1,
+                0.1
+              ],
+              [
+                -0.1,
+                0.1
+              ]
+            ]
+          },
+          "command_ranges": {
+            "lin_vel_range": [
+              -4.2,
+              4.2
+            ],
+            "ang_vel_range": [
+              -4.0,
+              4.0
+            ],
+            "base_height_range": [
+              0.2,
+              0.4
+            ]
+          },
+          "tracking_gate": {
+            "height_full_error": 0.01,
+            "height_zero_error": 0.025,
+            "attitude_full_angle_deg": 0.5,
+            "attitude_zero_angle_deg": 2.0,
+            "floor": 0.05
+          },
+          "reward_scales": {
+            "gated_tracking_lin_vel": 30.0,
+            "gated_tracking_ang_vel": 30.0,
+            "base_balance": -15.0,
+            "base_contact": -40.0,
+            "leg_symmetry": -15.0,
+            "base_height": -15.0,
+            "height_gate": 15.0,
+            "joint_vel": -0.05
+          }
+        }
+      }
+    ]
+  },
+  "train_cfg": {
+    "algorithm": {
+      "class_name": "PPO",
+      "clip_param": 0.2,
+      "desired_kl": 0.01,
+      "entropy_coef": 0.01,
+      "gamma": 0.99,
+      "lam": 0.95,
+      "learning_rate": 0.0003,
+      "max_grad_norm": 1.0,
+      "num_learning_epochs": 5,
+      "num_mini_batches": 4,
+      "schedule": "adaptive",
+      "use_clipped_value_loss": true,
+      "value_loss_coef": 1.0
+    },
+    "actor": {
+      "class_name": "MLPModel",
+      "hidden_dims": [
+        512,
+        256,
+        128
+      ],
+      "activation": "elu",
+      "distribution_cfg": {
+        "class_name": "BetaDistribution",
+        "action_range": [
+          -1.0,
+          1.0
+        ]
+      }
+    },
+    "critic": {
+      "class_name": "MLPModel",
+      "hidden_dims": [
+        512,
+        256,
+        128
+      ],
+      "activation": "elu"
+    },
+    "obs_groups": {
+      "actor": [
+        "policy"
+      ],
+      "critic": [
+        "critic"
+      ]
+    },
+    "num_steps_per_env": 24,
+    "save_interval": 100,
+    "run_name": "infantry_locomotion_v3/version_0001",
+    "logger": "tensorboard"
+  }
+}

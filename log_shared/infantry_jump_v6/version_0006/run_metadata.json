@@ -1,0 +1,35 @@
+{
+  "created_at": "2026-09-14T07:15:57+00:00",
+  "run_dir": "/home/tuyuantao/wl_test/logs/infantry_jump_v6/version_0006",
+  "arguments": {
+    "vis": false,
+    "exp_name": "infantry_jump_v6",
+    "num_envs": 8192,
+    "config": 25,
+    "max_iterations": 2001,
+    "seed": 1,
+    "log_root": "logs",
+    "locomotion_log_root": null,
+    "locomotion_exp_name": "infantry_locomotion_v3",
+    "locomotion_version": null,
+    "locomotion_ckpt": 6000,
+    "dry_run": false,
+    "resume": null,
+    "checkpoint": null,
+    "resume_config": "saved"
+  },
+  "command": [
+    "/home/tuyuantao/wl_test/experiments/genesis/wheel_leg_infantry/tasks/jump/train.py",
+    "--locomotion-ckpt",
+    "6000"
+  ],
+  "python": "3.13.15 (main, Sep  1 2026, 14:18:08) [Clang 22.1.3 ]",
+  "platform": "Linux-6.8.0-139-generic-x86_64-with-glibc2.39",
+  "packages": {
+    "genesis-world": "1.2.3",
+    "rsl-rl-lib": "5.4.2",
+    "torch": "2.13.0+cu126"
+  },
+  "git_commit": "2af73c4e46eaf0ce7a8423b5e3b691cdae064c4c",
+  "git_dirty": true
+}

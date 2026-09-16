@@ -1,0 +1,28 @@
+[project]
+name = "wheel-leg"
+version = "0.1.0"
+requires-python = ">=3.13,<3.14"
+
+dependencies = [
+    "numpy",
+    "mujoco",
+    "torch==2.13.0",
+    "tensordict",
+    # ImGui 交互调试面板由 Genesis 的 render extra 提供。
+    "genesis-world[render]",
+    "rsl-rl-lib>=5,<6",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu126" }
+
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true
+
+[tool.black]
+line-length = 150

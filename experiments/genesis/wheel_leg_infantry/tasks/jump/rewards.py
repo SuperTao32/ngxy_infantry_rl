@@ -1,0 +1,140 @@
+"""按蓄力、蹬腿、腾空和落地分阶段门控的跳跃奖励。"""
+
+import torch
+
+
+class JumpRewards:
+    def _jump_tilt_error(self):
+        # 正立 gz=-1，倒立 gz=+1；小角度下约等于倾角平方。
+        return 2.0 * torch.clamp(1.0 + self.projected_gravity[:, 2], 0.0, 2.0)
+
+    def _reward_base_balance(self):
+        return self._jump_tilt_error()
+
+    def _reward_jump_invalid(self):
+        return self.jump_invalid
+
+    def _reward_landing_airborne(self):
+        return self.landing_airborne_gate
+
+    def _reward_height_reference_tracking(self):
+        """宽松跟踪计时器参考；实测距离只用于奖励，不反馈到参考指令。"""
+        error = torch.clamp(
+            torch.abs(self.base_to_wheel_bottom_distance - self.commands[:, 2])
+            - self.reward_cfg["height_reference_tolerance_m"],
+            min=0.0,
+        )
+        return self.flight_gate * torch.exp(-torch.square(error) / self.reward_cfg["height_reference_sigma"])
+
+    def _reward_tracking_lin_vel(self):
+        """全程只跟踪进入 jump 时锁存的前向线速度，不约束侧向速度。"""
+        error = torch.square(self.base_lin_vel[:, 0] - self.commands[:, 0])
+        return torch.exp(-error / self.reward_cfg["reference_forward_velocity_sigma"])
+
+    def _reward_tracking_ang_vel(self):
+        """全程跟踪零 yaw 角速度。"""
+        error = torch.square(self.base_ang_vel[:, 2])
+        return torch.exp(-error / self.reward_cfg["zero_yaw_rate_sigma"])
+
+    def _reward_crouch_short_leg(self):
+        target = self.reward_cfg["short_leg_length_target"]
+        error = torch.mean(torch.square(self.leg_length - target), dim=1)
+        return self.crouch_gate * torch.exp(-error / self.reward_cfg["leg_length_sigma"])
+
+    def _reward_crouch_airborne(self):
+        """计划 crouch 阶段双轮离地时每步扣分，负权重由框架统一乘 dt。"""
+        return self.crouch_airborne_gate
+
+    def _reward_takeoff_event(self):
+        """连续腾空达到阈值时才给一次奖励，物理起跳事件仍单独记录。"""
+        return self.jump_reward_state.takeoff_event
+
+    def _reward_flight_height_shortfall(self):
+        target = self.wheel_clearance_target
+        shortfall = torch.clamp(1.0 - self.jump_reward_state.peak_clearance / target, 0.0, 1.0)
+        # 晚于触地的失稳需补齐全额缺高惩罚，与此前的结算合计为 1。
+        correction = torch.clamp(self.jump_reward_state.revoked_settled_clearance / target, 0.0, 1.0)
+        return self.jump_reward_state.height_settlement_event * shortfall + correction
+
+    def _revoked_height_progress(self):
+        return torch.clamp(
+            self.jump_reward_state.revoked_peak_clearance / self.wheel_clearance_target, 0.0, 1.0
+        )
+
+    def _reward_flight_peak_height(self):
+        """只在首次双轮腾空期间按新增峰值给分；累计最多一个目标高度。"""
+        progress = torch.clamp(
+            self.jump_reward_state.peak_clearance / self.wheel_clearance_target,
+            0.0,
+            1.0,
+        )
+        previous = torch.clamp(
+            self.jump_reward_state.previous_peak_clearance / self.wheel_clearance_target, 0.0, 1.0
+        )
+        return self.flight_gate * torch.clamp(progress - previous, min=0.0) - self._revoked_height_progress()
+
+    def _target_takeoff_velocity(self):
+        wheel_clearance = self.wheel_clearance_target
+        return (2.0 * self.gravity_magnitude * wheel_clearance) ** 0.5
+
+    def _reward_takeoff_upward_velocity(self):
+        """首次离地前仍有轮子支撑时，持续奖励当前 base-link 向上速度。"""
+        progress = self.world_vertical_velocity / self._target_takeoff_velocity()
+        return self.takeoff_gate * progress
+
+    def _reward_takeoff_vertical_velocity(self):
+        """离地时按最后一个轮地接触拍的 base-link vz 结算一次。"""
+        progress = torch.clamp(
+            self.takeoff_contact_vertical_velocity / self._target_takeoff_velocity(), 0.0, 1.0
+        )
+        return self.jump_takeoff_event * (1.0 - self.jump_invalid) * progress
+
+    def _reward_flight_airtime(self):
+        """实际腾空每步给分；框架统一乘 dt，累计奖励 = 权重 × 腾空秒数。"""
+        return self.flight_gate
+
+    def _reward_flight_height_progress(self):
+        target = self.wheel_clearance_target
+        progress = torch.clamp(self.wheel_clearance / target, 0.0, 1.0)
+        return self.flight_gate * progress
+
+    def _reward_flight_balance(self):
+        tilt_error = self._jump_tilt_error()
+        return self.flight_gate * torch.exp(-tilt_error / self.reward_cfg["flight_balance_sigma"])
+
+    def _reward_flight_leg_vertical(self):
+        """在腾空期间，奖励腿部竖直。"""
+        error = torch.mean(torch.square(self.leg_angle * self.obs_scales["leg_angle"]), dim=1)
+        return self.flight_gate * torch.exp(-error)
+
+    def _reward_flight_height_tracking(self):
+        error = torch.square(self.wheel_clearance - self.wheel_clearance_target)
+        return self.flight_gate * torch.exp(-error / self.reward_cfg["flight_height_sigma"])
+
+    def _reward_flight_tuck(self):
+        target = self.reward_cfg["short_leg_length_target"]
+        error = torch.mean(torch.square(self.leg_length - target), dim=1)
+        return self.flight_gate * torch.exp(-error / self.reward_cfg["leg_length_sigma"])
+
+    def _reward_soft_landing(self):
+        tilt_error = self._jump_tilt_error()
+        impact_quality = torch.exp(
+            -torch.square(self.impact_vertical_speed) / self.reward_cfg["landing_velocity_sigma"]
+        )
+        attitude_quality = torch.exp(-tilt_error / self.reward_cfg["landing_tilt_sigma"])
+        return self.jump_landing_event * impact_quality * attitude_quality
+
+    def _reward_landing_stability(self):
+        tilt_error = self._jump_tilt_error()
+        # yaw 可以是 warmup 锁存的非零目标，这里只抑制 roll/pitch 角速度。
+        angular_error = torch.sum(torch.square(self.base_ang_vel[:, :2]), dim=1)
+        velocity_error = torch.square(self.world_vertical_velocity)
+        quality = torch.exp(
+            -velocity_error / self.reward_cfg["landing_velocity_sigma"]
+            -tilt_error / self.reward_cfg["landing_tilt_sigma"]
+            -angular_error / self.reward_cfg["landing_ang_vel_sigma"]
+        )
+        return self.jump_landing_gate * quality
+
+    def _reward_action_rate(self):
+        return torch.sum(torch.square(self.actions - self.last_actions), dim=1)
