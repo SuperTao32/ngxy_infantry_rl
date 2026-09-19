@@ -408,7 +408,6 @@ class JumpEnv(JumpRewards, LocomotionEnv):
 
     def _get_landing_privileged_observation_components(self):
         # Critic 读取本回合是否已落地的锁存状态；actor 不读取接触真值。
-        # 该分量属于当前 63 维观测契约，不是旧配置兼容分支。
         return {
             "privileged_jump_landed": self.has_landed.unsqueeze(-1).to(dtype=gs.tc_float),
         }

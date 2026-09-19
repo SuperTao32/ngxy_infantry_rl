@@ -904,7 +904,7 @@ class LocomotionEnv(LocomotionRewards):
             gravity_compensated_forward_acceleration(
                 self.imu_lin_acc,
                 self.projected_gravity,
-                self.gravity_magnitude,
+                self.F,
             )
         )
         self.estimated_base_lin_vel.copy_(
