@@ -115,6 +115,8 @@ class KeyboardJumpCommand:
 
 def _parse_args(argv=None):
     parser = argparse.ArgumentParser()
+    parser.add_argument("--domain-rand", action=argparse.BooleanOptionalAction, default=False,
+                        help="enable dynamics randomization; evaluation defaults to nominal dynamics")
     parser.add_argument("-e", "--exp-name", type=str, default="infantry_jump_v6")
     parser.add_argument("--log-root", type=str, default="logs")
     parser.add_argument("--version", type=str, default=None)
@@ -144,6 +146,7 @@ def main():
     checkpoint_path = resolve_checkpoint(run_dir, args.ckpt)
     configs = load_run_configs(run_dir)
     env_cfg = deepcopy(configs["env_cfg"])
+    env_cfg.setdefault("domain_rand", {})["enabled"] = args.domain_rand
     env_cfg.update(show_FPS=False, viewer_realtime_factor=None)
     env_cfg["handoff_on_landing"] = True
     obs_cfg = configs["obs_cfg"]

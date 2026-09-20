@@ -16,6 +16,7 @@ import torch
 from tensordict import TensorDict
 
 from ...core.curriculum import CurriculumManager
+from ...core.domain_randomization import DomainRandomizationManager, MOTOR_NAMES, SPRING_NAMES
 from ...core.kinematics import compute_leg_angle, compute_leg_length, constrain_leg_targets
 from ...core.tensor_utils import as_gain_tensor, as_range_tensors, sample_uniform
 from ...core.terrain import TerrainManager
@@ -59,6 +60,10 @@ class LocomotionEnv(LocomotionRewards):
         self.terrain = TerrainManager(env_cfg.get("terrain"))
         # 记录 TerrainManager 补齐后的配置，保证课程、日志与运行状态一致。
         self.env_cfg["terrain"] = self.terrain.config
+
+        self.domain_rand = DomainRandomizationManager(env_cfg.get("domain_rand"))
+        self.env_cfg["domain_rand"] = self.domain_rand.config
+        self.batch_dofs_info = self.domain_rand.requires_batched_dofs or bool(env_cfg.get("handoff_on_landing", False))
 
         # 观测、奖励和指令配置
         self.obs_scales: dict[str, float] = obs_cfg["obs_scales"]
@@ -241,6 +246,7 @@ class LocomotionEnv(LocomotionRewards):
         self.curriculum.register_target("action_limits", self._apply_action_limits)
         self.curriculum.register_target("reset_ranges", self._apply_reset_ranges)
         self.curriculum.register_target("terrain", self._apply_terrain_curriculum)
+        self.curriculum.register_target("domain_rand", self.domain_rand.apply_curriculum)
         if self.curriculum.update(0, force=True):
             print(f"[curriculum] stage={self.curriculum.current_stage_name} step=0")
 
@@ -252,7 +258,7 @@ class LocomotionEnv(LocomotionRewards):
                 substeps=20,
             ),
             rigid_options=gs.options.RigidOptions(
-                batch_dofs_info=bool(env_cfg.get("handoff_on_landing", False)),
+                batch_dofs_info=self.batch_dofs_info,
                 enable_self_collision=False,
                 tolerance=1e-5,
                 max_collision_pairs=20,
@@ -312,6 +318,12 @@ class LocomotionEnv(LocomotionRewards):
         self.joints_dof_idx = self._joint_dof_indices(joint_names)
         self.springs_dof_idx = self._joint_dof_indices(self.spring_names)
         self.wheels_dof_idx = self._joint_dof_indices(wheel_names)
+        controlled_names = set((*joint_names, *wheel_names, *self.spring_names))
+        self.passive_joint_names = tuple(
+            joint.name for joint in self.robot.joints
+            if joint.type == gs.JOINT_TYPE.REVOLUTE and joint.name not in controlled_names
+        )
+        self.passive_dof_idx = self._joint_dof_indices(self.passive_joint_names)
         self.wheel_links_idx = torch.tensor(
             [self.robot.get_link(name).idx_local for name in wheel_link_names],
             dtype=gs.tc_int,
@@ -325,6 +337,32 @@ class LocomotionEnv(LocomotionRewards):
         self.robot.set_dofs_kv(self.wheel_kd.tolist(), self.wheels_dof_idx)
         self.robot.set_dofs_force_range((-self.joint_force_limit).tolist(), self.joint_force_limit.tolist(), self.joints_dof_idx)
         self.robot.set_dofs_force_range((-self.wheel_force_limit).tolist(), self.wheel_force_limit.tolist(), self.wheels_dof_idx)
+
+        self.domain_rand.bind(
+            robot=self.robot,
+            base_link=self.robot.get_link(base_link_name),
+            friction_entities=(self.robot, *self.friction_terrain_entities),
+            motor_params={name: getattr(self, name) for name in MOTOR_NAMES},
+            joint_indices=self.joints_dof_idx,
+            wheel_indices=self.wheels_dof_idx,
+            num_envs=self.num_envs,
+            batched_dofs=self.batch_dofs_info,
+            spring_params={name: getattr(self, f"gas_spring_{name}") for name in SPRING_NAMES},
+            num_springs=len(self.spring_names),
+            passive_joint_names=self.passive_joint_names,
+            passive_indices=self.passive_dof_idx,
+            dt=self.dt,
+            push_links={
+                "base": self.robot.get_link(base_link_name),
+                "left_wheel": self.robot.get_link(wheel_link_names[0]),
+                "right_wheel": self.robot.get_link(wheel_link_names[1]),
+            },
+        )
+        # 诊断参数与 manager 的实际参数共用 buffer，始终带并行环境维度。
+        for name, value in self.domain_rand.motor_values.items():
+            setattr(self, name, value)
+        for name, value in self.domain_rand.gas_spring_values.items():
+            setattr(self, f"gas_spring_{name}", value)
 
         # 初始化joint和dof的初始位置
         init_dof_pos_list = []
@@ -472,6 +510,12 @@ class LocomotionEnv(LocomotionRewards):
     def _add_terrain(self):
         """在 scene.build 前创建配置指定的地形实体。"""
         self.terrain_entity = self.terrain.add_to_scene(self.scene)
+        self.friction_terrain_entities = (
+            self.terrain_entity if isinstance(self.terrain_entity, tuple) else (self.terrain_entity,)
+        )
+
+    def _apply_motor_params(self, params, envs_idx=None):
+        self.domain_rand.apply_motor_params(params, envs_idx)
 
     # ============ 公共环境接口：训练器调用的 reset / step / 观测与恢复入口 ============
     def reset(self):
@@ -509,6 +553,7 @@ class LocomotionEnv(LocomotionRewards):
         target_wheel_vel = exec_actions[:, self.num_joints : self.num_joints + self.num_wheels] * self.env_cfg["wheel_vel_scale"]
 
         target_joint_pos = target_joint_pos + self.default_joint_pos
+        target_joint_pos = self.domain_rand.offset_joint_targets(target_joint_pos)
         target_joint_pos = constrain_leg_targets(
             target_joint_pos,
             self.leg_front_joint_indices,
@@ -524,6 +569,7 @@ class LocomotionEnv(LocomotionRewards):
         self.robot.control_dofs_velocity(target_wheel_vel, self.wheels_dof_idx)
         self._apply_task_control()
         self._apply_gas_spring_compensation()
+        self.domain_rand.before_step()
         self.scene.step()
 
         ########### 更新buffer ###########
@@ -670,6 +716,7 @@ class LocomotionEnv(LocomotionRewards):
             reset_terrain_centers,
             reset_terrain_tile_index,
         ) = self._sample_base_reset_state(reset_env_ids)
+        self.domain_rand.reset(reset_env_ids)
 
         reset_quat_inv = inv_quat(reset_base_quat)
         reset_base_lin_vel_body = transform_by_quat(reset_base_lin_vel, reset_quat_inv)
@@ -904,7 +951,7 @@ class LocomotionEnv(LocomotionRewards):
             gravity_compensated_forward_acceleration(
                 self.imu_lin_acc,
                 self.projected_gravity,
-                self.F,
+                self.gravity_magnitude,
             )
         )
         self.estimated_base_lin_vel.copy_(
@@ -1150,20 +1197,20 @@ class LocomotionEnv(LocomotionRewards):
         wheel_vel = self.wheel_vel[env_idx].detach()
         return {
             "joint_names": tuple(self.env_cfg["joint_names"]),
-            "joint_kp": self.joint_kp,
-            "joint_kd": self.joint_kd,
-            "joint_force_limit": self.joint_force_limit,
+            "joint_kp": self.joint_kp[env_idx],
+            "joint_kd": self.joint_kd[env_idx],
+            "joint_force_limit": self.joint_force_limit[env_idx],
             "joint_pos": self.joint_pos[env_idx].detach(),
             "joint_target_pos": self.target_joint_pos[env_idx].detach(),
             "joint_vel": joint_vel,
             # 这里只是 Kd 对应的阻尼分量，不是仿真器测得的完整执行器力矩。
-            "joint_kd_damping": -self.joint_kd * joint_vel,
+            "joint_kd_damping": -self.joint_kd[env_idx] * joint_vel,
             "wheel_names": tuple(self.env_cfg["wheel_names"]),
-            "wheel_kd": self.wheel_kd,
-            "wheel_force_limit": self.wheel_force_limit,
+            "wheel_kd": self.wheel_kd[env_idx],
+            "wheel_force_limit": self.wheel_force_limit[env_idx],
             "wheel_target_vel": self.target_wheel_vel[env_idx].detach(),
             "wheel_vel": wheel_vel,
-            "wheel_kd_damping": -self.wheel_kd * wheel_vel,
+            "wheel_kd_damping": -self.wheel_kd[env_idx] * wheel_vel,
         }
 
     def focus_viewer(self):

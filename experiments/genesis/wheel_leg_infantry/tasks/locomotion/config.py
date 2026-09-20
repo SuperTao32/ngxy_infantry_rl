@@ -8,6 +8,7 @@ import math
 from copy import deepcopy
 
 from ...core.terrain import default_terrain_cfg
+from ...core.domain_randomization import default_domain_rand_cfg
 
 
 def get_cfgs():
@@ -27,6 +28,7 @@ def _env_cfg() -> dict:
         "robot_mjcf": "assets/robot/wheelbipeV14_2/mjcf/wheelbipeV14_2.xml",
         # 默认保留旧的平地训练语义；启动时用 ``--terrain mixed`` 开启多地形。
         "terrain": default_terrain_cfg("plane"),
+        "domain_rand": default_domain_rand_cfg(enabled=True),
         "default_joint_pos": {
             "left_front1_joint": 0.0,
             "left_rear1_joint": 0.0,
@@ -68,7 +70,7 @@ def _env_cfg() -> dict:
         "wheel_vel_scale": 70.0,
         "clip_joint_action": 1.0,
         "clip_wheel_action": 1.0,
-        # 先建立无延迟基线，延迟应在站稳后作为独立随机化加入。
+        # 固定一拍动作延迟；不属于 domain_rand，本轮仍保持原有动作路径。
         "simulate_action_latency": True,
         # 只有连续超限一段时间才终止，给策略留下可学习的恢复窗口。
         "termination_if_roll_greater_than": 20.0,
@@ -170,6 +172,7 @@ def _curriculum_cfg() -> dict:
                 "name": "stand",
                 "start_iteration": 0,
                 "targets": {
+                    "domain_rand": {"strength": 0.0},
                     "terrain": {"max_difficulty": 0},
                     "reset_ranges": {
                         "base_init_pos_range": [[0.0, 0.0], [0.0, 0.0], [0.22, 0.22]],
@@ -194,6 +197,7 @@ def _curriculum_cfg() -> dict:
                 "name": "gentle_motion",
                 "start_iteration": 1000,
                 "targets": {
+                    "domain_rand": {"strength": 0.2},
                     "terrain": {"max_difficulty": 1},
                     "reset_ranges": {
                         "base_init_pos_range": [[0.0, 0.0], [0.0, 0.0], [0.22, 0.24]],
@@ -231,6 +235,7 @@ def _curriculum_cfg() -> dict:
                 "name": "locomotion",
                 "start_iteration": 2000,
                 "targets": {
+                    "domain_rand": {"strength": 0.4},
                     "terrain": {"max_difficulty": 2},
                     "reset_ranges": {
                         "base_init_pos_range": [[0.0, 0.0], [0.0, 0.0], [0.22, 0.24]],
@@ -272,6 +277,7 @@ def _curriculum_cfg() -> dict:
                 "name": "locomotion2",
                 "start_iteration": 4000,
                 "targets": {
+                    "domain_rand": {"strength": 0.6},
                     "terrain": {"max_difficulty": 2},
                     "reset_ranges": {
                         "base_init_pos_range": [[0.0, 0.0], [0.0, 0.0], [0.22, 0.24]],
@@ -313,6 +319,7 @@ def _curriculum_cfg() -> dict:
                 "name": "locomotion3",
                 "start_iteration": 6000,
                 "targets": {
+                    "domain_rand": {"strength": 0.8},
                     "terrain": {"max_difficulty": 3},
                     "reset_ranges": {
                         "base_init_pos_range": [[0.0, 0.0], [0.0, 0.0], [0.22, 0.24]],
@@ -350,6 +357,7 @@ def _curriculum_cfg() -> dict:
                 "name": "full_range",
                 "start_iteration": 8000,
                 "targets": {
+                    "domain_rand": {"strength": 1.0},
                     "terrain": {"max_difficulty": 3},
                     "reset_ranges": {
                         "base_init_pos_range": [[0.0, 0.0], [0.0, 0.0], [0.22, 0.24]],

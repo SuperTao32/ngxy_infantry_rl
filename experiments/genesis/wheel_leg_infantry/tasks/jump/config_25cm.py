@@ -10,6 +10,7 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Mapping, Sequence
 
+from ...core.domain_randomization import default_domain_rand_cfg
 from ..locomotion.config import get_cfgs as get_locomotion_cfgs
 from .observation import JUMP_ESTIMATOR_LAYOUT, LOCOMOTION_ESTIMATOR_LAYOUT, layout_dim
 
@@ -24,6 +25,8 @@ def get_cfgs(locomotion_cfgs: Sequence[Mapping] | None = None):
         raise ValueError("locomotion_cfgs must contain env, obs, reward and command configs")
 
     env_cfg = deepcopy(dict(locomotion_cfgs[0]))
+    # jump 独立选择随机化范围；以后启用时，teacher 预热和跳跃沿用同一组随机参数。
+    env_cfg["domain_rand"] = default_domain_rand_cfg(enabled=False)
     env_cfg["handoff_on_landing"] = False  # jump 完成落地阶段后再交回 locomotion
     # 仅 jump 阶段覆盖；locomotion 站稳预热仍使用源配置，下一轮自动恢复。
     # None 表示继承。可填标量或列表：腿按 joint_names 顺序，轮按 wheel_names 顺序。

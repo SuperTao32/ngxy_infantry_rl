@@ -91,27 +91,7 @@ class JumpEnv(JumpRewards, LocomotionEnv):
             if name.endswith("force_limit") and torch.any(tensor <= 0):
                 raise ValueError(f"jump_motor_params.{name} must be positive")
             self._jump_motor_params[name] = tensor
-            self._locomotion_motor_params[name] = getattr(self, name).clone()
-
-    def _apply_motor_params(self, params, envs_idx=None):
-        for name, value in params.items():
-            indices = self.wheels_dof_idx if name.startswith("wheel_") else self.joints_dof_idx
-            kwargs = {} if envs_idx is None else {"envs_idx": envs_idx}
-            applied = value if envs_idx is None else value.expand(len(envs_idx), -1).contiguous()
-            if name.endswith("force_limit"):
-                self.robot.set_dofs_force_range((-applied).tolist(), applied.tolist(), indices, **kwargs)
-            elif name.endswith("kp"):
-                self.robot.set_dofs_kp(applied.tolist(), indices, **kwargs)
-            else:
-                self.robot.set_dofs_kv(applied.tolist(), indices, **kwargs)
-            if envs_idx is None:
-                setattr(self, name, value)
-            else:
-                current = getattr(self, name)
-                if current.ndim == 1:
-                    current = current.expand(self.num_envs, -1).clone()
-                    setattr(self, name, current)
-                current[envs_idx] = value
+            self._locomotion_motor_params[name] = self.domain_rand.nominal_motor_params[name].clone()
 
     def _initialize_task_buffers(self):
         """创建 LocomotionEnv 不具备的跳跃参考、状态、事件和门控 buffer。"""

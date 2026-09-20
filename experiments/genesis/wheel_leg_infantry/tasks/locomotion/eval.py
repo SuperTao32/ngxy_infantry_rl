@@ -24,6 +24,8 @@ COMPACT_EVAL_TERRAIN_SIZE = (12.0, 6.0)
 def _parse_args(argv=None):
     """解析并校验评估命令行参数。"""
     parser = argparse.ArgumentParser()
+    parser.add_argument("--domain-rand", action=argparse.BooleanOptionalAction, default=False,
+                        help="enable dynamics randomization; evaluation defaults to nominal dynamics")
     parser.add_argument("-e", "--exp_name", type=str, default="infantry_locomotion_v3")
     parser.add_argument("--log-root", type=str, default="logs")
     parser.add_argument("--version", type=str, default=None, help="version_0003 or 3; default: latest valid run")
@@ -97,6 +99,22 @@ def print_evaluation_diagnostics(env, step):
         f"{velocity['gravity_compensated_forward_acceleration'].item():+.4f} m/s^2"
     )
 
+    randomization = env.domain_rand.diagnostics()
+    print(f"  randomization strength   target={randomization['domain_rand_strength']:.2f}, "
+          f"episode={randomization['domain_rand_episode_strength'].item():.2f}")
+    print(f"  friction ratio           {randomization['friction_ratio'].item():.3f}")
+    print(f"  added base mass          {randomization['added_mass_kg'].item():+.3f} kg")
+    print(f"  COM displacement         {format_tensor(randomization['com_displacement_m'])} m")
+    print(f"  motor strength           {randomization['motor_strength'].item():.3f}")
+    print(f"  joint motor offsets      {format_tensor(randomization['joint_motor_offsets_rad'])} rad")
+    print(f"  spring preload force     {format_tensor(randomization['gas_spring_preload_force'])} N")
+    print(f"  spring stiffness         {format_tensor(randomization['gas_spring_stiffness'])} N/m")
+    print(f"  spring damping           {format_tensor(randomization['gas_spring_damping'])} N·s/m")
+    print(f"  push target/force        {randomization['push_target']}: {format_tensor(randomization['push_force_world_N'])} N (world)")
+    if "passive_joint_damping" in randomization:
+        print("  passive joint names      " + ", ".join(randomization["passive_joint_names"]))
+        print(f"  passive joint damping    {format_tensor(randomization['passive_joint_damping'])} N·m·s/rad")
+        print(f"  passive joint friction   {format_tensor(randomization['passive_joint_frictionloss'])} N·m")
     pd = env.get_pd_diagnostics()
     print("  joint names             " + ", ".join(pd["joint_names"]))
     print(f"  joint Kp                {format_tensor(pd['joint_kp'])}")
@@ -126,6 +144,7 @@ def main():
     checkpoint_path = resolve_checkpoint(run_dir, args.ckpt)
     configs = load_run_configs(run_dir)
     env_cfg = deepcopy(configs["env_cfg"])
+    env_cfg.setdefault("domain_rand", {})["enabled"] = args.domain_rand
     _apply_terrain_overrides(env_cfg, args)
     obs_cfg = configs["obs_cfg"]
     reward_cfg = deepcopy(configs["reward_cfg"])

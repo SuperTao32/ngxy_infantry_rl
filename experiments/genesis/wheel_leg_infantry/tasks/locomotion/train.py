@@ -23,6 +23,8 @@ from .env import LocomotionEnv
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--domain-rand", action=argparse.BooleanOptionalAction, default=None,
+                        help="override dynamics randomization in current or saved config")
     parser.add_argument("-v", "--vis", action="store_true", default=False)
     parser.add_argument("-e", "--exp_name", type=str, default="infantry_locomotion_v3")
     parser.add_argument("-B", "--num_envs", type=int, default=8192)
@@ -62,16 +64,10 @@ def main():
             curriculum_cfg = deepcopy(saved_configs["curriculum_cfg"])
             train_cfg = deepcopy(saved_configs["train_cfg"])
 
-    remaining_iterations = args.max_iterations
+    if args.domain_rand is not None:
+        env_cfg.setdefault("domain_rand", {})["enabled"] = args.domain_rand
 
-    if resume_plan is not None:
-        run_arguments["resume_from"] = str(resume_plan.checkpoint_path.resolve())
-        print(f"[train] resuming from: {resume_plan.checkpoint_path}")
-        remaining_iterations = restore_training_state(runner, env, resume_plan, args.max_iterations)
-        print(
-            f"[train] continuing at iteration {resume_plan.next_iteration}; "
-            f"{remaining_iterations} iterations remain (target={args.max_iterations})"
-        )
+    remaining_iterations = args.max_iterations
 
     # terrain相关配置
     if args.terrain is not None:
@@ -94,6 +90,8 @@ def main():
     }
     # 保存运行参数和配置文件到日志目录中，便于后续分析和复现
     run_arguments = vars(args).copy()
+    if resume_plan is not None:
+        run_arguments["resume_from"] = str(resume_plan.checkpoint_path.resolve())
 
     save_run_artifacts(run_dir, configs, run_arguments)
 
@@ -111,6 +109,13 @@ def main():
     )
 
     runner = OnPolicyRunner(env, train_cfg, str(run_dir), device=gs.device)
+    if resume_plan is not None:
+        print(f"[train] resuming from: {resume_plan.checkpoint_path}")
+        remaining_iterations = restore_training_state(runner, env, resume_plan, args.max_iterations)
+        print(
+            f"[train] continuing at iteration {resume_plan.next_iteration}; "
+            f"{remaining_iterations} iterations remain (target={args.max_iterations})"
+        )
     runner.learn(num_learning_iterations=remaining_iterations, init_at_random_ep_len=True)
 
 if __name__ == "__main__":

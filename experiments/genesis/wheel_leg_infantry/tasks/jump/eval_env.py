@@ -91,6 +91,8 @@ class JumpEvalEnv(JumpEnv):
             surface=gs.surfaces.Default(color=(0.45, 0.55, 0.65)),
         )
 
+        self.friction_terrain_entities += (self.step_entity,)
+
     def wheels_on_step(self):
         """诊断回合末双轮是否接触台面；侧壁碰撞与仅在台面上方不算落台。"""
         if self.step_terrain is None:
