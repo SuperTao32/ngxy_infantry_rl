@@ -1,0 +1,52 @@
+<mujoco model="wheelbipeV14_2_sysid_wheels_fixed">
+  <compiler angle="radian" />
+  <option timestep="0.002" gravity="0 0 -9.81" />
+
+  <!-- 轮轴机械固定，仅保留左右轮两个转动自由度。 -->
+  <default>
+    <joint type="hinge" axis="0 1 0" ref="0" limited="false"
+           damping="0" frictionloss="0.023" armature="0.001" />
+    <geom contype="0" conaffinity="0" />
+    <motor gear="1" forcelimited="true" forcerange="-5 5" />
+  </default>
+
+  <asset>
+    <material name="wheel_material" rgba="0.7 0.7 0.7 1" />
+    <mesh name="left_wheel_link.STL" file="../meshes/left_wheel_link.STL" />
+    <mesh name="right_wheel_link.STL" file="../meshes/right_wheel_link.STL" />
+  </asset>
+
+  <worldbody>
+    <!-- 支架位姿取自车身固定在 z=1 m 时的悬空静置结果，轮角为零。
+         位姿已写入本文件，加载时无需读取静置 NPZ 或整车模型。
+         实机夹具姿态不同时，可修改对应支架的 pos 和 quat。 -->
+    <body name="left_wheel_mount" pos="0.08156139559048908 0.22205 0.6667639975526973"
+          quat="0.9970542427553872 0 0.07669965451996114 0">
+      <body name="left_wheel_link">
+        <joint name="left_wheel_joint" />
+        <!-- 质量、质心和完整惯量张量沿用整车 XML 中的左轮参数。 -->
+        <inertial pos="0.00015349 -0.02021922 -0.00011469" mass="0.51208444"
+                  fullinertia="0.00038955 0.00063306 0.00038893 0.00000081 -0.00000093 -0.00000059" />
+        <geom name="left_wheel_link_visual" type="mesh" mesh="left_wheel_link.STL" material="wheel_material" />
+      </body>
+    </body>
+
+    <body name="right_wheel_mount" pos="0.08142903908296735 -0.22205 0.6667397780281625"
+          quat="0.9970400520147771 0 0.07688390389652849 0">
+      <body name="right_wheel_link">
+        <joint name="right_wheel_joint" />
+        <!-- 质量、质心和完整惯量张量沿用整车 XML 中的右轮参数。 -->
+        <inertial pos="0.00017786 0.02021922 -0.00007128" mass="0.51208444"
+                  fullinertia="0.00038992 0.00063306 0.00038855 -0.00000092 -0.00000070 0.00000038" />
+        <geom name="right_wheel_link_visual" type="mesh" mesh="right_wheel_link.STL" material="wheel_material" />
+      </body>
+    </body>
+  </worldbody>
+
+  <!-- 辨识脚本设置固定增益 K，使 ctrl 中的实测电流换算成轮轴力矩。
+       不辨识 K，保留 ±5 Nm 力矩限幅；无气弹簧或腿部执行器。 -->
+  <actuator>
+    <motor name="left_wheel_joint_ctrl" joint="left_wheel_joint" />
+    <motor name="right_wheel_joint_ctrl" joint="right_wheel_joint" />
+  </actuator>
+</mujoco>

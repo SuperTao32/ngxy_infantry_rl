@@ -1,0 +1,126 @@
+{
+  "model": "/home/tt/workspace/ngxy_infantry_rl/assets/robot/wheelbipeV14_2/mjcf/wheelbipeV14_2.xml",
+  "base_pos": [
+    0.0,
+    0.0,
+    1.0
+  ],
+  "gas_spring_force_N_each": 420.0,
+  "settled_time_s": 25.5819999999967,
+  "velocity_tol": 0.001,
+  "accel_tol": 0.001,
+  "hold_time_s": 1.0,
+  "max_velocity_before_zero": 0.000915547768837608,
+  "max_acceleration": 8.08310287114767e-05,
+  "max_equality_error_m": 0.00043236988776851337,
+  "joints": {
+    "left_front1_joint": {
+      "q": 0.6132870247407544,
+      "dq": 0.0,
+      "unit": "rad",
+      "limit_violation": 0.0
+    },
+    "left_front2_joint": {
+      "q": -1.1380449418224043,
+      "dq": 0.0,
+      "unit": "rad",
+      "limit_violation": 0.13804494182240434
+    },
+    "left_front3_joint": {
+      "q": 0.6656956863619949,
+      "dq": 0.0,
+      "unit": "rad",
+      "limit_violation": 0.0
+    },
+    "left_front4_joint": {
+      "q": -1.1453259357789891,
+      "dq": 0.0,
+      "unit": "rad",
+      "limit_violation": 0.0
+    },
+    "left_rear1_joint": {
+      "q": -1.0003161398437146,
+      "dq": 0.0,
+      "unit": "rad",
+      "limit_violation": 0.0
+    },
+    "left_rear2_joint": {
+      "q": 1.1538662522993468,
+      "dq": 0.0,
+      "unit": "rad",
+      "limit_violation": 0.0
+    },
+    "left_wheel_joint": {
+      "q": 0.021433621919168783,
+      "dq": 0.0,
+      "unit": "rad",
+      "limit_violation": 0.0
+    },
+    "left_spring1_joint": {
+      "q": -0.1694578448647725,
+      "dq": 0.0,
+      "unit": "rad",
+      "limit_violation": 0.0
+    },
+    "left_spring2_joint": {
+      "q": 0.04831267327038113,
+      "dq": 0.0,
+      "unit": "m",
+      "limit_violation": 0.0
+    },
+    "right_front1_joint": {
+      "q": 0.6136539011847735,
+      "dq": 0.0,
+      "unit": "rad",
+      "limit_violation": 0.0
+    },
+    "right_front2_joint": {
+      "q": -1.1379981012106815,
+      "dq": 0.0,
+      "unit": "rad",
+      "limit_violation": 0.13799810121068146
+    },
+    "right_front3_joint": {
+      "q": 0.6656557009427116,
+      "dq": 0.0,
+      "unit": "rad",
+      "limit_violation": 0.0
+    },
+    "right_front4_joint": {
+      "q": -1.145276359953435,
+      "dq": 0.0,
+      "unit": "rad",
+      "limit_violation": 0.0
+    },
+    "right_rear1_joint": {
+      "q": -0.9998945394524983,
+      "dq": 0.0,
+      "unit": "rad",
+      "limit_violation": 0.0
+    },
+    "right_rear2_joint": {
+      "q": 1.1538142420053012,
+      "dq": 0.0,
+      "unit": "rad",
+      "limit_violation": 0.0
+    },
+    "right_wheel_joint": {
+      "q": 0.02572383702031727,
+      "dq": 0.0,
+      "unit": "rad",
+      "limit_violation": 0.0
+    },
+    "right_spring1_joint": {
+      "q": -0.16945784627179036,
+      "dq": 0.0,
+      "unit": "rad",
+      "limit_violation": 0.0
+    },
+    "right_spring2_joint": {
+      "q": 0.04831022290478733,
+      "dq": 0.0,
+      "unit": "m",
+      "limit_violation": 0.0
+    }
+  }
+}
