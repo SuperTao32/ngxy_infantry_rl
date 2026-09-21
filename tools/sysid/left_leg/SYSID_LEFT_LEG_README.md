@@ -6,17 +6,17 @@
 - `friction_front`、`friction_rear`：前后主动关节的库仑摩擦。
 
 从动关节参数不参与优化。
-电机力矩常数 `CFG.k_front` 和 `CFG.k_rear` 为固定值，单位为 Nm/A，
-包含减速器传动，默认均为 1.0。运行前填写已知的实际值；
-它们用于将实测电流换算成力矩，不参与辨识。
+输入直接使用主动关节输出端力矩 torque，单位为 Nm，执行器增益为 1。
+力矩应是经过减速器后的关节力矩，脚本不再配置 K 或进行电流换算。
+保留原 XML 的 ±54 Nm 力矩限幅。
 
 ## CSV 数据列
 
 必需列：
 
 - `time`：时间 [s]。
-- `iq_front`：前电机实际测得的 q 轴电流 [A]。
-- `iq_rear`：后电机实际测得的 q 轴电流 [A]。
+- `torque_front`：前主动关节输出端力矩 [Nm]。
+- `torque_rear`：后主动关节输出端力矩 [Nm]。
 - `q_front`：前主动关节角度 [rad]。
 - `q_rear`：后主动关节角度 [rad]。
 
@@ -28,6 +28,8 @@
 缺少 dq 列时，脚本使用 `numpy.gradient` 根据角度估算速度。
 气弹簧执行器沿滑动关节轴向施加恒定 +420 N，与位置和速度无关。
 CSV 无需提供气弹簧力。
+力矩方向可通过 `front_torque_sign` / `rear_torque_sign` 设置为 ±1。
+旧 CSV 中的电流数值不能直接改列名当作力矩使用。
 
 ## 安装依赖
 
@@ -49,10 +51,8 @@ CFG = SysIDConfig(
         PROJECT_ROOT / "logs/sysid/chirp_rear.csv",
         PROJECT_ROOT / "logs/sysid/chirp_both.csv",
     ),
-    out=PROJECT_ROOT / "sysid_results_left_leg",
-    initial_state=PROJECT_ROOT / "sysid_results_left_leg/suspended_initial_state.npz",
-    k_front=1.0,
-    k_rear=1.0,
+    out=PROJECT_ROOT / "tools/sysid/results/left_leg",
+    initial_state=PROJECT_ROOT / "tools/sysid/results/suspended_initial_state.npz",
 )
 ```
 
@@ -65,7 +65,7 @@ python tools/sysid/left_leg/sysid_left_leg.py
 ```
 
 脚本直接加载 `left_leg.xml`。该模型仅包含左腿，车身已固定在 z=1 m。
-两个主动电机使用实测电流作为输入；`left_spring2_joint_ctrl` 在每个采样点
+两个主动电机使用关节力矩作为输入；`left_spring2_joint_ctrl` 在每个采样点
 接收 420 N 恒力。轮关节没有执行器。从动关节参数、等式约束和接触设置
 保持 MJCF 中的定义，不会另外生成修改后的输入 MJCF。
 
@@ -76,8 +76,8 @@ python tools/sysid/left_leg/sysid_left_leg.py
 
 ## 实验说明
 
-固定车身并使左腿悬空，记录实际 Iq，而不是电流指令。
-采集正反向运动、多种电流幅值，以及运动过程中不同腿部构型的数据。
+固定车身并使左腿悬空，记录实际施加的关节输出端力矩。
+采集正反向运动、多种力矩幅值，以及运动过程中不同腿部构型的数据。
 此阶段不辨识轮地摩擦。
 
 ## 悬空静置，生成初始 q
@@ -100,7 +100,8 @@ python tools/sysid/settle_suspended_robot.py --view
 仿真过程中不会强制清零速度。可在脚本顶部 `CFG` 中调整阈值和等待时间；
 若 60 s 内未达到静止判据则报错，不写入新的结果。
 
-输出位于 `sysid_results_left_leg/`：
+共用静置结果位于 `tools/sysid/results/`；左腿辨识结果写入其 `left_leg/` 子目录。
+静置脚本输出：
 
 - `suspended_initial_state.npz`：整车固定基座的 `joint_names`、`qpos`、
   `qvel`、`ctrl`，以及左腿的 `left_joint_names`、`left_qpos`、`left_qvel`。
@@ -109,7 +110,7 @@ python tools/sysid/settle_suspended_robot.py --view
   仿真时长、闭链误差和软限位越界量。
 
 ```python
-with np.load("sysid_results_left_leg/suspended_initial_state.npz") as state:
+with np.load("tools/sysid/results/suspended_initial_state.npz") as state:
     left_q_by_name = dict(zip(state["left_joint_names"], state["left_qpos"]))
     q0 = np.array([left_q_by_name[model.joint(i).name] for i in range(model.njnt)])
     dq0 = np.zeros(model.nv)

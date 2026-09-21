@@ -7,7 +7,7 @@ wheelbipeV14_2 右腿闭链机构的 MuJoCo 系统辨识脚本。
     friction_front, friction_rear    库仑摩擦 [Nm]
 
 测量输入：
-    实际电机电流 Iq [A]，通过固定 K [Nm/A] 换算为力矩。
+    主动关节输出端力矩 torque [Nm]，直接作为执行器输入。
 
 测量输出：
     主动关节位置 q 和速度 dq。
@@ -47,14 +47,9 @@ class SysIDConfig:
     out: Path
     initial_state: Path  # settle_suspended_robot.py 生成的 NPZ 初态文件。
 
-    # 实机电流方向与 MuJoCo 关节轴方向相反时，用此系数修正符号。
-    front_current_sign: float = 1.0
-    rear_current_sign: float = 1.0
-
-    # 固定电机力矩常数 [Nm/A]，包含减速器传动。
-    # 这些值由配置指定，不参与辨识。
-    k_front: float = 1.0
-    k_rear: float = 1.0
+    # 实机力矩方向与 MuJoCo 关节轴方向相反时，用此系数修正符号。
+    front_torque_sign: float = 1.0
+    rear_torque_sign: float = 1.0
 
     # 主动关节黏性阻尼：初始猜测值与上界 [Nms/rad]。
     damping_front0: float = 0.02
@@ -79,8 +74,8 @@ CFG = SysIDConfig(
         # PROJECT_ROOT / "logs/sysid/slow_forward.csv",
         # PROJECT_ROOT / "logs/sysid/slow_reverse.csv",
     ),
-    out=PROJECT_ROOT / "sysid_results/right_leg",
-    initial_state=PROJECT_ROOT / "sysid_results/suspended_initial_state.npz",
+    out=PROJECT_ROOT / "tools/sysid/results/right_leg",
+    initial_state=PROJECT_ROOT / "tools/sysid/results/suspended_initial_state.npz",
 )
 
 
@@ -158,14 +153,14 @@ def csv_has_column(data: np.ndarray, name: str) -> bool:
 def load_log(
     path: Path,
     model: mujoco.MjModel,
-    front_current_sign: float,
-    rear_current_sign: float,
+    front_torque_sign: float,
+    rear_torque_sign: float,
 ):
     """
     CSV 必需列：
         time       时间 [s]
-        iq_front   前电机实际电流 [A]
-        iq_rear    后电机实际电流 [A]
+        torque_front   前主动关节输出端力矩 [Nm]
+        torque_rear    后主动关节输出端力矩 [Nm]
         q_front    前主动关节角度 [rad]
         q_rear     后主动关节角度 [rad]
 
@@ -179,7 +174,7 @@ def load_log(
     if raw.shape == ():
         raw = raw.reshape(1)
 
-    required = ("time", "iq_front", "iq_rear", "q_front", "q_rear")
+    required = ("time", "torque_front", "torque_rear", "q_front", "q_rear")
     missing = [c for c in required if not csv_has_column(raw, c)]
     if missing:
         raise ValueError(f"{path}: missing required columns: {missing}")
@@ -204,14 +199,14 @@ def load_log(
     else:
         dq_rear = np.gradient(q_rear, t)
 
-    iq_front = front_current_sign * np.asarray(raw["iq_front"], dtype=float)
-    iq_rear = rear_current_sign * np.asarray(raw["iq_rear"], dtype=float)
+    torque_front = front_torque_sign * np.asarray(raw["torque_front"], dtype=float)
+    torque_rear = rear_torque_sign * np.asarray(raw["torque_rear"], dtype=float)
 
-    # 两个电机通道输入实测电流 [A]，由固定增益换算成力矩。
+    # 两个电机通道直接输入关节输出端力矩 [Nm]，不再进行电流换算。
     # 气弹簧通道输入恒定力 [N]。
     ctrl = np.zeros((len(t), model.nu), dtype=float)
-    ctrl[:, actuator_id(model, ACTIVE_ACTUATORS["front"])] = iq_front
-    ctrl[:, actuator_id(model, ACTIVE_ACTUATORS["rear"])] = iq_rear
+    ctrl[:, actuator_id(model, ACTIVE_ACTUATORS["front"])] = torque_front
+    ctrl[:, actuator_id(model, ACTIVE_ACTUATORS["rear"])] = torque_rear
 
     ctrl[:, actuator_id(model, SPRING_ACTUATOR)] = GAS_SPRING_FORCE
 
@@ -239,10 +234,10 @@ def load_log(
 # 系统辨识参数
 # ---------------------------------------------------------------------------
 
-def set_fixed_motor_gains(spec: mujoco.MjSpec, cfg: SysIDConfig) -> None:
-    """一次性设置 tau = K * Iq 的固定增益，保留 MJCF 中的力矩限幅和传动比。"""
-    spec.actuator(ACTIVE_ACTUATORS["front"]).gainprm[0] = cfg.k_front
-    spec.actuator(ACTIVE_ACTUATORS["rear"]).gainprm[0] = cfg.k_rear
+def configure_torque_inputs(spec: mujoco.MjSpec) -> None:
+    """设置单位力矩增益，ctrl 直接表示关节力矩 [Nm]，保留原有力矩限幅。"""
+    for name in ACTIVE_ACTUATORS.values():
+        spec.actuator(name).gainprm[0] = 1.0
 
 
 def set_joint_scalar(joint_name: str, attr: str):
@@ -315,8 +310,8 @@ def validate_config(cfg: SysIDConfig) -> None:
         raise FileNotFoundError(f"CFG.data contains missing files: {missing_data}")
     if cfg.max_iters <= 0:
         raise ValueError("CFG.max_iters must be positive")
-    if not all(np.isfinite(k) and k > 0 for k in (cfg.k_front, cfg.k_rear)):
-        raise ValueError("CFG.k_front and CFG.k_rear must be finite and positive")
+    if cfg.front_torque_sign not in (-1, 1) or cfg.rear_torque_sign not in (-1, 1):
+        raise ValueError("力矩方向系数必须为 +1 或 -1")
     if not 0 <= cfg.damping_front0 <= cfg.damping_max or not 0 <= cfg.damping_rear0 <= cfg.damping_max:
         raise ValueError("CFG damping initial guesses must be inside [0, damping_max]")
     if not 0 <= cfg.friction_front0 <= cfg.friction_max or not 0 <= cfg.friction_rear0 <= cfg.friction_max:
@@ -329,7 +324,7 @@ def main(cfg: SysIDConfig = CFG):
     # 输入 MJCF 已经是固定基座、悬空的右腿模型。
     print(f"[model] SysID MJCF: {cfg.model}")
     spec = mujoco.MjSpec.from_file(str(cfg.model.resolve()))
-    set_fixed_motor_gains(spec, cfg)
+    configure_torque_inputs(spec)
     model = spec.compile()
 
     print(
@@ -337,7 +332,7 @@ def main(cfg: SysIDConfig = CFG):
         f"neq={model.neq}, nsensordata={model.nsensordata}"
     )
     print(f"[model] constant gas spring force: {GAS_SPRING_FORCE:g} N")
-    print(f"[model] fixed K_front={cfg.k_front:g}, K_rear={cfg.k_rear:g} Nm/A")
+    print("[model] 输入为关节输出端力矩 torque [Nm]")
 
     initial_state = make_initial_state(model, cfg.initial_state)
     print(f"[initial] suspended q from {cfg.initial_state}; all qvel=0")
@@ -351,8 +346,8 @@ def main(cfg: SysIDConfig = CFG):
         control_ts, measurement_ts = load_log(
             path=path,
             model=model,
-            front_current_sign=cfg.front_current_sign,
-            rear_current_sign=cfg.rear_current_sign,
+            front_torque_sign=cfg.front_torque_sign,
+            rear_torque_sign=cfg.rear_torque_sign,
         )
         controls.append(control_ts)
         measurements.append(measurement_ts)

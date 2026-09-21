@@ -43,8 +43,8 @@
     </body>
   </worldbody>
 
-  <!-- 辨识脚本设置固定增益 K，使 ctrl 中的实测电流换算成轮轴力矩。
-       不辨识 K，保留 ±5 Nm 力矩限幅；无气弹簧或腿部执行器。 -->
+  <!-- ctrl 直接输入轮轴力矩 torque [Nm]，执行器增益和传动比均为 1。
+       保留 ±5 Nm 力矩限幅；无气弹簧或腿部执行器。 -->
   <actuator>
     <motor name="left_wheel_joint_ctrl" joint="left_wheel_joint" />
     <motor name="right_wheel_joint_ctrl" joint="right_wheel_joint" />

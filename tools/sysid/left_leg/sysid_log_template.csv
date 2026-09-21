@@ -1,1 +1,1 @@
-time,iq_front,iq_rear,q_front,q_rear,dq_front,dq_rear
+time,torque_front,torque_rear,q_front,q_rear,dq_front,dq_rear

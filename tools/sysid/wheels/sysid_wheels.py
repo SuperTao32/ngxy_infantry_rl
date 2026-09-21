@@ -2,7 +2,7 @@
 
 直接加载 wheels.xml，两个轮轴由固定支架支撑，只有轮子可以转动。
 仅优化 damping_left/right 和 friction_left/right；
-电机力矩常数 K、轮子惯量和关节附加转动惯量 armature 保持固定。
+直接输入轮轴力矩 torque [Nm]，轮子惯量和关节附加转动惯量 armature 保持固定。
 
 每次实验的轮轴姿态由 XML 固定，初始速度为零。
 轮角度使用 CSV 首帧初始化，并采用模型关节坐标系下的连续角度 [rad]，
@@ -38,10 +38,9 @@ class SysIDConfig:
     data: tuple[Path, ...]
     out: Path
 
-    k_left: float = 1.0   # 固定轮轴力矩与电流的换算系数 [Nm/A]。
-    k_right: float = 1.0
-    left_current_sign: float = 1.0
-    right_current_sign: float = 1.0
+    # 实机力矩方向与模型关节轴方向不同时，用此系数修正符号。
+    left_torque_sign: float = 1.0
+    right_torque_sign: float = 1.0
 
     damping_left0: float = 0.001  # 单位为 Nms/rad；初值取大于零下界的数值。
     damping_right0: float = 0.001
@@ -54,32 +53,32 @@ class SysIDConfig:
     threads: int = 0
 
 
-# 在此填写实测轨迹路径和已知的轮电机力矩常数。
+# 在此填写包含轮轴力矩和运动数据的轨迹路径。
 CFG = SysIDConfig(
     model=PROJECT_ROOT / "assets/robot/wheelbipeV14_2/mjcf/wheels.xml",
     data=(
         # PROJECT_ROOT / "logs/sysid/wheels_forward.csv",
         # PROJECT_ROOT / "logs/sysid/wheels_reverse.csv",
     ),
-    out=PROJECT_ROOT / "sysid_results_wheels",
+    out=PROJECT_ROOT / "tools/sysid/results/wheels",
 )
 
 
 def load_wheel_spec(cfg: SysIDConfig) -> mujoco.MjSpec:
-    """直接加载双轮专用模型，并设置不参与辨识的电机增益 K。"""
+    """加载双轮专用模型，使用单位增益将 ctrl 直接作为轮轴力矩 [Nm]。"""
     spec = mujoco.MjSpec.from_file(str(cfg.model.resolve()))
     # 确保导出的模型在结果目录中也能找到网格资源。
     spec.meshdir = str((cfg.model.resolve().parent / spec.meshdir).resolve())
-    spec.actuator(WHEEL_ACTUATORS["left"]).gainprm[0] = cfg.k_left
-    spec.actuator(WHEEL_ACTUATORS["right"]).gainprm[0] = cfg.k_right
+    for name in WHEEL_ACTUATORS.values():
+        spec.actuator(name).gainprm[0] = 1.0
     return spec
 
 
 def load_log(path: Path, model: mujoco.MjModel, cfg: SysIDConfig):
-    """读取轮电流和连续角度，缺少 dq 列时通过差分估算速度。"""
+    """读取轮轴力矩和连续角度，缺少 dq 列时通过差分估算速度。"""
     raw = np.atleast_1d(np.genfromtxt(path, delimiter=",", names=True, dtype=float))
     columns = raw.dtype.names or ()
-    required = ("time", "iq_left", "iq_right", "q_left", "q_right")
+    required = ("time", "torque_left", "torque_right", "q_left", "q_right")
     missing = [name for name in required if name not in columns]
     if missing:
         raise ValueError(f"{path}: missing columns: {missing}")
@@ -98,8 +97,8 @@ def load_log(path: Path, model: mujoco.MjModel, cfg: SysIDConfig):
         for side in WHEEL_JOINTS
     }
     ctrl = np.zeros((len(t), model.nu))
-    for side, sign in (("left", cfg.left_current_sign), ("right", cfg.right_current_sign)):
-        ctrl[:, model.actuator(WHEEL_ACTUATORS[side]).id] = sign * raw[f"iq_{side}"]
+    for side, sign in (("left", cfg.left_torque_sign), ("right", cfg.right_torque_sign)):
+        ctrl[:, model.actuator(WHEEL_ACTUATORS[side]).id] = sign * raw[f"torque_{side}"]
     control = sysid.TimeSeries.from_control_names(t, ctrl, model)
     measured = sysid.TimeSeries.from_names(
         t, np.column_stack([q["left"], q["right"], dq["left"], dq["right"]]),
@@ -149,10 +148,8 @@ def validate_config(cfg: SysIDConfig) -> None:
     for path in (cfg.model, *cfg.data):
         if not path.is_file():
             raise FileNotFoundError(path)
-    if not all(np.isfinite(k) and k > 0 for k in (cfg.k_left, cfg.k_right)):
-        raise ValueError("Fixed K values must be finite and positive")
-    if cfg.left_current_sign not in (-1, 1) or cfg.right_current_sign not in (-1, 1):
-        raise ValueError("Current signs must be +1 or -1")
+    if cfg.left_torque_sign not in (-1, 1) or cfg.right_torque_sign not in (-1, 1):
+        raise ValueError("力矩方向系数必须为 +1 或 -1")
     if cfg.max_iters <= 0:
         raise ValueError("max_iters must be positive")
     for quantity in ("damping", "friction"):
@@ -171,7 +168,7 @@ def main(cfg: SysIDConfig = CFG) -> None:
     if (model.nq, model.nv, model.nu) != (2, 2, 2):
         raise ValueError("The fixed-leg model must have exactly two wheel joints and actuators")
     print(f"[model] 固定轮轴模型：{cfg.model}，nq={model.nq}, nv={model.nv}, nu={model.nu}")
-    print(f"[model] fixed K_left={cfg.k_left:g}, K_right={cfg.k_right:g} Nm/A")
+    print("[model] 输入为轮轴输出端力矩 torque [Nm]")
     print("[initial] 轮轴姿态由 XML 固定，轮角取 CSV 首帧，qvel=0")
 
     controls, measurements, initial_states = [], [], []

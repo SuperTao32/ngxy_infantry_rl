@@ -30,7 +30,7 @@ GAS_SPRING_FORCE = 420.0  # 每个气弹簧沿伸长方向施加 +420 N。
 @dataclass(frozen=True)
 class SettleConfig:
     model: Path = PROJECT_ROOT / "assets/robot/wheelbipeV14_2/mjcf/wheelbipeV14_2.xml"
-    out: Path = PROJECT_ROOT / "sysid_results_left_leg/suspended_initial_state.npz"
+    out: Path = PROJECT_ROOT / "tools/sysid/results/suspended_initial_state.npz"
     base_pos: tuple[float, float, float] = (0.0, 0.0, 1.0)
     max_time: float = 60.0       # 最大仿真时间 [s]；超时不导出未收敛状态。
     min_time: float = 2.0       # 至少运行这么长时间 [s]。
