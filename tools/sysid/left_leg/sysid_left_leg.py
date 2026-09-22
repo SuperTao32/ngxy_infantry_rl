@@ -25,6 +25,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import sys
 
 import numpy as np
 
@@ -37,6 +38,8 @@ from mujoco import sysid
 # ---------------------------------------------------------------------------
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(PROJECT_ROOT / "tools/sysid"))
+from filtering import lowpass
 
 
 @dataclass(frozen=True)
@@ -61,6 +64,10 @@ class SysIDConfig:
     friction_front0: float = 1.5
     friction_rear0: float = 0.2
     friction_max: float = 6.0
+
+    # 离线力矩/速度滤波；None 关闭，截止频率需高于要辨识的运动频段。
+    sample_rate_hz: float = 1000.0
+    filter_cutoff_hz: float | None = 50.0
 
     max_iters: int = 100
     threads: int = 0  # <= 0 时由 SysID 库选择线程数。
@@ -154,6 +161,8 @@ def load_log(
     model: mujoco.MjModel,
     front_torque_sign: float,
     rear_torque_sign: float,
+    sample_rate_hz: float = 1000.0,
+    filter_cutoff_hz: float | None = 50.0,
 ):
     """
     CSV 必需列：
@@ -167,7 +176,7 @@ def load_log(
         dq_front   前主动关节角速度 [rad/s]
         dq_rear    后主动关节角速度 [rad/s]
 
-    缺少 dq 列时，使用 numpy.gradient 根据角度估算速度。
+    力矩和已有速度先低通；缺少 dq 列时，对平滑后的角度求导。
     """
     raw = np.genfromtxt(path, delimiter=",", names=True, dtype=float)
     if raw.shape == ():
@@ -189,17 +198,17 @@ def load_log(
     q_rear = np.asarray(raw["q_rear"], dtype=float)
 
     if csv_has_column(raw, "dq_front"):
-        dq_front = np.asarray(raw["dq_front"], dtype=float)
+        dq_front = lowpass(t, raw["dq_front"], sample_rate_hz, filter_cutoff_hz)
     else:
-        dq_front = np.gradient(q_front, t)
+        dq_front = np.gradient(lowpass(t, q_front, sample_rate_hz, filter_cutoff_hz), t)
 
     if csv_has_column(raw, "dq_rear"):
-        dq_rear = np.asarray(raw["dq_rear"], dtype=float)
+        dq_rear = lowpass(t, raw["dq_rear"], sample_rate_hz, filter_cutoff_hz)
     else:
-        dq_rear = np.gradient(q_rear, t)
+        dq_rear = np.gradient(lowpass(t, q_rear, sample_rate_hz, filter_cutoff_hz), t)
 
-    torque_front = front_torque_sign * np.asarray(raw["torque_front"], dtype=float)
-    torque_rear = rear_torque_sign * np.asarray(raw["torque_rear"], dtype=float)
+    torque_front = front_torque_sign * lowpass(t, raw["torque_front"], sample_rate_hz, filter_cutoff_hz)
+    torque_rear = rear_torque_sign * lowpass(t, raw["torque_rear"], sample_rate_hz, filter_cutoff_hz)
 
     # 两个电机通道直接输入关节输出端力矩 [Nm]，不再进行电流换算。
     # 气弹簧通道输入恒定力 [N]。
@@ -347,6 +356,8 @@ def main(cfg: SysIDConfig = CFG):
             model=model,
             front_torque_sign=cfg.front_torque_sign,
             rear_torque_sign=cfg.rear_torque_sign,
+            sample_rate_hz=cfg.sample_rate_hz,
+            filter_cutoff_hz=cfg.filter_cutoff_hz,
         )
         controls.append(control_ts)
         measurements.append(measurement_ts)

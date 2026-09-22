@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import sys
 
 import mujoco
 from mujoco import sysid
@@ -20,6 +21,8 @@ import numpy as np
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(PROJECT_ROOT / "tools/sysid"))
+from filtering import lowpass
 WHEEL_JOINTS = {side: f"{side}_wheel_joint" for side in ("left", "right")}
 WHEEL_ACTUATORS = {side: f"{joint}_ctrl" for side, joint in WHEEL_JOINTS.items()}
 OBSERVATIONS = [
@@ -49,6 +52,10 @@ class SysIDConfig:
     friction_right0: float = 0.023
     friction_max: float = 1.0
 
+    # 离线力矩/速度滤波；None 关闭，截止频率需高于要辨识的运动频段。
+    sample_rate_hz: float = 1000.0
+    filter_cutoff_hz: float | None = 50.0
+
     max_iters: int = 100
     threads: int = 0
 
@@ -75,7 +82,7 @@ def load_wheel_spec(cfg: SysIDConfig) -> mujoco.MjSpec:
 
 
 def load_log(path: Path, model: mujoco.MjModel, cfg: SysIDConfig):
-    """读取轮轴力矩和连续角度，缺少 dq 列时通过差分估算速度。"""
+    """读取并低通滤波力矩和速度；缺少 dq 时对平滑后的角度求导。"""
     raw = np.atleast_1d(np.genfromtxt(path, delimiter=",", names=True, dtype=float))
     columns = raw.dtype.names or ()
     required = ("time", "torque_left", "torque_right", "q_left", "q_right")
@@ -93,12 +100,17 @@ def load_log(path: Path, model: mujoco.MjModel, cfg: SysIDConfig):
 
     q = {side: raw[f"q_{side}"] for side in WHEEL_JOINTS}
     dq = {
-        side: raw[f"dq_{side}"] if f"dq_{side}" in columns else np.gradient(q[side], t)
+        side: lowpass(t, raw[f"dq_{side}"], cfg.sample_rate_hz, cfg.filter_cutoff_hz)
+        if f"dq_{side}" in columns else np.gradient(
+            lowpass(t, q[side], cfg.sample_rate_hz, cfg.filter_cutoff_hz), t
+        )
         for side in WHEEL_JOINTS
     }
     ctrl = np.zeros((len(t), model.nu))
     for side, sign in (("left", cfg.left_torque_sign), ("right", cfg.right_torque_sign)):
-        ctrl[:, model.actuator(WHEEL_ACTUATORS[side]).id] = sign * raw[f"torque_{side}"]
+        ctrl[:, model.actuator(WHEEL_ACTUATORS[side]).id] = sign * lowpass(
+            t, raw[f"torque_{side}"], cfg.sample_rate_hz, cfg.filter_cutoff_hz
+        )
     control = sysid.TimeSeries.from_control_names(t, ctrl, model)
     measured = sysid.TimeSeries.from_names(
         t, np.column_stack([q["left"], q["right"], dq["left"], dq["right"]]),

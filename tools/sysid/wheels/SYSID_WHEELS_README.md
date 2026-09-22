@@ -76,3 +76,16 @@ python tools/sysid/wheels/sysid_wheels.py
 `identified_params.npz` 和写入辨识参数的 `identified_wheels.xml`。
 `damping_max` / `friction_max` 是辨识上界，
 分别默认为 0.1 和 1.0，可按电机实际情况调整。
+
+## 离线滤波
+
+默认以 `sample_rate_hz=1000.0`、`filter_cutoff_hz=50.0` 对力矩和已有速度列
+进行四阶 Butterworth 双向零相位低通滤波（SciPy `sosfiltfilt`）。
+缺少速度列时，先平滑角度再用 `numpy.gradient` 求速度；位置观测保留原始角度。
+原始 CSV 不会被修改。上述参数直接在 `CFG = SysIDConfig(...)` 中配置，
+`filter_cutoff_hz=None` 可关闭滤波，恢复原始数据及原始角度差分。
+
+50 Hz 是起始设置，并非针对实测数据调好的值；激励频段应低于截止频率。
+双向滤波的幅频响应是单次滤波的平方，端点可能有瞬态，应保留采集前后的静止段。
+启用时至少需要 16 个样本，时间戳间隔应为 0.001 s（允许 5% 抖动）；
+丢帧或采样率不符会报错，需先整理为等间隔数据。
