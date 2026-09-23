@@ -69,15 +69,27 @@ jump 的 25cm/45cm 配置独立设置，暂时默认关闭，
 ```bash
 # 按当前配置训练（默认开启）
 python -m experiments.genesis.wheel_leg_infantry.tasks.locomotion.train
-# 对照实验：关闭域随机化
-python -m experiments.genesis.wheel_leg_infantry.tasks.locomotion.train --no-domain-rand
+# 选择另一套训练配置（包含动力学随机化、地形、观测、奖励和课程）
+python -m experiments.genesis.wheel_leg_infantry.tasks.locomotion.train --config config_rand
+# 续训时使用所选配置文件；不加 --resume-config current 则沿用已保存的配置
+python -m experiments.genesis.wheel_leg_infantry.tasks.locomotion.train --resume latest --resume-config current --config config_rand
+# 只加载模型权重，用 config_rand.py 从第 0 轮重新训练（替换为实际 checkpoint 路径）
+python -m experiments.genesis.wheel_leg_infantry.tasks.locomotion.train --config config_rand --load-weights /path/to/model_6000.pt
 # 普通评估默认关闭动力学域随机化；启用时采用已保存的范围
 python -m experiments.genesis.wheel_leg_infantry.tasks.locomotion.eval --domain-rand
 ```
 
-locomotion 的训练参数 `--domain-rand` / `--no-domain-rand` 可覆盖配置总开关，
-不改变单项开关。locomotion 和 jump 的评估均支持这两个参数，默认总开关关闭。
+locomotion 训练通过 `--config config`（默认，`config.py`）或 `--config config_rand`
+（`config_rand.py`）选择配置，域随机化开关和地形在所选文件中设置。
+训练入口不再支持 `--domain-rand`、`--no-domain-rand` 和 `--terrain`。
+locomotion 和 jump 的评估仍支持 `--domain-rand` / `--no-domain-rand`，默认总开关关闭。
 IMU 噪声与固定动作延迟仍由原配置控制，不受这个总开关影响。
+
+`--load-weights PATH` 加载 actor/critic 权重（包含模型中保存的观测归一化状态），
+不加载源运行配置、优化器、学习率或迭代数。训练和课程从所选配置的第 0 轮开始，
+`--max_iterations` 为本次新训练的总轮数，结果保存到新版本目录。
+该选项不能与 `--resume`、`--checkpoint` 或 `--resume-config current` 混用；
+网络结构、观测和动作定义应与源权重兼容，权重加载使用严格形状检查。
 
 ## 随机化强度课程
 

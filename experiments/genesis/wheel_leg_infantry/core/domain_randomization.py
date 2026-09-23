@@ -20,8 +20,8 @@ def default_domain_rand_cfg(*, enabled=False):
         "enabled": enabled,
         "strength": 1.0,  # 0=标称模型，1=完整随机化范围；课程可覆盖
         "push": default_push_cfg(),
-        "friction": {"enabled": True, "ratio_range": [0.8, 1.2]},
-        "base_mass": {"enabled": True, "added_mass_range": [-1.0, 1.0]},  # kg
+        "friction": {"enabled": True, "ratio_range": [0.6, 1.4]},
+        "base_mass": {"enabled": True, "added_mass_range": [-1.0, 2.0]},  # kg
         "com_displacement": {"enabled": True, "displacement_range": [-0.01, 0.01]},  # m, xyz 独立
         "motor_strength": {"enabled": True, "ratio_range": [0.9, 1.1]},
         "motor_offset": {"enabled": True, "offset_range": [-0.02, 0.02]},  # rad, 仅腿部位置控制
@@ -33,9 +33,9 @@ def default_domain_rand_cfg(*, enabled=False):
         },
         "gas_spring": {
             "enabled": True,
-            "preload_force_range": [0.9, 1.1],
-            "stiffness_range": [0.9, 1.1],
-            "damping_range": [0.9, 1.1],
+            "preload_force_range": [0.95, 1.05],
+            "stiffness_range": [1.0, 1.0],
+            "damping_range": [1.0, 1.0],
         },
         "motor_gains": {
             "enabled": True,

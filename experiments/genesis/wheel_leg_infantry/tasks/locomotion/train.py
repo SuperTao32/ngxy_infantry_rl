@@ -1,12 +1,12 @@
 # 标准库
 import argparse
 from copy import deepcopy
+from pathlib import Path
 
 # 第三方库
 import genesis as gs
 
 # 项目内部模块
-from ...core.terrain import TERRAIN_PRESETS, default_terrain_cfg
 from ...core.train_config import get_train_cfg
 from ...tools.run_utils import (
     add_resume_arguments,
@@ -17,29 +17,37 @@ from ...tools.run_utils import (
     restore_training_state,
     save_run_artifacts,
 )
-from .config import get_cfgs
+from .config import get_cfgs as get_default_cfgs
+from .config_rand import get_cfgs as get_rand_cfgs
 from .env import LocomotionEnv
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--domain-rand", action=argparse.BooleanOptionalAction, default=None,
-                        help="override dynamics randomization in current or saved config")
     parser.add_argument("-v", "--vis", action="store_true", default=False)
     parser.add_argument("-e", "--exp_name", type=str, default="infantry_locomotion_v3")
     parser.add_argument("-B", "--num_envs", type=int, default=8192)
-    parser.add_argument("--max_iterations", type=int, default=10001)
+    parser.add_argument("--max_iterations", type=int, default=12001)
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--log-root", type=str, default="logs")
     parser.add_argument(
-        "--terrain",
-        choices=TERRAIN_PRESETS,
+        "--config",
+        choices=("config", "config_rand"),
+        default="config",
+        help="select config.py or config_rand.py (default: config); when resuming, requires --resume-config current to take effect",
+    )
+    parser.add_argument(
+        "--load-weights",
+        type=Path,
         default=None,
-        help="override terrain preset; default uses config (new runs use plane)",
+        metavar="CHECKPOINT_PATH",
+        help="load actor/critic weights only; use --config and start a new optimizer and curriculum at iteration 0",
     )
     add_resume_arguments(parser)
     args = parser.parse_args()
-    OnPolicyRunner = load_runner_class()
+
+    if args.load_weights is not None and args.resume is not None:
+        parser.error("--load-weights cannot be combined with --resume")
 
     # resume相关配置
     if args.resume is None:
@@ -48,10 +56,18 @@ def main():
         if args.resume_config != "saved":
             parser.error("--resume-config requires --resume")
 
+    if args.load_weights is not None:
+        args.load_weights = args.load_weights.expanduser().resolve()
+        if not args.load_weights.is_file():
+            parser.error(f"Weights checkpoint does not exist: {args.load_weights}")
+
+    OnPolicyRunner = load_runner_class()
     resume_plan = None
     if args.resume is None or args.resume_config == "current":
+        get_cfgs = {"config": get_default_cfgs, "config_rand": get_rand_cfgs}[args.config]
         env_cfg, obs_cfg, reward_cfg, command_cfg, curriculum_cfg = get_cfgs()
         train_cfg = get_train_cfg(args.exp_name)
+        print(f"[train] config: {args.config}.py")
 
     if args.resume is not None:
         resume_plan = resolve_resume_plan(args.log_root, args.exp_name, args.resume, args.checkpoint)
@@ -63,16 +79,10 @@ def main():
             command_cfg = deepcopy(saved_configs["command_cfg"])
             curriculum_cfg = deepcopy(saved_configs["curriculum_cfg"])
             train_cfg = deepcopy(saved_configs["train_cfg"])
-
-    if args.domain_rand is not None:
-        env_cfg.setdefault("domain_rand", {})["enabled"] = args.domain_rand
+            print("[train] config: saved run (--config only applies with --resume-config current)")
 
     remaining_iterations = args.max_iterations
 
-    # terrain相关配置
-    if args.terrain is not None:
-        env_cfg.setdefault("terrain", default_terrain_cfg())
-        env_cfg["terrain"]["preset"] = args.terrain
     print(f"[train] terrain: {env_cfg.get('terrain', {}).get('preset', 'plane')}")
 
     # 每次启动都新建版本，旧日志和 checkpoint 不会被覆盖。
@@ -92,6 +102,9 @@ def main():
     run_arguments = vars(args).copy()
     if resume_plan is not None:
         run_arguments["resume_from"] = str(resume_plan.checkpoint_path.resolve())
+
+    if args.load_weights is not None:
+        run_arguments["weights_from"] = str(args.load_weights)
 
     save_run_artifacts(run_dir, configs, run_arguments)
 
@@ -116,6 +129,17 @@ def main():
             f"[train] continuing at iteration {resume_plan.next_iteration}; "
             f"{remaining_iterations} iterations remain (target={args.max_iterations})"
         )
+    elif args.load_weights is not None:
+        # 环境已按所选配置的第 0 阶段初始化；不恢复旧优化器和训练进度。
+        runner.load(
+            str(args.load_weights),
+            load_cfg={"actor": True, "critic": True, "optimizer": False, "iteration": False, "rnd": False},
+            strict=True,
+            map_location=gs.device,
+        )
+        runner.current_learning_iteration = 0
+        print(f"[train] loaded actor/critic weights from: {args.load_weights}")
+        print(f"[train] starting at iteration 0 with fresh optimizer and {args.config}.py curriculum")
     runner.learn(num_learning_iterations=remaining_iterations, init_at_random_ep_len=True)
 
 if __name__ == "__main__":
