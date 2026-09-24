@@ -11,8 +11,7 @@ from experiments.genesis.wheel_leg_infantry.core.domain_randomization import (
     default_domain_rand_cfg,
 )
 from experiments.genesis.wheel_leg_infantry.tasks.locomotion.config import get_cfgs
-from experiments.genesis.wheel_leg_infantry.tasks.jump.config_25cm import get_cfgs as jump25_cfgs
-from experiments.genesis.wheel_leg_infantry.tasks.jump.config_45cm import get_cfgs as jump45_cfgs
+from experiments.genesis.wheel_leg_infantry.tasks.jump.config import get_cfgs as jump_cfgs
 from experiments.genesis.wheel_leg_infantry.core.curriculum import CurriculumManager
 
 
@@ -245,11 +244,11 @@ class DomainRandomizationTests(unittest.TestCase):
                 DomainRandomizationManager(bad)
         locomotion = get_cfgs()
         self.assertTrue(locomotion[0]["domain_rand"]["enabled"])
-        for cfgs in (jump25_cfgs, jump45_cfgs):
-            jump = cfgs(locomotion)
-            self.assertFalse(jump[0]["domain_rand"]["enabled"])
-            jump[0]["domain_rand"]["friction"]["ratio_range"][0] = .5
-            self.assertEqual(locomotion[0]["domain_rand"]["friction"]["ratio_range"], [.8, 1.2])
+        source_randomization = deepcopy(locomotion[0]["domain_rand"])
+        jump = jump_cfgs(locomotion)
+        self.assertFalse(jump[0]["domain_rand"]["enabled"])
+        jump[0]["domain_rand"]["friction"]["ratio_range"][0] = .5
+        self.assertEqual(locomotion[0]["domain_rand"], source_randomization)
 
     def test_curriculum_zero_is_nominal_and_does_not_sample(self):
         manager = self.make_manager(default_domain_rand_cfg(enabled=True))

@@ -11,21 +11,27 @@
 # Tensorboard
 - uv run --locked tensorboard --logdir logs
 
-# Infantry jump 续训
+# Infantry jump 统一任务
 
-- 从最新有效 jump 版本的最新 checkpoint 继续：
-  `uv run --locked python -m experiments.genesis.wheel_leg_infantry.tasks.jump.train -e infantry_jump_v4 --resume --max-iterations 4001`
-- 指定来源：追加 `--resume 3 --checkpoint 1500`（替换上面的 `--resume`），从第 1501 轮训练到第 4000 轮。
-- 默认 `--resume-config saved` 使用来源版本保存的配置；要使用当前 jump 配置，追加 `--resume-config current --config 25`（也可选 45，模型结构须兼容）。
+- 唯一配置：`experiments/genesis/wheel_leg_infantry/tasks/jump/config.py`。
+- 三维 one-hot：平地 `[1,0,0]`、20 cm 台阶 `[0,1,0]`、40 cm 台阶 `[0,0,1]`。
+- `env_cfg["jump_modes"]` 配置模式比例、轮底峰值目标、参考轨迹和速度—起跳距离表；env 在 teacher 稳速后设置起跳位置，无需 ToF。
+- 配置检查：`uv run --locked python -m experiments.genesis.wheel_leg_infantry.tasks.jump.train --dry-run`。
+- 重新训练：`uv run --locked python -m experiments.genesis.wheel_leg_infantry.tasks.jump.train -e infantry_jump --locomotion-log-root log_shared -B 1024 --max-iterations 2001`。
+- 自动评估：`uv run --locked python -m experiments.genesis.wheel_leg_infantry.tasks.jump.eval -e infantry_jump --mode all --speed 1.0 -B 3`。
+
+## 当前任务续训
+
+- `uv run --locked python -m experiments.genesis.wheel_leg_infantry.tasks.jump.train -e infantry_jump --resume --max-iterations 4001`。
+- 指定来源：追加 `--resume 3 --checkpoint 1500`（替换上面的 `--resume`）。
+- 默认 `--resume-config saved` 使用来源版本保存的配置；要使用当前唯一配置，追加 `--resume-config current`。
 - 恢复模型、优化器、迭代号和课程进度，每次写入新的 `version_NNNN`；`--max-iterations` 是总目标轮数。
-- 续训仍使用来源 jump 记录的 locomotion checkpoint 做每轮预热，需要保留对应的 `cfgs.pkl` 和模型。日志迁移后可用 `--locomotion-log-root` 指定其新根目录；续训时不会按 `--locomotion-exp-name/version/ckpt` 更换 teacher。
-- `--dry-run` 仅检查当前 `--config` 的配置契约，不检查续训 checkpoint。
+- 续训使用该 run 记录的 locomotion checkpoint 做每轮预热；日志迁移后可用 `--locomotion-log-root` 指定其新根目录。
 
+## 跳跃成功与失败
 
-# 单次跳跃防翻转与反弹
-
-- Jump 姿态误差改为 `2 * (1 + projected_gravity_z)`，正立为 0，倒立为 4；平衡、空中姿态和落地姿态奖励都区分正反。
-- 两套配置的 `jump_max_tilt_deg=45`：任一时刻超出倾角或机身接触，本回合高度失效，停止腾空收益，并持续施加 `jump_invalid=-200` 惩罚。已发放的历史奖励不会追溯撤回。
-- 首次任意轮或机身接触即结算本次跳跃；后续再腾空不累计高度和腾空奖励。首次落地后双轮离地超过 2 cm 时施加 `landing_airborne=-100` 的持续惩罚（按 dt 积分）。
-- 观察 `Episode/jump_invalid`、`Episode/rebound_seen` 和 `Episode/reward_landing_airborne`。`peak_wheel_clearance_m` 为有效跳跃成绩，失稳回合归零，不再直接等同于视觉上的最高轮高。
-- 从旧 07/08 续训时使用 `--resume-config current` 和对应 `--config 25` / `--config 45`，才能启用新增惩罚；运行中的进程不会热加载修改。
+- 姿态误差使用 `2 * (1 + projected_gravity_z)`；当前 `jump_max_tilt_deg=20`。超限、机身接触、撞立面或台阶下方落地均使该次跳跃失败。
+- 首次落地后再次双轮离地判定为反弹失败。终止后的补齐步不参与 PPO 或回合统计。
+- 台阶成功要求真实起跳、双轮在台面内部接触并连续落稳；平地还要求达到轮底峰值目标。
+- 分别观察 `Episode/success_flat`、`Episode/success_step_20cm`、`Episode/success_step_40cm`。
+- 完整使用说明见 `experiments/genesis/wheel_leg_infantry/tasks/jump/README.md`。

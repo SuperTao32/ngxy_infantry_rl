@@ -1,6 +1,8 @@
-"""按蓄力、蹬腿、腾空和落地分阶段门控的跳跃奖励。"""
+"""按起跳、腾空和落地分阶段门控的跳跃奖励。"""
 
 import torch
+
+from .geometry import target_wheel_support
 
 
 class JumpRewards:
@@ -18,7 +20,7 @@ class JumpRewards:
         return self.landing_airborne_gate
 
     def _reward_height_reference_tracking(self):
-        """宽松跟踪计时器参考；实测距离只用于奖励，不反馈到参考指令。"""
+        """腾空时跟踪 base 到轮底的距离参考；实测值不反馈到参考指令。"""
         error = torch.clamp(
             torch.abs(self.base_to_wheel_bottom_distance - self.commands[:, 2])
             - self.reward_cfg["height_reference_tolerance_m"],
@@ -35,15 +37,6 @@ class JumpRewards:
         """全程跟踪零 yaw 角速度。"""
         error = torch.square(self.base_ang_vel[:, 2])
         return torch.exp(-error / self.reward_cfg["zero_yaw_rate_sigma"])
-
-    def _reward_crouch_short_leg(self):
-        target = self.reward_cfg["short_leg_length_target"]
-        error = torch.mean(torch.square(self.leg_length - target), dim=1)
-        return self.crouch_gate * torch.exp(-error / self.reward_cfg["leg_length_sigma"])
-
-    def _reward_crouch_airborne(self):
-        """计划 crouch 阶段双轮离地时每步扣分，负权重由框架统一乘 dt。"""
-        return self.crouch_airborne_gate
 
     def _reward_takeoff_event(self):
         """连续腾空达到阈值时才给一次奖励，物理起跳事件仍单独记录。"""
@@ -122,7 +115,10 @@ class JumpRewards:
             -torch.square(self.impact_vertical_speed) / self.reward_cfg["landing_velocity_sigma"]
         )
         attitude_quality = torch.exp(-tilt_error / self.reward_cfg["landing_tilt_sigma"])
-        return self.jump_landing_event * impact_quality * attitude_quality
+        support = target_wheel_support(
+            self.wheel_center_pos, self.wheel_contact, self.jump_mode, self.task_cfg, self.wheel_radius, margin=0.0,
+        ).any(dim=1)
+        return self.jump_landing_event * impact_quality * attitude_quality * support * (self.jump_invalid < 0.5)
 
     def _reward_landing_stability(self):
         tilt_error = self._jump_tilt_error()
@@ -138,3 +134,12 @@ class JumpRewards:
 
     def _reward_action_rate(self):
         return torch.sum(torch.square(self.actions - self.last_actions), dim=1)
+
+    def _reward_target_landing(self):
+        return self.jump_landing_gate * self._reward_landing_stability()
+
+    def _reward_task_success(self):
+        return self.task_success_event
+
+    def _reward_task_failure(self):
+        return self.task_failure_event

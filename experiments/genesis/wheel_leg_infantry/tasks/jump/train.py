@@ -18,69 +18,53 @@ from ...tools.run_utils import (
     restore_training_state,
     save_run_artifacts,
 )
-from .config_25cm import get_cfgs as get_cfgs_25cm
-from .config_45cm import get_cfgs as get_cfgs_45cm
-from .height_reference import validate_height_reference
+from .config import MODE_NAMES, get_cfgs, validate_configs
 from .phase import validate_phase_durations
 from .staged_runner import validate_warmup_cfg
 from .warm_start import validate_locomotion_source, warm_start_actor
 
 
-def _parse_args():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("-v", "--vis", action="store_true", default=False)
-    parser.add_argument("-e", "--exp-name", type=str, default="infantry_jump_v6")
+def _parse_args(argv=None):
+    parser = argparse.ArgumentParser(description="平地 / 20 cm / 40 cm one-hot 混合跳跃；env 指定起跳距离")
+    parser.add_argument("-v", "--vis", action="store_true")
+    parser.add_argument("-e", "--exp-name", default="infantry_jump_multi")
     parser.add_argument("-B", "--num-envs", type=int, default=8192)
-    parser.add_argument(
-        "--config",
-        type=int,
-        choices=(25, 45),
-        default=25,
-        help="选择跳跃配置：25=config_25cm.py，45=config_45cm.py（默认 25）",
-    )
-    parser.add_argument("--max-iterations", type=int, default=2001)
+    parser.add_argument("--max-iterations", type=int, default=3001)
     parser.add_argument("--seed", type=int, default=1)
-    parser.add_argument("--log-root", type=str, default="logs")
-    parser.add_argument("--locomotion-log-root", type=str, default=None)
-    parser.add_argument("--locomotion-exp-name", type=str, default="infantry_locomotion_v3")
-    parser.add_argument("--locomotion-version", type=str, default=None)
+    parser.add_argument("--log-root", default="logs")
+    parser.add_argument("--locomotion-log-root", default=None)
+    parser.add_argument("--locomotion-exp-name", default="infantry_locomotion_v3")
+    parser.add_argument("--locomotion-version", default=None)
     parser.add_argument("--locomotion-ckpt", type=int, default=None)
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="只检查 jump 配置/观测/奖励契约，不导入 Genesis，也不要求 checkpoint",
-    )
+    parser.add_argument("--dry-run", action="store_true")
     add_resume_arguments(parser)
-    args = parser.parse_args()
-    if args.resume is None:
-        if args.checkpoint is not None:
-            parser.error("--checkpoint requires --resume")
-        if args.resume_config != "saved":
-            parser.error("--resume-config requires --resume")
+    args = parser.parse_args(argv)
+    if args.num_envs <= 0 or args.max_iterations <= 0:
+        parser.error("num-envs and max-iterations must be positive")
+    if args.resume is None and (args.checkpoint is not None or args.resume_config != "saved"):
+        parser.error("--checkpoint and --resume-config require --resume")
     return args
 
 
 def main():
     args = _parse_args()
-    get_cfgs = {25: get_cfgs_25cm, 45: get_cfgs_45cm}[args.config]
+    print(f"[jump] one-hot order={MODE_NAMES}; trigger distance comes from env, no ToF")
     if args.resume is not None and args.resume_config == "saved" and not args.dry_run:
         print("[jump] config=saved jump run")
     else:
-        print(f"[jump] config=config_{args.config}cm.py")
+        print(f"[jump] config={get_cfgs.__module__}")
     if args.dry_run:
         env_cfg, obs_cfg, reward_cfg, command_cfg, curriculum_cfg = get_cfgs()
+        validate_configs(env_cfg, obs_cfg, curriculum_cfg)
         validate_phase_durations(env_cfg["jump_phase_durations_s"])
         jump_horizon = round(env_cfg["episode_length_s"] / 0.02)
         validate_warmup_cfg(env_cfg["locomotion_warmup"])
-        validate_height_reference(env_cfg["height_reference"], env_cfg["episode_length_s"])
-        height_description = f"time_based_distance_reference={env_cfg['height_reference']}"
         print(
             "[jump dry-run] "
             f"actions={env_cfg['num_actions']} "
             f"policy_obs={obs_cfg['num_policy_obs']} critic_obs={obs_cfg['num_critic_obs']} "
             f"commands=[vx, wz, base_height] "
-            f"{height_description} "
-            f"wheel_clearance_target={env_cfg['wheel_clearance_target_m']} "
+            f"clearance_targets={env_cfg['jump_modes']['clearance_targets_m']} "
             f"ppo_horizon={jump_horizon} "
             f"phases={env_cfg['jump_phase_durations_s']}"
         )
@@ -93,6 +77,11 @@ def main():
         print(f"[jump dry-run] rewards={sorted(reward_cfg['reward_scales'])}")
         print(f"[jump dry-run] disabled_locomotion_rewards={reward_cfg['disabled_locomotion_rewards']}")
         print(f"[jump dry-run] curriculum={[stage['name'] for stage in curriculum_cfg['stages']]}")
+        for stage in curriculum_cfg["stages"]:
+            probabilities = stage["targets"].get("terrain", {}).get("mode_probabilities", "inherit")
+            print(f"[jump dry-run] {stage['name']}: mode_probabilities={probabilities}")
+        for mode, table in zip(MODE_NAMES, env_cfg["jump_modes"]["distance_tables"]):
+            print(f"[jump dry-run] {mode}: [speed, distance]={table}")
         print("[jump dry-run] real training requires a locomotion checkpoint; --resume also requires a jump checkpoint")
         return
 
@@ -139,12 +128,12 @@ def main():
     else:
         env_cfg, obs_cfg, reward_cfg, command_cfg, curriculum_cfg = get_cfgs(locomotion_cfgs)
         train_cfg = get_train_cfg(args.exp_name)
+    validate_configs(env_cfg, obs_cfg, curriculum_cfg)
     jump_horizon = round(env_cfg["episode_length_s"] / 0.02)
     if not abs(jump_horizon * 0.02 - env_cfg["episode_length_s"]) < 1e-9:
         raise ValueError("jump phase cycle must contain an integer number of 20 ms control steps")
     train_cfg["num_steps_per_env"] = jump_horizon
     validate_warmup_cfg(env_cfg["locomotion_warmup"])
-    validate_height_reference(env_cfg["height_reference"], env_cfg["episode_length_s"])
 
     run_dir = create_versioned_run_dir(args.log_root, args.exp_name)
     train_cfg["run_name"] = f"{args.exp_name}/{run_dir.name}"

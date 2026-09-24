@@ -8,7 +8,7 @@ from unittest.mock import patch
 import torch
 
 from experiments.genesis.wheel_leg_infantry.tasks.locomotion.config import get_cfgs
-from experiments.genesis.wheel_leg_infantry.tasks.jump.config_25cm import get_cfgs as jump_cfgs
+from experiments.genesis.wheel_leg_infantry.tasks.jump.config import get_cfgs as jump_cfgs
 
 
 @unittest.skipUnless(os.environ.get("NGXY_GENESIS_SMOKE") == "1", "set NGXY_GENESIS_SMOKE=1 for real Genesis CPU simulation")
@@ -55,10 +55,10 @@ class GenesisDomainRandomizationSmokeTests(unittest.TestCase):
         self.assert_solver_gains(env)
         self.assertEqual(env.get_pd_diagnostics()["joint_kp"].shape, (4,))
 
-    def test_jump_handoff_preserves_randomization_and_action_history(self):
+    def test_jump_switch_preserves_randomization_and_action_history(self):
         cfg = jump_cfgs()
+        cfg[4]["stages"][0]["targets"]["terrain"]["mode_probabilities"] = [1., 0., 0.]
         cfg[0]["domain_rand"]["enabled"] = True
-        cfg[0]["handoff_on_landing"] = True
         cfg[4]["stages"][0]["targets"]["domain_rand"] = {"strength": .3}
         env = self.make_env(cfg, jump=True, use_domain_curriculum=True)
         torch.testing.assert_close(env.domain_rand.episode_strength, torch.full((2,), .3))
@@ -73,7 +73,7 @@ class GenesisDomainRandomizationSmokeTests(unittest.TestCase):
         env.last_actions.fill_(.2)
         env.begin_jump_rollout()
         torch.testing.assert_close(env.domain_rand.push.steps_until_next, push_countdown)
-        torch.testing.assert_close(env.joint_kp, 80 * scales)
+        torch.testing.assert_close(env.joint_kp, cfg[0]["jump_motor_params"]["joint_kp"] * scales)
         torch.testing.assert_close(env.domain_rand.friction_ratio, friction)
         torch.testing.assert_close(env.domain_rand.motor_offsets, offsets)
         torch.testing.assert_close(env.domain_rand.added_mass, added_mass)
@@ -85,7 +85,7 @@ class GenesisDomainRandomizationSmokeTests(unittest.TestCase):
             torch.testing.assert_close(getattr(env.robot, f"get_dofs_{name}")(env.passive_dof_idx), value)
         env._apply_motor_params(env._locomotion_motor_params, torch.tensor([0]))
         torch.testing.assert_close(env.joint_kp[0], 60 * scales[0])
-        torch.testing.assert_close(env.joint_kp[1], 80 * scales[1])
+        torch.testing.assert_close(env.joint_kp[1], cfg[0]["jump_motor_params"]["joint_kp"] * scales[1])
         self.assert_solver_gains(env)
         obs, *_ = env.step(torch.zeros((2, 6)))
         self.assertTrue(torch.isfinite(obs["policy"]).all())
@@ -175,12 +175,13 @@ class GenesisDomainRandomizationSmokeTests(unittest.TestCase):
 
     def test_legacy_config_and_unbatched_jump_switch(self):
         cfg = jump_cfgs()
+        cfg[4]["stages"][0]["targets"]["terrain"]["mode_probabilities"] = [1., 0., 0.]
         cfg[0].pop("domain_rand")
         env = self.make_env(cfg, jump=True)
         self.assertFalse(env.batch_dofs_info)
         env.begin_jump_rollout()
         self.assert_solver_gains(env)
-        torch.testing.assert_close(env.joint_kp, torch.full((2, 4), 80.))
+        torch.testing.assert_close(env.joint_kp, torch.full((2, 4), cfg[0]["jump_motor_params"]["joint_kp"]))
         env.set_collect_jump_data(False)
         torch.testing.assert_close(env.joint_kp, torch.full((2, 4), 60.))
         obs, *_ = env.step(torch.zeros((2, 6)))

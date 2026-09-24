@@ -1,4 +1,4 @@
-"""只依赖计时器的机身到轮底距离参考；训练与部署共用，不读取接触状态。"""
+"""只依赖计时器的目标 base 到轮底平均竖直距离；训练与部署共用，不读取接触状态。"""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ import torch
 def validate_height_reference(
     points: Sequence[Sequence[float]], cycle_s: float,
 ) -> tuple[tuple[float, ...], tuple[float, ...]]:
-    """校验 [时间(s), 距离(m)] 节点，覆盖从跳跃触发到回合结束。"""
+    """校验 [时间(s), 目标 base 到轮底平均竖直距离(m)] 节点，覆盖从跳跃触发到回合结束。"""
     if not math.isfinite(cycle_s) or cycle_s <= 0.0:
         raise ValueError("height reference cycle_s must be positive and finite")
     if len(points) < 2 or any(len(point) != 2 for point in points):
@@ -34,7 +34,8 @@ def sample_height_reference(
     """分段五次平滑插值，节点速度/加速度为零，范围外保持首尾值。
 
     times/heights 是校验后的一维同设备张量；elapsed_s 可为标量或一批计时器。
-    距离表示机身原点到双轮轮底的平均竖直距离，不是机身离地高度。
+    参考值表示 base 原点到左右轮底的平均世界竖直距离，与地面高度无关。
+    此函数仅生成目标值；实测距离 = base_z - mean(wheel_center_z - wheel_radius)。
     """
     segment = torch.bucketize(elapsed_s.contiguous(), times, right=True) - 1
     segment = segment.clamp(0, times.numel() - 2)

@@ -1,8 +1,8 @@
 """Jump 的分阶段 PPO 训练流程。
 
 每轮先由冻结的 locomotion teacher 预热，再采集一个完整 jump 周期并更新 PPO。
-死亡/落地交接这一拍仍参与学习，之后的补齐步不参与优势归一化或 minibatch 采样。
-落地后是否立即交回 teacher，由 handoff_on_landing 配置决定。
+终止这一拍仍参与学习，之后的补齐步不参与优势归一化或 minibatch 采样。
+落地后继续采集稳定阶段，完整周期结束后才切回 teacher。
 """
 
 from __future__ import annotations
@@ -10,7 +10,7 @@ from __future__ import annotations
 import os
 import time
 from contextlib import contextmanager
-from copy import copy, deepcopy
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping
@@ -195,35 +195,6 @@ def valid_jump_batches(algorithm, valid_steps):
         storage.mini_batch_generator = original
 
 
-def update_jump_transitions(algorithm, valid):
-    """将交接前的有效 transition 打包到临时 storage，再执行 PPO 更新。"""
-    original = algorithm.storage
-    packed = copy(original)
-    valid = valid.to(original.device)
-    count = int(valid.sum().item())
-    if count < algorithm.num_mini_batches:
-        raise ValueError("too few jump transitions for PPO mini-batches")
-    # compute_returns 已在完整时间序列上执行。这里仅打包训练样本，不重新计算 GAE。
-    # [时间, 环境, ...] -> [有效样本, ...] -> [1, 有效样本, ...]。
-    packed.num_transitions_per_env, packed.num_envs = 1, count
-    packed.observations = original.observations[valid].unsqueeze(0)
-    for name in ("actions", "values", "returns", "actions_log_prob", "rewards", "dones"):
-        setattr(packed, name, getattr(original, name)[valid].unsqueeze(0))
-    packed.distribution_params = tuple(p[valid].unsqueeze(0) for p in original.distribution_params)
-    packed.advantages = packed.returns - packed.values
-    if not algorithm.normalize_advantage_per_mini_batch:
-        packed.advantages = (packed.advantages - packed.advantages.mean()) / (
-            packed.advantages.std(unbiased=count > 1) + 1e-8
-        )
-    # 浅拷贝保留 storage 的接口；原始 storage 留给下一轮固定长度采集。
-    algorithm.storage = packed
-    try:
-        return algorithm.update()
-    finally:
-        algorithm.storage = original
-        original.clear()
-
-
 # ============ 训练入口：每轮预热、采集、更新与保存 ============
 
 
@@ -238,9 +209,8 @@ def learn_staged_jump(
 
     # 1. 检查采集契约：一个 rollout 必须恰好覆盖一个 jump 周期。
     env = runner.env
-    handoff = getattr(env, "env_cfg", {}).get("handoff_on_landing", False)
-    if handoff and (runner.alg.actor.is_recurrent or runner.alg.critic.is_recurrent):
-        raise ValueError("landing handoff currently requires feedforward actor and critic")
+    if getattr(env, "env_cfg", {}).get("handoff_on_landing", False):
+        raise ValueError("jump requires the full landing stabilization window; handoff_on_landing must be False")
     expected_horizon = int(round(env.phase_cycle_s / env.dt))
     rollout_horizon = int(runner.cfg["num_steps_per_env"])
     if rollout_horizon != expected_horizon:
@@ -278,16 +248,13 @@ def learn_staged_jump(
                 # 在 step 前记录，因此导致死亡/落地的动作仍是有效训练样本。
                 valid_steps[rollout_step] = active
                 actions = runner.alg.act(observations)
-                if handoff and torch.any(~active):
-                    # 已结束环境使用 teacher 动作；未结束环境继续使用 jump 动作。
-                    teacher_actions = locomotion_actor(env.get_locomotion_observations().to(runner.device))
-                    actions = torch.where(active.to(actions.device).unsqueeze(-1), actions, teacher_actions)
                 observations, rewards, dones, extras = env.step(actions.to(env.device))
                 if runner.cfg.get("check_for_nan", True):
                     check_nan(observations, rewards, dones)
-                # 允许 rebound 导致提前死亡，其他意外终止中止本轮 PPO 更新。
+                # 允许任务声明的正常失败终止；solver error 等意外终止仍中止 PPO。
                 rebound_death = extras.get("jump_rebound_termination", torch.zeros_like(dones))
-                unexpected = dones & active & ~rebound_death
+                task_death = extras.get("jump_task_termination", torch.zeros_like(dones))
+                unexpected = dones & active & ~(rebound_death | task_death)
                 if torch.any(unexpected):
                     failed = int(torch.count_nonzero(unexpected).item())
                     raise RuntimeError(
@@ -295,11 +262,6 @@ def learn_staged_jump(
                         f"at rollout step {rollout_step + 1}/{rollout_horizon}; PPO update aborted"
                     )
 
-                if handoff:
-                    # 交接只切换策略/电机参数，不 reset 物理状态；落地拍视为 jump 终点。
-                    landed = env.handoff_landed_environments() & active
-                    dones = dones | landed
-                    observations = env.get_observations()
                 # 已结束环境的补齐步奖励清零并保持 done，防止 GAE 跨越技能终点。
                 rewards = torch.where(active, rewards, 0.0)
                 dones = dones | ~active
@@ -327,11 +289,8 @@ def learn_staged_jump(
             runner.alg.compute_returns(observations)
 
         # 5. 只用有效 jump transition 更新策略；预热和终点后的补齐步不参与学习。
-        if handoff:
-            loss_dict = update_jump_transitions(runner.alg, valid_steps)
-        else:
-            with valid_jump_batches(runner.alg, valid_steps):
-                loss_dict = runner.alg.update()
+        with valid_jump_batches(runner.alg, valid_steps):
+            loss_dict = runner.alg.update()
         stop = time.time()
         learn_time = stop - start
         runner.current_learning_iteration = it

@@ -20,11 +20,12 @@ LOCOMOTION_ESTIMATOR_LAYOUT: tuple[tuple[str, int], ...] = (
 )
 
 # 前 33 维的顺序和缩放与 locomotion 一致，checkpoint 第一层可按前缀复制。
-# 序列模式 jump 的 commands[:, 2] 是时间生成的机身到轮底距离参考，
-# warmup teacher 的同一列仍是机身高度指令；语义需要通过 jump 训练适应。
+# warmup teacher 的 commands[:, 2] 为目标 base 离地高度。
+# jump 时第三项为目标 base 到左右轮底的平均世界竖直距离，由模式和计时器生成。
 JUMP_ESTIMATOR_LAYOUT = LOCOMOTION_ESTIMATOR_LAYOUT + (
     ("last_actions", 6),
     ("jump_phase", 6),
+    ("jump_mode", 3),  # flat / step_20cm / step_40cm one-hot
 )
 
 
