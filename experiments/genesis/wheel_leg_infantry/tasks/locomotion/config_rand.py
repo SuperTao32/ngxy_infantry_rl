@@ -262,7 +262,7 @@ def _curriculum_cfg() -> dict:
                         "base_init_ang_vel_range": [[-0.1, 0.1], [-0.1, 0.1], [-5.1, 5.1]],
                     },
                     "command_ranges": {
-                        "lin_vel_range": [3.8, 3.8],
+                        "lin_vel_range": [-3.8, 3.8],
                         "ang_vel_range": [-1.2, 1.2],
                         "base_height_range": [0.20, 0.38],
                     },
