@@ -51,7 +51,7 @@ def get_cfgs(locomotion_cfgs: Sequence[Mapping] | None = None):
             # None 表示继承。标量或列表：腿按 joint_names、轮按 wheel_names 排序。
             "jump_motor_params": {
                 "joint_kp": 100.0,
-                "joint_kd": 5.0,
+                "joint_kd": 2.0,
                 "wheel_kd": 0.25,
                 "joint_force_limit": None,  # N·m，覆盖值必须 > 0
                 "wheel_force_limit": None,  # N·m，覆盖值必须 > 0
@@ -119,8 +119,6 @@ def _get_jump_modes_cfg(episode_length_s: float):
             [0.00, 0.22],
             [0.15, 0.50],
             [0.30, 0.20],
-            [0.50, 0.20],
-            [0.80, 0.30],
             [episode_length_s, 0.22],
         ],
         "step_20cm": [
@@ -143,14 +141,14 @@ def _get_jump_modes_cfg(episode_length_s: float):
         "assignment": "random",  # cyclic 用于逐模式验证。
         # 轮底相对起跳面的峰值目标，与 base 到轮底的距离参考独立。
         "clearance_targets_m": [0.30, 0.30, 0.50],
-        "min_forward_speeds_m_s": [0.0, 0.6, 0.6],
-        "flat_stationary_probability": 0.25,
+        "min_forward_speeds_m_s": [0.0, 0.8, 1.2],
+        "flat_stationary_probability": 0.1,
         # 每个模式的 [前向速度 m/s, 起跳距离 m]，节点间线性插值。
         # 这些是待训练/标定的初值，不是已验证的最优起跳位置。
         "distance_tables": [
             [[0.0, 0.0], [2.0, 0.0]],
-            [[0.0, 0.18], [0.6, 0.18], [1.0, 0.30], [2.0, 0.60]],
-            [[0.0, 0.24], [0.6, 0.24], [1.0, 0.40], [2.0, 0.80]],
+            [[0.0, 0.35], [0.8, 0.35], [1.0, 0.40], [2.0, 0.60]],
+            [[0.0, 0.60], [1.2, 0.60], [2.0, 0.9]],
         ],
         "distance_jitter_m": 0.01,
         "height_references": [base_to_wheel_bottom_trajectories[name] for name in MODE_NAMES],
@@ -191,8 +189,8 @@ def _get_reward_cfg():
     """奖励形状参数、各阶段权重及禁用的 locomotion 奖励。"""
     return {
         # base 到轮底距离跟踪的容差与尺度；2 cm 内不扣跟踪分。
-        "height_reference_tolerance_m": 0.02,
-        "height_reference_sigma": 0.04,
+        "height_reference_tolerance_m": 0.1,
+        "height_reference_sigma": 0.05,
         "short_leg_length_target": 0.14,
         "leg_length_sigma": 0.01,
         "flight_height_sigma": 0.04,
@@ -217,9 +215,9 @@ def _get_reward_cfg():
             # 起跳与峰值高度
             "takeoff_event": 200.0,
             "flight_height_shortfall": -2000.0,
-            "flight_peak_height": 3000.0,
+            "flight_peak_height": 5000.0,
             "takeoff_upward_velocity": 2000.0,
-            "takeoff_vertical_velocity": 2000.0,
+            "takeoff_vertical_velocity": 3000.0,
             # 腾空
             "height_reference_tracking": 10.0,
             "flight_airtime": 2.0,
@@ -308,14 +306,6 @@ def _get_curriculum_cfg():
                 "start_iteration": 1500,
                 "targets": {
                     "terrain": {"mode_probabilities": [1 / 3, 2 / 3, 0]},
-                    "command_ranges": {"lin_vel_range": [0.0, 1.2]},
-                },
-            },
-            {
-                "name": "flat&25cm_fast",
-                "start_iteration": 2000,
-                "targets": {
-                    "terrain": {"mode_probabilities": [1 / 2, 1 / 2, 0]},
                     "command_ranges": {"lin_vel_range": [0.0, 2.0]},
                     "reward_scales": {
                         "base_balance": -30.0,
@@ -336,16 +326,15 @@ def _get_curriculum_cfg():
             },
             {
                 "name": "flat&25cm&45cm_fast",
-                "start_iteration": 2500,
+                "start_iteration": 2000,
                 "targets": {
                     "terrain": {"mode_probabilities": [1 / 6, 1 / 6, 2 / 3]},
                     "command_ranges": {"lin_vel_range": [0.0, 2.0]},
                     "reward_scales": {
-                        "flight_peak_height": 5000.0,
-                        "takeoff_upward_velocity": 3000.0,
-                        "takeoff_vertical_velocity": 3000.0,
-                        "flight_height_progress": 120.0,
-                        "flight_height_tracking": 120.0,
+                        "flight_peak_height": 8000.0,
+                        "takeoff_vertical_velocity": 5000.0,
+                        "flight_height_progress": 200.0,
+                        "flight_height_tracking": 200.0,
                         "task_success": 2000.0,
                     },
                 },
