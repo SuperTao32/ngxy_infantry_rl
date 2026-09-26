@@ -3,6 +3,12 @@
 import torch
 
 
+def active_step_heights(cfg):
+    """任务编码保持不变；未启用台阶的通道按平地处理。"""
+    enabled = cfg.get("platform_enabled", [True] * len(cfg["step_heights_m"]))
+    return [height if active else 0.0 for height, active in zip(cfg["step_heights_m"], enabled)]
+
+
 def trigger_distance(speed, mode, tables):
     """逐模式分段线性插值；显式拒绝未标定速度，避免默默外推。"""
     result = torch.zeros_like(speed)
@@ -25,11 +31,11 @@ def trigger_distance(speed, mode, tables):
 def target_wheel_support(positions, contacts, mode, cfg, wheel_radius, *, margin=None):
     """返回 [N,2] 台面/平地支撑；侧壁接触或仅悬在台面上方不计入。"""
     margin = cfg["landing_margin_m"] if margin is None else margin
-    heights = positions.new_tensor(cfg["step_heights_m"])[mode, None]
+    heights = positions.new_tensor(active_step_heights(cfg))[mode, None]
     lane_y = mode.to(positions.dtype)[:, None] * cfg["lane_spacing_m"]
     x, y, z = positions.unbind(-1)
     height_match = torch.abs(z - wheel_radius - heights) <= cfg["landing_height_tolerance_m"]
     inside = ((x >= margin) & (x <= cfg["platform_length_m"] - margin)
               & (torch.abs(y - lane_y) <= cfg["platform_width_m"] / 2 - margin))
-    inside = torch.where((mode == 0)[:, None], torch.ones_like(inside), inside)
+    inside = torch.where(heights == 0, torch.ones_like(inside), inside)
     return (contacts > 0.5) & height_match & inside

@@ -63,7 +63,11 @@ class LocomotionEnv(LocomotionRewards):
 
         self.domain_rand = DomainRandomizationManager(env_cfg.get("domain_rand"))
         self.env_cfg["domain_rand"] = self.domain_rand.config
-        self.batch_dofs_info = self.domain_rand.requires_batched_dofs or bool(env_cfg.get("handoff_on_landing", False))
+        self.batch_dofs_info = (
+            self.domain_rand.requires_batched_dofs
+            or bool(env_cfg.get("handoff_on_landing", False))
+            or self._requires_batched_motor_params()
+        )
 
         # 观测、奖励和指令配置
         self.obs_scales: dict[str, float] = obs_cfg["obs_scales"]
@@ -218,8 +222,8 @@ class LocomotionEnv(LocomotionRewards):
 
         # 奖励函数与 episode 统计
         self.reward_functions, self.episode_sums = {}, {}
-        self.raw_reward_scales: dict[str, float] = dict(reward_cfg["reward_scales"])
-        self.reward_scales: dict[str, float] = {}
+        self.raw_reward_scales: dict[str, float | list[float]] = dict(reward_cfg["reward_scales"])
+        self.reward_scales: dict[str, float | torch.Tensor] = {}
         self._apply_reward_scales(self.raw_reward_scales)
         self.episode_metric_sums = {
             "height_gate": torch.zeros((self.num_envs,), dtype=gs.tc_float, device=self.device),
@@ -514,6 +518,10 @@ class LocomotionEnv(LocomotionRewards):
             self.terrain_entity if isinstance(self.terrain_entity, tuple) else (self.terrain_entity,)
         )
 
+    def _requires_batched_motor_params(self):
+        """任务可在场景构建前声明需要逐环境设置电机参数。"""
+        return False
+
     def _apply_motor_params(self, params, envs_idx=None):
         self.domain_rand.apply_motor_params(params, envs_idx)
 
@@ -633,7 +641,7 @@ class LocomotionEnv(LocomotionRewards):
         ########### 计算奖励 ###########
         self.reward_buf.zero_()
         for name, reward_func in self.reward_functions.items():
-            r = reward_func() * self.reward_scales[name]
+            r = reward_func() * self._get_reward_scale(name)
             self.reward_buf += r
             self.episode_sums[name] += r
         self.episode_metric_sums["height_gate"] += self.height_gate
@@ -1081,6 +1089,9 @@ class LocomotionEnv(LocomotionRewards):
                 raise ValueError(f"{name} must be [lower, upper], got {limits}")
             self.command_cfg[name] = list(limits)
         self.commands_limit = self._build_command_limits()
+
+    def _get_reward_scale(self, name):
+        return self.reward_scales[name]
 
     def _apply_reward_scales(self, values):
         """应用原始奖励权重；除死亡奖励外，运行时权重统一乘以 dt。"""

@@ -56,6 +56,9 @@ def get_cfgs(locomotion_cfgs: Sequence[Mapping] | None = None):
                 "joint_force_limit": None,  # N·m，覆盖值必须 > 0
                 "wheel_force_limit": None,  # N·m，覆盖值必须 > 0
             },
+            # 001 模式全程覆盖关节 kd，包括无台阶高跳和 40 cm 台阶；None 关闭覆盖。
+            # 标量或按 joint_names 排序的列表；其他模式使用上面的 joint_kd。
+            "jump_step_40cm_joint_kd": 0.1,
             # 离地确认与终止：高台面可能提前触地，短暂离地仍需连续确认。
             "takeoff_min_airborne_time_s": 0.06,
             "jump_max_tilt_deg": 20.0,
@@ -129,8 +132,8 @@ def _get_jump_modes_cfg(episode_length_s: float):
         ],
         "step_40cm": [
             [0.00, 0.22],
-            [0.15, 0.70],
-            [0.30, 0.20],
+            [0.10, 0.70],
+            [0.25, 0.20],
             [episode_length_s, 0.22],
         ],
     }
@@ -138,6 +141,7 @@ def _get_jump_modes_cfg(episode_length_s: float):
     return {
         "mode_names": list(MODE_NAMES),
         "step_heights_m": list(MODE_HEIGHTS),
+        "platform_enabled": [True, True, True],  # 课程可移走台阶，任务编码与跳高目标不变。
         "assignment": "random",  # cyclic 用于逐模式验证。
         # 轮底相对起跳面的峰值目标，与 base 到轮底的距离参考独立。
         "clearance_targets_m": [0.30, 0.30, 0.50],
@@ -148,7 +152,7 @@ def _get_jump_modes_cfg(episode_length_s: float):
         "distance_tables": [
             [[0.0, 0.0], [2.0, 0.0]],
             [[0.0, 0.35], [0.8, 0.35], [1.0, 0.40], [2.0, 0.60]],
-            [[0.0, 0.60], [1.2, 0.60], [2.0, 0.9]],
+            [[0.0, 0.50], [1.2, 0.50], [2.0, 0.6]],
         ],
         "distance_jitter_m": 0.01,
         "height_references": [base_to_wheel_bottom_trajectories[name] for name in MODE_NAMES],
@@ -256,7 +260,10 @@ def _get_curriculum_cfg():
                 "name": "flat_static",
                 "start_iteration": 0,
                 "targets": {
-                    "terrain": {"mode_probabilities": [1.0, 0, 0]},
+                    "terrain": {
+                        "mode_probabilities": [1.0, 0, 0],
+                        "platform_enabled": [True, True, True],
+                    },
                     "command_ranges": {
                         "lin_vel_range": [0.0, 0.0],
                     },
@@ -302,7 +309,7 @@ def _get_curriculum_cfg():
                 },
             },
             {
-                "name": "flat&25cm_medium",
+                "name": "flat&20cm_medium",
                 "start_iteration": 1500,
                 "targets": {
                     "terrain": {"mode_probabilities": [1 / 3, 2 / 3, 0]},
@@ -325,22 +332,49 @@ def _get_curriculum_cfg():
                 },
             },
             {
-                "name": "flat&25cm&45cm_fast",
-                "start_iteration": 2000,
+                "name": "flat_high_jump",
+                "start_iteration": 1600,
                 "targets": {
-                    "terrain": {"mode_probabilities": [1 / 6, 1 / 6, 2 / 3]},
-                    "command_ranges": {"lin_vel_range": [0.0, 2.0]},
-                    "reward_scales": {
-                        "flight_peak_height": 8000.0,
-                        "takeoff_vertical_velocity": 5000.0,
-                        "flight_height_progress": 200.0,
-                        "flight_height_tracking": 200.0,
-                        "task_success": 2000.0,
+                    "terrain": {
+                        "mode_probabilities": [1 / 6, 1 / 6, 2 / 3],
+                        "platform_enabled": [True, True, False],  # 001 在平地练习轮底跳高 50 cm。
                     },
+                    "command_ranges": {"lin_vel_range": [1.2, 2.0]},
+                    "reward_scales": {
+                        "base_balance": [-30.0, -30.0, -2.0],
+                        "leg_symmetry": [-30.0, -30.0, -2.0],
+                        "leg_symmetry_bonus": [30.0, 30.0, 2.0],
+                        "tracking_lin_vel": [30.0, 30.0, 2.0],
+                        "tracking_ang_vel": [30.0, 30.0, 2.0],
+                        # 落地
+                        "soft_landing": [50.0, 50.0, 2.0],
+                        "landing_stability": [50.0, 50.0, 2.0],
+                        "action_rate": [-0.05, -0.05, -0.001],
+                        "base_contact": [-300.0, -300.0, -2.0],
+                        # 按 [平地, 20 cm, 40 cm] 指定权重，仅提高 40 cm 任务。
+                        "flight_peak_height": [5000.0, 5000.0, 10000.0],
+                        "takeoff_vertical_velocity": [3000.0, 3000.0, 5000.0],
+                        "flight_height_progress": [80.0, 80.0, 200.0],
+                        "flight_height_tracking": [80.0, 80.0, 200.0],
+                        "task_success": [500.0, 500.0, 2000.0],
+                    },
+                },
+            },
+            {
+                "name": "step_40cm",
+                "start_iteration": 2500,
+                "targets": {
+                    # 保留 001 编码、采样比例、速度及奖励，只放回 40 cm 台阶。
+                    "terrain": {"platform_enabled": [True, True, True]},
                 },
             },
         ],
     }
+
+
+def validate_platform_enabled(values):
+    if len(values) != len(MODE_NAMES) or any(type(v) is not bool for v in values):
+        raise ValueError("platform_enabled must contain three booleans")
 
 
 def validate_mode_probabilities(values):
@@ -356,8 +390,11 @@ def validate_configs(env_cfg, obs_cfg, curriculum_cfg=None):
     if tuple(cfg["mode_names"]) != MODE_NAMES or tuple(cfg["step_heights_m"]) != MODE_HEIGHTS:
         raise ValueError("jump_modes mode order must be flat, step_20cm, step_40cm")
     validate_mode_probabilities(cfg["mode_probabilities"])
+    validate_platform_enabled(cfg.get("platform_enabled", [True, True, True]))
     for stage in (curriculum_cfg or {}).get("stages", []):
         terrain = stage.get("targets", {}).get("terrain", {})
+        if "platform_enabled" in terrain:
+            validate_platform_enabled(terrain["platform_enabled"])
         if "mode_probabilities" in terrain:
             validate_mode_probabilities(terrain["mode_probabilities"])
     for key in ("clearance_targets_m", "min_forward_speeds_m_s"):

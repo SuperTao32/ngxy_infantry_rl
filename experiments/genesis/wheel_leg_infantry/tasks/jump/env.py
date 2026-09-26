@@ -12,9 +12,9 @@ from tensordict import TensorDict
 from ...core.kinematics import compute_mean_base_to_wheel_bottom_distance
 from ...core.tensor_utils import as_gain_tensor
 from ..locomotion.env import LocomotionEnv
-from .config import MODE_NAMES, PHASE_NAMES, validate_configs, validate_mode_probabilities
+from .config import MODE_NAMES, PHASE_NAMES, validate_configs, validate_mode_probabilities, validate_platform_enabled
 from .height_reference import sample_height_reference
-from .geometry import target_wheel_support, trigger_distance
+from .geometry import active_step_heights, target_wheel_support, trigger_distance
 from .terrain import JumpTerrain
 from .observation import JUMP_ESTIMATOR_LAYOUT, LOCOMOTION_ESTIMATOR_LAYOUT, layout_dim
 from .phase import phase_encoding, validate_phase_durations
@@ -72,6 +72,9 @@ class JumpEnv(JumpRewards, LocomotionEnv):
         self.terrain_entity = self.terrain.add_to_scene(self.scene)
         self.friction_terrain_entities = self.terrain_entity
 
+    def _requires_batched_motor_params(self):
+        return self.env_cfg.get("jump_step_40cm_joint_kd") is not None
+
     def _initialize_jump_motor_params(self):
         self._jump_motor_params = {}
         self._locomotion_motor_params = {}
@@ -101,6 +104,18 @@ class JumpEnv(JumpRewards, LocomotionEnv):
                 raise ValueError(f"jump_motor_params.{name} must be positive")
             self._jump_motor_params[name] = tensor
             self._locomotion_motor_params[name] = self.domain_rand.nominal_motor_params[name].clone()
+
+        self._step_40cm_joint_kd = None
+        value = self.env_cfg.get("jump_step_40cm_joint_kd")
+        if value is not None:
+            tensor = as_gain_tensor(value, self.num_joints, "jump_step_40cm_joint_kd", device=self.device)
+            if tensor.shape != (self.num_joints,) or not torch.all(torch.isfinite(tensor)) or torch.any(tensor < 0):
+                raise ValueError("jump_step_40cm_joint_kd must be a finite nonnegative scalar or joint list")
+            self._step_40cm_joint_kd = tensor
+            # 即使公共 jump kd 为 None，其他任务及 teacher 也必须能恢复继承值。
+            nominal = self.domain_rand.nominal_motor_params["joint_kd"]
+            self._jump_motor_params.setdefault("joint_kd", nominal.clone())
+            self._locomotion_motor_params.setdefault("joint_kd", nominal.clone())
 
     def _initialize_task_buffers(self):
         """集中声明 jump 状态；父类创建基础物理 buffer 后、首次 reset 前调用。
@@ -299,7 +314,7 @@ class JumpEnv(JumpRewards, LocomotionEnv):
         self.terrain_height.copy_(self.terrain.height_at(self.base_pos[:, :2]))
         self.base_height.copy_(self.base_pos[:, 2] - self.terrain_height)
         wheels = self.robot.get_links_pos(self.wheel_links_idx)
-        overlaps = (self.jump_mode > 0) & torch.any(wheels[:, :, 0] + self.wheel_radius >= 0, dim=1)
+        overlaps = (self.landing_surface_height > 0) & torch.any(wheels[:, :, 0] + self.wheel_radius >= 0, dim=1)
         if torch.any(overlaps):
             raise ValueError("trigger distance puts a wheel inside the riser; increase distance table values")
         observations = self._start_jump_episode()
@@ -364,7 +379,13 @@ class JumpEnv(JumpRewards, LocomotionEnv):
         """切换训练边界；False 时 step 只运行 teacher，不推进 PPO 课程时钟。"""
         if bool(enabled) != self.collect_jump_data:
             profile = "_jump_motor_params" if enabled else "_locomotion_motor_params"
-            self._apply_motor_params(getattr(self, profile, {}))
+            params = dict(getattr(self, profile, {}))
+            if enabled and getattr(self, "_step_40cm_joint_kd", None) is not None:
+                step_40cm = self.jump_mode == MODE_NAMES.index("step_40cm")
+                params["joint_kd"] = torch.where(
+                    step_40cm[:, None], self._step_40cm_joint_kd, params["joint_kd"],
+                )
+            self._apply_motor_params(params)
         self.collect_jump_data = bool(enabled)
 
     # ============ 逐步更新：物理事件 → 任务判定 → 终止与奖励门控 ============
@@ -383,11 +404,11 @@ class JumpEnv(JumpRewards, LocomotionEnv):
         top_contact = target_wheel_support(
             self.wheel_center_pos, self.wheel_contact, self.jump_mode, cfg, self.wheel_radius, margin=0.0,
         ).any(dim=1)
-        bad_landing = (self.jump_mode > 0) & (self.jump_landing_event > 0.5) & ~top_contact
+        bad_landing = (self.landing_surface_height > 0) & (self.jump_landing_event > 0.5) & ~top_contact
         # 起跳前轮子低于台面并到达立面，属于撞沿，不能通过贴墙爬升刷跳跃奖励。
         wheel_x = self.wheel_center_pos[:, :, 0]
         wheel_bottom = self.wheel_center_pos[:, :, 2] - self.wheel_radius
-        riser_hit = ((self.jump_mode > 0) & ~self.has_landed
+        riser_hit = ((self.landing_surface_height > 0) & ~self.has_landed
                      & torch.any((wheel_x + self.wheel_radius >= 0)
                                  & (wheel_x < 0)
                                  & (wheel_bottom < self.landing_surface_height[:, None] - cfg["landing_height_tolerance_m"])
@@ -399,7 +420,7 @@ class JumpEnv(JumpRewards, LocomotionEnv):
         stable = (self.has_taken_off & target_support & valid & tilt_ok
                   & (self.world_vertical_velocity.abs() <= cfg["landing_max_vertical_speed_m_s"]))
         self.stable_landing_steps.copy_(torch.where(stable, self.stable_landing_steps + 1, 0))
-        height_ok = ((self.jump_mode > 0)
+        height_ok = ((self.landing_surface_height > 0)
                      | (self.jump_reward_state.peak_clearance >= self.wheel_clearance_target))
         self.task_success.copy_((self.stable_landing_steps >= self.required_stable_steps) & height_ok)
         self.task_success_event.copy_(self.task_success & ~self.success_seen)
@@ -574,7 +595,7 @@ class JumpEnv(JumpRewards, LocomotionEnv):
         self.jump_mode[selected] = self.terrain_tile_index[selected]
         self.jump_mode_one_hot[selected] = F.one_hot(self.jump_mode[selected], 3).to(gs.tc_float)
         targets = self.commands.new_tensor(self.task_cfg["clearance_targets_m"])
-        heights = self.commands.new_tensor(self.task_cfg["step_heights_m"])
+        heights = self.commands.new_tensor(active_step_heights(self.task_cfg))
         self.wheel_clearance_target[selected] = targets[self.jump_mode[selected]]
         self.landing_surface_height[selected] = heights[self.jump_mode[selected]]
         if env_idx is None:
@@ -610,6 +631,29 @@ class JumpEnv(JumpRewards, LocomotionEnv):
     def _should_advance_training_clock(self):
         return self.collect_jump_data
 
+    def _get_reward_scale(self, name):
+        scale = self.reward_scales[name]
+        # 每次结算按当前模式索引，reset 重新分配任务后立即使用对应权重。
+        return scale[self.jump_mode] if isinstance(scale, torch.Tensor) else scale
+
+    def _apply_reward_scales(self, values):
+        """标量对所有任务生效；三元素列表按平地、20 cm、40 cm 分别设置。"""
+        per_mode = {}
+        for name, value in values.items():
+            if isinstance(value, (list, tuple)):
+                if len(value) != len(MODE_NAMES) or any(not math.isfinite(v) for v in value):
+                    raise ValueError(f"reward scale {name} must contain three finite values")
+                per_mode[name] = [float(v) for v in value]
+        super()._apply_reward_scales({
+            name: per_mode[name][0] if name in per_mode else value
+            for name, value in values.items()
+        })
+        for name, scales in per_mode.items():
+            self.raw_reward_scales[name] = scales
+            self.reward_cfg["reward_scales"][name] = list(scales)
+            scale = torch.tensor(scales, dtype=gs.tc_float, device=self.device)
+            self.reward_scales[name] = scale if name == "death" else scale * self.dt
+
     def _apply_command_ranges(self, values):
         """课程只更新 locomotion command；jump 高度参考保持配置中的时间表。"""
         super()._apply_command_ranges(values)
@@ -619,12 +663,24 @@ class JumpEnv(JumpRewards, LocomotionEnv):
 
     def _apply_terrain_curriculum(self, values):
         """更新下一次 reset 的模式抽样权重；已经开始的 rollout 保持原模式。"""
+        if "platform_enabled" in values:
+            validate_platform_enabled(values["platform_enabled"])
         if "mode_probabilities" in values:
             probabilities = values["mode_probabilities"]
             validate_mode_probabilities(probabilities)
             # 第 0 阶段在场景创建前应用；JumpTerrain 随后持有同一个 task_cfg。
             self.task_cfg["mode_probabilities"] = list(probabilities)
-        terrain_values = {name: value for name, value in values.items() if name != "mode_probabilities"}
+        if "platform_enabled" in values:
+            if isinstance(getattr(self, "terrain", None), JumpTerrain):
+                self.terrain.set_platform_enabled(values["platform_enabled"])
+            else:
+                # 父类先创建普通 TerrainManager；第 0 阶段只写配置，
+                # 随后的 _add_terrain 才创建 JumpTerrain 和台阶实体。
+                self.task_cfg["platform_enabled"] = list(values["platform_enabled"])
+        terrain_values = {
+            name: value for name, value in values.items()
+            if name not in ("mode_probabilities", "platform_enabled")
+        }
         if terrain_values:
             super()._apply_terrain_curriculum(terrain_values)
 
