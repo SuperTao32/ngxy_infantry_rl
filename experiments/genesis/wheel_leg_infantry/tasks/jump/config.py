@@ -29,8 +29,8 @@ def get_cfgs(locomotion_cfgs: Sequence[Mapping] | None = None):
 
     # 阶段时长：所有模式共用一个 rollout 周期。
     phase_durations_s = {
-        "takeoff": 0.15,
-        "flight": 0.45,
+        "takeoff": 0.20,
+        "flight": 0.40,
         "landing": 0.50,
     }
     episode_length_s = sum(phase_durations_s.values())
@@ -120,20 +120,20 @@ def _get_jump_modes_cfg(episode_length_s: float):
     base_to_wheel_bottom_trajectories = {
         "flat": [
             [0.00, 0.22],
-            [0.15, 0.50],
+            [0.20, 0.50],
             [0.30, 0.20],
             [episode_length_s, 0.22],
         ],
         "step_20cm": [
             [0.00, 0.22],
-            [0.15, 0.50],
+            [0.20, 0.50],
             [0.30, 0.20],
             [episode_length_s, 0.22],
         ],
         "step_40cm": [
             [0.00, 0.22],
-            [0.15, 0.70],
-            [0.25, 0.20],
+            [0.20, 0.70],
+            [0.30, 0.20],
             [episode_length_s, 0.22],
         ],
     }
@@ -192,9 +192,9 @@ def _get_obs_cfg(locomotion_obs_cfg: Mapping):
 def _get_reward_cfg():
     """奖励形状参数、各阶段权重及禁用的 locomotion 奖励。"""
     return {
-        # base 到轮底距离跟踪的容差与尺度。
-        "height_reference_tolerance_m": 0.1,
-        "height_reference_sigma": 0.05,
+        # 落地 base 到轮底距离跟踪：容差单位 m，指数分母 sigma 单位 m²。
+        "height_reference_tolerance_m": 0.02,
+        "height_reference_sigma": 0.0025,
         "short_leg_length_target": 0.14,
         "leg_length_sigma": 0.01,
         "flight_height_sigma": 0.04,
@@ -223,16 +223,17 @@ def _get_reward_cfg():
             "takeoff_upward_velocity": 2000.0,
             "takeoff_vertical_velocity": 3000.0,
             # 腾空
-            "height_reference_tracking": 10.0,
-            "flight_airtime": 2.0,
+            "flight_airtime": 10.0,
             "flight_balance": 5.0,
             "flight_height_progress": 80.0,
             "flight_height_tracking": 80.0,
+            "flight_wheel_clearance": 80.0,
             # 落地
             "soft_landing": 1.0,
             "landing_stability": 1.0,
             "landing_airborne": -100.0,
             "target_landing": 30.0,
+            "base_to_wheel_bottom_distance_tracking": 10.0,
             # 任务结果
             "task_success": 500.0,  # 事件奖励沿用框架的 dt 缩放。
             "task_failure": -500.0,

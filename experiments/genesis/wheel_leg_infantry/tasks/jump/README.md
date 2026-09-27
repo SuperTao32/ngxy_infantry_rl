@@ -63,13 +63,20 @@ base 到轮底的距离轨迹集中在 `base_to_wheel_bottom_trajectories`，按
 - `height_references`：每个模式的目标 base 到左右轮底的平均世界竖直距离轨迹。
   实测距离为 `base_z - mean(wheel_center_z - wheel_radius)`，单独用于伸腿/收腿姿态跟踪。
   参考在整个 jump 周期内生成，并写入 `commands[:, 2]`；warmup 仍使用 teacher 的 base 原点离地高度指令。
-  `height_reference_tracking` 用该相对距离计算奖励，仅在腾空阶段生效；`reward_scales` 中的权重为 `10.0`。
+  `base_to_wheel_bottom_distance_tracking` 用该相对距离计算奖励，仅在落地双轮有效支撑时生效；权重为 `10.0`。
+  跟踪容差为 `0.02 m`，`height_reference_sigma=0.0025 m²`；起跳和腾空期间参考仍作为观测输入。
 - 跳高进度、峰值、缺高、跳高跟踪及平地成功判定使用 `jump_base_height`，即 base 原点相对起跳地面的竖直高度。
   所有模式都从 z=0 地面起跳，进入台阶上方也不扣除台阶高度；不使用碰撞体底面或轮底高度。
   机身位置不变时，收腿不会提高跳高得分；腿部距离跟踪仍可独立鼓励所需的伸腿/收腿动作。
   高度目标数值不变，表示绝对离起跳地面高度，不是相对初始站姿的上升量。
   critic 的跳高与峰值通道使用同一机身高度，维度和缩放保持不变。
-  日志使用 `peak_jump_base_height_m`；轮底高度仅保留为几何诊断。
+  日志使用 `peak_jump_base_height_m`。
+- 起跳速度基准为 `sqrt(2*g*max(目标绝对高度 - 最后支撑拍 base 高度, 0))`。
+  支撑高度与速度同步更新，首次离地后锁存；持续速度奖励限于 `[-1, 1]`，起跳事件速度奖励限于 `[0, 1]`。
+  达到所需速度后不再增加奖励，分母保底避免目标高度已达到时除零。
+- `flight_wheel_clearance` 在 `flight_gate` 内奖励较低轮底相对起跳面的高度（米），
+  到 `jump_base_height - 0.20 m` 后饱和；轮底高度及饱和上限均不低于零。
+  默认权重为 `10.0`，用于鼓励双腿收起，不再奖励超过该上限的收腿动作。
 - `min_forward_speeds_m_s`：台阶默认至少 0.6 m/s；平地包含静止跳和移动跳。
 - 速度与任务采样比例均由课程阶段控制；被采样的台阶模式，其最小速度不能高于该阶段速度上限。
 

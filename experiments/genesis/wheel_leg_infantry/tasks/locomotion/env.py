@@ -943,7 +943,7 @@ class LocomotionEnv(LocomotionRewards):
         self.robot.control_dofs_force(force, self.springs_dof_idx)
 
     def _update_velocity_estimator(self):
-        """更新 actor 使用的前向速度；仿真真值只留给 reward、critic 与诊断。"""
+        """更新前向速度估计供诊断；actor 中对应观测固定为零。"""
         self.wheel_forward_vel.copy_(
             wheel_forward_velocity(
                 self.wheel_vel,
@@ -1029,7 +1029,8 @@ class LocomotionEnv(LocomotionRewards):
         """按固定顺序组装 actor 观测及包含仿真真值的 critic 观测。"""
         # 字典插入顺序就是策略输入的拼接顺序；调整顺序或维度后旧模型将不再兼容。
         self.obs_components = {
-            "estimated_base_lin_vel": self.estimated_base_lin_vel.unsqueeze(-1) * self.obs_scales["lin_vel"],  # 1
+            # 保留这一维及其位置，但屏蔽融合速度估计；估计器继续运行供诊断。
+            "estimated_base_lin_vel": torch.zeros_like(self.estimated_base_lin_vel).unsqueeze(-1),  # 1
             "imu_ang_vel": self.imu_ang_vel * self.obs_scales["ang_vel"],  # 3
             "imu_lin_acc": self.imu_lin_acc * self.imu_acc_scale,  # 3，IMU 比力（含重力）
             "projected_gravity": self.projected_gravity,  # 3

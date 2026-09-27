@@ -163,6 +163,7 @@ class JumpEnv(JumpRewards, LocomotionEnv):
         self.world_vertical_acceleration = torch.zeros_like(self.base_height_target)
         self.previous_world_vertical_velocity = torch.zeros_like(self.base_height_target)  # 计算加速度。
         self.takeoff_contact_vertical_velocity = torch.zeros_like(self.base_height_target)  # 最后一拍支撑速度。
+        self.takeoff_contact_base_height = torch.zeros_like(self.base_height_target)  # 与支撑速度同拍的 base 高度。
         self.last_airborne_vertical_velocity = torch.zeros_like(self.base_height_target)  # 触地前一拍速度。
         self.impact_vertical_speed = torch.zeros_like(self.base_height_target)  # 仅落地事件拍非零。
 
@@ -452,7 +453,7 @@ class JumpEnv(JumpRewards, LocomotionEnv):
         self._update_jump_geometry()
 
         # 起跳接触期不依赖计划阶段：首次双轮完全离地前，只要至少一轮仍在
-        # 安全接触，就锁存最后一个接触拍的 base-link vz。
+        # 安全接触，就同步锁存最后一个接触拍的 base-link vz 和高度。
         wheel_support = torch.any(self.wheel_contact > 0.5, dim=1) & (self.base_contact < 0.5)
         accumulate_takeoff = wheel_support & ~self.has_taken_off
         self.takeoff_gate.copy_(accumulate_takeoff.to(dtype=gs.tc_float))
@@ -464,6 +465,9 @@ class JumpEnv(JumpRewards, LocomotionEnv):
                 current_vertical_velocity,
                 self.takeoff_contact_vertical_velocity,
             )
+        )
+        self.takeoff_contact_base_height.copy_(
+            torch.where(accumulate_takeoff, self.jump_base_height, self.takeoff_contact_base_height)
         )
         takeoff_now = (
             no_wheels_contact
@@ -620,6 +624,7 @@ class JumpEnv(JumpRewards, LocomotionEnv):
             self.jump_base_height, self.max_jump_base_height,
             self.world_vertical_velocity, self.world_vertical_acceleration,
             self.previous_world_vertical_velocity, self.takeoff_contact_vertical_velocity,
+            self.takeoff_contact_base_height,
             self.last_airborne_vertical_velocity, self.impact_vertical_speed,
             # 物理阶段历史。
             self.has_taken_off, self.has_landed,

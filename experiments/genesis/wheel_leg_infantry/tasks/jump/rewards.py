@@ -19,14 +19,14 @@ class JumpRewards:
     def _reward_landing_airborne(self):
         return self.landing_airborne_gate
 
-    def _reward_height_reference_tracking(self):
-        """腾空时跟踪 base 到轮底的距离参考；实测值不反馈到参考指令。"""
+    def _reward_base_to_wheel_bottom_distance_tracking(self):
+        """落地双轮有效支撑时跟踪 base 到轮底的距离参考。"""
         error = torch.clamp(
             torch.abs(self.base_to_wheel_bottom_distance - self.commands[:, 2])
             - self.reward_cfg["height_reference_tolerance_m"],
             min=0.0,
         )
-        return self.flight_gate * torch.exp(-torch.square(error) / self.reward_cfg["height_reference_sigma"])
+        return self.jump_landing_gate * torch.exp(-torch.square(error) / self.reward_cfg["height_reference_sigma"])
 
     def _reward_tracking_lin_vel(self):
         """全程只跟踪进入 jump 时锁存的前向线速度，不约束侧向速度。"""
@@ -67,17 +67,21 @@ class JumpRewards:
         return self.flight_gate * torch.clamp(progress - previous, min=0.0) - self._revoked_height_progress()
 
     def _target_takeoff_velocity(self):
-        return (2.0 * self.gravity_magnitude * self.base_height_target) ** 0.5
+        """按最后一个支撑拍距绝对目标高度的差值计算弹道起跳速度。"""
+        remaining_height = torch.clamp(self.base_height_target - self.takeoff_contact_base_height, min=0.0)
+        return torch.sqrt(2.0 * self.gravity_magnitude * remaining_height)
 
     def _reward_takeoff_upward_velocity(self):
-        """首次离地前仍有轮子支撑时，持续奖励当前 base-link 向上速度。"""
-        progress = self.world_vertical_velocity / self._target_takeoff_velocity()
+        """支撑期间奖励向上速度，达到剩余跳高所需速度后饱和；下落仍扣分。"""
+        # 剩余高度接近零时仍有界；零速度不给起跳分，负速度保留负奖励。
+        target = self._target_takeoff_velocity().clamp_min(1e-6)
+        progress = torch.clamp(self.world_vertical_velocity / target, -1.0, 1.0)
         return self.takeoff_gate * progress
 
     def _reward_takeoff_vertical_velocity(self):
         """离地时按最后一个轮地接触拍的 base-link vz 结算一次。"""
         progress = torch.clamp(
-            self.takeoff_contact_vertical_velocity / self._target_takeoff_velocity(), 0.0, 1.0
+            self.takeoff_contact_vertical_velocity / self._target_takeoff_velocity().clamp_min(1e-6), 0.0, 1.0
         )
         return self.jump_takeoff_event * (1.0 - self.jump_invalid) * progress
 
@@ -89,6 +93,12 @@ class JumpRewards:
         target = self.base_height_target
         progress = torch.clamp(self.jump_base_height / target, 0.0, 1.0)
         return self.flight_gate * progress
+
+    def _reward_flight_wheel_clearance(self):
+        """奖励较低轮底离起跳面的距离，达到 base 高度减 20 cm 后饱和。"""
+        ceiling = torch.clamp(self.jump_base_height - 0.20, min=0.0)
+        clearance = torch.minimum(torch.clamp(self.wheel_clearance, min=0.0), ceiling)
+        return self.flight_gate * clearance
 
     def _reward_flight_balance(self):
         tilt_error = self._jump_tilt_error()

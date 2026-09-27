@@ -88,7 +88,7 @@ def _env_cfg() -> dict:
 
 def _obs_cfg() -> dict:
     return {
-        # actor 只使用真机可获得的 IMU + 轮速融合估计；仿真真值仅进入 critic。
+        # actor 使用 IMU、轮速等真机观测；融合速度估计仅用于诊断，对应观测固定为零。
         "imu": {
             "link_name": "base_link",
             "pos_offset": [0.0, 0.0, 0.0],
@@ -109,12 +109,12 @@ def _obs_cfg() -> dict:
             "max_abs_velocity": 4.2,
         },
         "obs_scales": {
-            "lin_vel": 1.0 / 4.2,
+            "lin_vel": 1.0 / 3.5,
             "lin_acc": 1.0 / 9.81,
-            "ang_vel": 0.5,
+            "ang_vel": 1.0 / 4.0,
             "joint_pos": 1.0,
             "joint_vel": 0.1,
-            "wheel_vel": 1.0 / 70.0,
+            "wheel_vel": 1.0 / 50.0,
             "base_height": 1.0 / 0.35,
             "leg_length": 1.0 / 0.35,
             "leg_angle": 1.0,
