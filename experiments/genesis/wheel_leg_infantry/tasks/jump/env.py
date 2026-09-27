@@ -147,22 +147,24 @@ class JumpEnv(JumpRewards, LocomotionEnv):
         # 本轮任务：reset 时从地形通道确定；jump 期间冻结，不因提前终止而重新采样。
         self.jump_mode = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
         self.jump_mode_one_hot = torch.zeros((self.num_envs, 3), dtype=gs.tc_float, device=self.device)
-        self.wheel_clearance_target = torch.zeros(self.num_envs, dtype=gs.tc_float, device=self.device)
-        self.landing_surface_height = torch.zeros_like(self.wheel_clearance_target)
-        self.trigger_distance_m = torch.zeros_like(self.wheel_clearance_target)  # 开始 jump 时记录的起跳距离。
+        self.base_height_target = torch.zeros(self.num_envs, dtype=gs.tc_float, device=self.device)
+        self.landing_surface_height = torch.zeros_like(self.base_height_target)
+        self.trigger_distance_m = torch.zeros_like(self.base_height_target)  # 开始 jump 时记录的起跳距离。
 
-        # 实测几何与运动：每步覆盖；max_wheel_clearance 为未经有效性筛选的原始峰值。
+        # 实测几何与运动：每步覆盖；max_jump_base_height 为未经有效性筛选的原始峰值。
         # 奖励认可的峰值单独由 jump_reward_state 保存，失稳时可撤销，不能与原始峰值合并。
         self.wheel_center_pos = torch.zeros((self.num_envs, 2, 3), dtype=gs.tc_float, device=self.device)
-        self.base_to_wheel_bottom_distance = torch.zeros_like(self.wheel_clearance_target)
-        self.wheel_clearance = torch.zeros_like(self.wheel_clearance_target)
-        self.max_wheel_clearance = torch.zeros_like(self.wheel_clearance_target)
-        self.world_vertical_velocity = torch.zeros_like(self.wheel_clearance_target)
-        self.world_vertical_acceleration = torch.zeros_like(self.wheel_clearance_target)
-        self.previous_world_vertical_velocity = torch.zeros_like(self.wheel_clearance_target)  # 计算加速度。
-        self.takeoff_contact_vertical_velocity = torch.zeros_like(self.wheel_clearance_target)  # 最后一拍支撑速度。
-        self.last_airborne_vertical_velocity = torch.zeros_like(self.wheel_clearance_target)  # 触地前一拍速度。
-        self.impact_vertical_speed = torch.zeros_like(self.wheel_clearance_target)  # 仅落地事件拍非零。
+        self.base_to_wheel_bottom_distance = torch.zeros_like(self.base_height_target)
+        self.wheel_clearance = torch.zeros_like(self.base_height_target)
+        self.max_wheel_clearance = torch.zeros_like(self.base_height_target)
+        self.jump_base_height = torch.zeros_like(self.base_height_target)
+        self.max_jump_base_height = torch.zeros_like(self.base_height_target)
+        self.world_vertical_velocity = torch.zeros_like(self.base_height_target)
+        self.world_vertical_acceleration = torch.zeros_like(self.base_height_target)
+        self.previous_world_vertical_velocity = torch.zeros_like(self.base_height_target)  # 计算加速度。
+        self.takeoff_contact_vertical_velocity = torch.zeros_like(self.base_height_target)  # 最后一拍支撑速度。
+        self.last_airborne_vertical_velocity = torch.zeros_like(self.base_height_target)  # 触地前一拍速度。
+        self.impact_vertical_speed = torch.zeros_like(self.base_height_target)  # 仅落地事件拍非零。
 
         # 物理阶段历史：首次起跳/落地后保持 True，直到下一次 reset；jump_stage 由二者推导。
         # has_taken_off 为物理离地，不等于奖励要求的“连续腾空达到最短时间”。
@@ -171,20 +173,20 @@ class JumpEnv(JumpRewards, LocomotionEnv):
         self.phase_features = torch.empty((self.num_envs, 6), dtype=gs.tc_float, device=self.device)  # actor 时间编码。
 
         # 本拍奖励门控：每步重新计算，条件消失即归零，不记录历史。
-        self.takeoff_gate = torch.zeros_like(self.wheel_clearance_target)  # 计划起跳期且尚有安全轮支撑。
-        self.flight_gate = torch.zeros_like(self.wheel_clearance_target)  # 首次起跳后、首次触地前的有效腾空。
-        self.jump_landing_gate = torch.zeros_like(self.wheel_clearance_target)  # 已落地且双轮有效支撑目标面。
-        self.landing_airborne_gate = torch.zeros_like(self.wheel_clearance_target)  # 已落地后再次双轮离地。
+        self.takeoff_gate = torch.zeros_like(self.base_height_target)  # 计划起跳期且尚有安全轮支撑。
+        self.flight_gate = torch.zeros_like(self.base_height_target)  # 首次起跳后、首次触地前的有效腾空。
+        self.jump_landing_gate = torch.zeros_like(self.base_height_target)  # 已落地且双轮有效支撑目标面。
+        self.landing_airborne_gate = torch.zeros_like(self.base_height_target)  # 已落地后再次双轮离地。
 
         # 单拍事件：只在边沿发生时置 1，下一步重算；用于一次性奖励。
-        self.jump_takeoff_event = torch.zeros_like(self.wheel_clearance_target)  # 首次物理离地。
-        self.jump_landing_event = torch.zeros_like(self.wheel_clearance_target)  # 起跳后首次任意轮/机身触地。
-        self.task_success_event = torch.zeros_like(self.wheel_clearance_target)  # 本回合第一次满足成功条件。
-        self.task_failure_event = torch.zeros_like(self.wheel_clearance_target)  # 本回合第一次失败。
+        self.jump_takeoff_event = torch.zeros_like(self.base_height_target)  # 首次物理离地。
+        self.jump_landing_event = torch.zeros_like(self.base_height_target)  # 起跳后首次任意轮/机身触地。
+        self.task_success_event = torch.zeros_like(self.base_height_target)  # 本回合第一次满足成功条件。
+        self.task_failure_event = torch.zeros_like(self.base_height_target)  # 本回合第一次失败。
 
         # 失败历史：float 0/1 锁存，兼容奖励与日志；恢复姿态/接触不能抹掉记录。
-        self.jump_invalid = torch.zeros_like(self.wheel_clearance_target)  # 过倾、机身触地、撞沿或错误落台。
-        self.rebound_seen = torch.zeros_like(self.wheel_clearance_target)  # 曾在落地后再次双轮离地。
+        self.jump_invalid = torch.zeros_like(self.base_height_target)  # 过倾、机身触地、撞沿或错误落台。
+        self.rebound_seen = torch.zeros_like(self.base_height_target)  # 曾在落地后再次双轮离地。
 
         # 成功判定与事件去重：task_success 是当前状态，会随失稳变 False；seen 保留回合历史。
         self.stable_landing_steps = torch.zeros_like(self.jump_mode)  # 连续落稳拍数，中断即清零。
@@ -348,8 +350,9 @@ class JumpEnv(JumpRewards, LocomotionEnv):
         self.world_vertical_velocity.copy_(current_world_velocity[:, 2])
         self.previous_world_vertical_velocity.copy_(current_world_velocity[:, 2])
         self.world_vertical_acceleration.zero_()
-        self._update_wheel_clearance()
+        self._update_jump_geometry()
         self.max_wheel_clearance.copy_(self.wheel_clearance.clamp_min(0.0))
+        self.max_jump_base_height.copy_(self.jump_base_height.clamp_min(0.0))
 
         self.previous_both_wheels_contact.copy_(torch.all(self.wheel_contact > 0.5, dim=1))
         self.set_collect_jump_data(True)
@@ -421,7 +424,7 @@ class JumpEnv(JumpRewards, LocomotionEnv):
                   & (self.world_vertical_velocity.abs() <= cfg["landing_max_vertical_speed_m_s"]))
         self.stable_landing_steps.copy_(torch.where(stable, self.stable_landing_steps + 1, 0))
         height_ok = ((self.landing_surface_height > 0)
-                     | (self.jump_reward_state.peak_clearance >= self.wheel_clearance_target))
+                     | (self.jump_reward_state.peak_clearance >= self.base_height_target))
         self.task_success.copy_((self.stable_landing_steps >= self.required_stable_steps) & height_ok)
         self.task_success_event.copy_(self.task_success & ~self.success_seen)
         self.success_seen.logical_or_(self.task_success)
@@ -446,7 +449,7 @@ class JumpEnv(JumpRewards, LocomotionEnv):
         both_wheels_contact = torch.all(self.wheel_contact > 0.5, dim=1)
         no_wheels_contact = torch.all(self.wheel_contact <= 0.5, dim=1)
         safe_wheel_contact = both_wheels_contact & (self.base_contact < 0.5)
-        self._update_wheel_clearance()
+        self._update_jump_geometry()
 
         # 起跳接触期不依赖计划阶段：首次双轮完全离地前，只要至少一轮仍在
         # 安全接触，就锁存最后一个接触拍的 base-link vz。
@@ -504,7 +507,7 @@ class JumpEnv(JumpRewards, LocomotionEnv):
         self.rebound_seen.copy_(torch.maximum(self.rebound_seen, self.landing_airborne_gate))
         self.jump_reward_state.update(
             airborne,
-            self.wheel_clearance,
+            self.jump_base_height,
             self.jump_landing_event,
             self.episode_length_buf,
             takeoff_eligible=(self.takeoff_contact_vertical_velocity > 0.0) & valid_jump,
@@ -517,11 +520,15 @@ class JumpEnv(JumpRewards, LocomotionEnv):
         self._update_jump_commands()
         self.previous_world_vertical_velocity.copy_(current_vertical_velocity)
 
-    def _update_wheel_clearance(self):
-        """更新轮底离地间隙，以及机身到两侧轮底的平均距离。"""
+    def _update_jump_geometry(self):
+        """分别更新机身跳高、腿部相对距离和轮底几何。"""
+        # 所有通道都从 z=0 平地起跳；台阶上方也不扣台面高度。
+        # 不复用 locomotion 的 base_height，因为它相对当前位置地表计算。
+        self.jump_base_height.copy_(self.base_pos[:, 2])
+        self.max_jump_base_height.copy_(torch.maximum(self.max_jump_base_height, self.jump_base_height))
         self.wheel_center_pos.copy_(self.robot.get_links_pos(self.wheel_links_idx))
         wheel_bottom_height = self.wheel_center_pos[:, :, 2] - self.wheel_radius
-        # 两侧距离沿世界 z 方向测量后取平均；用于 base 到轮底距离参考的跟踪奖励。
+        # 两侧距离沿世界 z 方向测量后取平均，单独用于伸腿/收腿轨迹跟踪。
         # 与 base 离地高度独立，整体腾空或地形高度变化不影响该相对距离。
         self.base_to_wheel_bottom_distance.copy_(
             compute_mean_base_to_wheel_bottom_distance(
@@ -596,7 +603,7 @@ class JumpEnv(JumpRewards, LocomotionEnv):
         self.jump_mode_one_hot[selected] = F.one_hot(self.jump_mode[selected], 3).to(gs.tc_float)
         targets = self.commands.new_tensor(self.task_cfg["clearance_targets_m"])
         heights = self.commands.new_tensor(active_step_heights(self.task_cfg))
-        self.wheel_clearance_target[selected] = targets[self.jump_mode[selected]]
+        self.base_height_target[selected] = targets[self.jump_mode[selected]]
         self.landing_surface_height[selected] = heights[self.jump_mode[selected]]
         if env_idx is None:
             self.terminal_jump_stats.clear()
@@ -610,6 +617,7 @@ class JumpEnv(JumpRewards, LocomotionEnv):
             # 实测量及用于差分/事件结算的历史量。
             self.wheel_center_pos, self.base_to_wheel_bottom_distance,
             self.wheel_clearance, self.max_wheel_clearance,
+            self.jump_base_height, self.max_jump_base_height,
             self.world_vertical_velocity, self.world_vertical_acceleration,
             self.previous_world_vertical_velocity, self.takeoff_contact_vertical_velocity,
             self.last_airborne_vertical_velocity, self.impact_vertical_speed,
@@ -745,8 +753,8 @@ class JumpEnv(JumpRewards, LocomotionEnv):
 
     def _get_jump_privileged_components(self):
         return {
-            "privileged_wheel_clearance": (
-                self.wheel_clearance.unsqueeze(-1) * self.obs_scales["wheel_clearance"]
+            "privileged_jump_base_height": (
+                self.jump_base_height.unsqueeze(-1) * self.obs_scales["jump_base_height"]
             ),  # 1
             "privileged_world_vertical_velocity": (
                 self.world_vertical_velocity.unsqueeze(-1) * self.obs_scales["vertical_velocity"]
@@ -754,8 +762,8 @@ class JumpEnv(JumpRewards, LocomotionEnv):
             "privileged_world_vertical_acceleration": (
                 self.world_vertical_acceleration.unsqueeze(-1) * self.obs_scales["vertical_acceleration"]
             ),  # 1
-            "privileged_max_wheel_clearance": (
-                self.max_wheel_clearance.unsqueeze(-1) * self.obs_scales["wheel_clearance"]
+            "privileged_max_jump_base_height": (
+                self.max_jump_base_height.unsqueeze(-1) * self.obs_scales["jump_base_height"]
             ),  # 1
             "privileged_jump_stage": F.one_hot(self.jump_stage, num_classes=len(PHASE_NAMES)).to(
                 dtype=gs.tc_float
@@ -777,13 +785,13 @@ class JumpEnv(JumpRewards, LocomotionEnv):
         episode["jump_invalid"] = self.jump_invalid.clone()
         episode["rebound_seen"] = self.rebound_seen.clone()
         episode["qualified_takeoff"] = self.jump_reward_state.takeoff_rewarded.to(dtype=gs.tc_float)
-        episode["peak_wheel_clearance_m"] = self.jump_reward_state.peak_clearance.clone()
+        episode["peak_jump_base_height_m"] = self.jump_reward_state.peak_clearance.clone()
         episode["max_airborne_duration_s"] = self.jump_reward_state.max_airborne_steps * self.dt
         episode["takeoff_contact_vertical_velocity_m_s"] = (
             self.takeoff_contact_vertical_velocity.clone()
         )
         episode["height_target_reached"] = (
-            self.jump_reward_state.peak_clearance >= self.wheel_clearance_target
+            self.jump_reward_state.peak_clearance >= self.base_height_target
         ).to(dtype=gs.tc_float)
         episode["task_success"] = self.task_success.to(gs.tc_float)
         episode["trigger_distance_m"] = self.trigger_distance_m.clone()
@@ -802,10 +810,10 @@ class JumpEnv(JumpRewards, LocomotionEnv):
         return stats
 
     def get_jump_diagnostics(self, env_idx=0):
-        """返回相位、距离参考、实际离地高度和事件；command_base_height 保留兼容键名。"""
+        """返回相位、高度参考、实际离地高度和事件；command_base_height 保留兼容键名。"""
         return {
             "phase_name": PHASE_NAMES[int(self.jump_stage[env_idx].item())],
-            "wheel_clearance_target": self.wheel_clearance_target[env_idx].detach(),
+            "base_height_target": self.base_height_target[env_idx].detach(),
             "mode": MODE_NAMES[int(self.jump_mode[env_idx])],
             "trigger_distance_m": self.trigger_distance_m[env_idx].detach(),
             "task_success": bool(self.task_success[env_idx]),
@@ -813,6 +821,8 @@ class JumpEnv(JumpRewards, LocomotionEnv):
             "command_wz": self.commands[env_idx, 1].detach(),
             "command_base_height": self.commands[env_idx, 2].detach(),
             "base_height": self.base_height[env_idx].detach(),
+            "jump_base_height": self.jump_base_height[env_idx].detach(),
+            "max_jump_base_height": self.max_jump_base_height[env_idx].detach(),
             "terrain_height": self.terrain_height[env_idx].detach(),
             "base_to_wheel_bottom_distance": self.base_to_wheel_bottom_distance[env_idx].detach(),
             "wheel_clearance": self.wheel_clearance[env_idx].detach(),

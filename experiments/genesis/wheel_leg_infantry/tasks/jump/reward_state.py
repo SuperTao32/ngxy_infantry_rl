@@ -66,7 +66,7 @@ class JumpRewardState:
         )
         self.takeoff_event.copy_(qualified)
         self.takeoff_rewarded.logical_or_(qualified)
-        # 只计实际腾空时的双轮间隙，排除地面支撑时的几何误差。
+        # 只计实际腾空时的base 原点相对起跳地面的高度，地面支撑时不累计峰值。
         self.previous_peak_clearance.copy_(self.peak_clearance)
         self.peak_clearance.copy_(
             torch.where(airborne, torch.maximum(self.peak_clearance, clearance), self.peak_clearance)

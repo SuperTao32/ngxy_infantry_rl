@@ -27,7 +27,7 @@ from .warm_start import validate_locomotion_source, warm_start_actor
 def _parse_args(argv=None):
     parser = argparse.ArgumentParser(description="平地 / 20 cm / 40 cm one-hot 混合跳跃；env 指定起跳距离")
     parser.add_argument("-v", "--vis", action="store_true")
-    parser.add_argument("-e", "--exp-name", default="infantry_jump_multi")
+    parser.add_argument("-e", "--exp-name", default="infantry_jump_multi_v2")
     parser.add_argument("-B", "--num-envs", type=int, default=8192)
     parser.add_argument("--max-iterations", type=int, default=3001)
     parser.add_argument("--seed", type=int, default=1)

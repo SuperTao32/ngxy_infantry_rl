@@ -61,9 +61,9 @@ def get_cfgs(locomotion_cfgs: Sequence[Mapping] | None = None):
             "jump_step_40cm_joint_kd": 0.1,
             # 离地确认与终止：高台面可能提前触地，短暂离地仍需连续确认。
             "takeoff_min_airborne_time_s": 0.06,
-            "jump_max_tilt_deg": 20.0,
-            "termination_if_roll_greater_than": 20.0,
-            "termination_if_pitch_greater_than": 20.0,
+            "jump_max_tilt_deg": 10.0,
+            "termination_if_roll_greater_than": 10.0,
+            "termination_if_pitch_greater_than": 10.0,
             "tilt_termination_duration_s": episode_length_s,
             "base_contact_termination_duration_s": episode_length_s,
             # 初始状态
@@ -132,7 +132,7 @@ def _get_jump_modes_cfg(episode_length_s: float):
         ],
         "step_40cm": [
             [0.00, 0.22],
-            [0.10, 0.70],
+            [0.15, 0.70],
             [0.25, 0.20],
             [episode_length_s, 0.22],
         ],
@@ -143,8 +143,8 @@ def _get_jump_modes_cfg(episode_length_s: float):
         "step_heights_m": list(MODE_HEIGHTS),
         "platform_enabled": [True, True, True],  # 课程可移走台阶，任务编码与跳高目标不变。
         "assignment": "random",  # cyclic 用于逐模式验证。
-        # 轮底相对起跳面的峰值目标，与 base 到轮底的距离参考独立。
-        "clearance_targets_m": [0.30, 0.30, 0.50],
+        # base 原点相对起跳面的峰值目标，与 base 到轮底的距离参考独立。
+        "clearance_targets_m": [0.50, 0.50, 0.65],
         "min_forward_speeds_m_s": [0.0, 0.8, 1.2],
         "flat_stationary_probability": 0.1,
         # 每个模式的 [前向速度 m/s, 起跳距离 m]，节点间线性插值。
@@ -176,7 +176,7 @@ def _get_obs_cfg(locomotion_obs_cfg: Mapping):
     obs_cfg.setdefault("obs_scales", {})
     obs_cfg["obs_scales"].update(
         {
-            "wheel_clearance": 1.0 / 0.25,
+            "jump_base_height": 1.0 / 0.40,  # 缩放 base 原点相对起跳面的高度。
             "vertical_velocity": 1.0 / 2.0,
             "vertical_acceleration": 1.0 / 10.0,
         }
@@ -192,7 +192,7 @@ def _get_obs_cfg(locomotion_obs_cfg: Mapping):
 def _get_reward_cfg():
     """奖励形状参数、各阶段权重及禁用的 locomotion 奖励。"""
     return {
-        # base 到轮底距离跟踪的容差与尺度；2 cm 内不扣跟踪分。
+        # base 到轮底距离跟踪的容差与尺度。
         "height_reference_tolerance_m": 0.1,
         "height_reference_sigma": 0.05,
         "short_leg_length_target": 0.14,
@@ -270,29 +270,8 @@ def _get_curriculum_cfg():
                 },
             },
             {
-                "name": "flat_slow",
-                "start_iteration": 500,
-                "targets": {
-                    "terrain": {"mode_probabilities": [1.0, 0, 0]},
-                    "command_ranges": {"lin_vel_range": [0.0, 0.5]},
-                    "reward_scales": {
-                        "base_balance": -10.0,
-                        "leg_symmetry": -10.0,
-                        "leg_symmetry_bonus": 10.0,
-                        "tracking_lin_vel": 10.0,
-                        "tracking_ang_vel": 10.0,
-                        "flight_airtime": 15.0,
-                        # 落地
-                        "soft_landing": 10.0,
-                        "landing_stability": 10.0,
-                        "action_rate": -0.001,
-                        "base_contact": -20.0,
-                    },
-                },
-            },
-            {
                 "name": "flat_medium",
-                "start_iteration": 1000,
+                "start_iteration": 500,
                 "targets": {
                     "terrain": {"mode_probabilities": [1.0, 0, 0]},
                     "command_ranges": {"lin_vel_range": [0.0, 1.0]},
@@ -310,7 +289,7 @@ def _get_curriculum_cfg():
             },
             {
                 "name": "flat&20cm_medium",
-                "start_iteration": 1500,
+                "start_iteration": 1000,
                 "targets": {
                     "terrain": {"mode_probabilities": [1 / 3, 2 / 3, 0]},
                     "command_ranges": {"lin_vel_range": [0.0, 2.0]},
@@ -333,11 +312,11 @@ def _get_curriculum_cfg():
             },
             {
                 "name": "flat_high_jump",
-                "start_iteration": 1600,
+                "start_iteration": 1300,
                 "targets": {
                     "terrain": {
                         "mode_probabilities": [1 / 6, 1 / 6, 2 / 3],
-                        "platform_enabled": [True, True, False],  # 001 在平地练习轮底跳高 50 cm。
+                        "platform_enabled": [True, True, False],  # 001 在平地练习 base 原点离起跳地面达到 50 cm。
                     },
                     "command_ranges": {"lin_vel_range": [1.2, 2.0]},
                     "reward_scales": {

@@ -43,7 +43,7 @@ class JumpRewards:
         return self.jump_reward_state.takeoff_event
 
     def _reward_flight_height_shortfall(self):
-        target = self.wheel_clearance_target
+        target = self.base_height_target
         shortfall = torch.clamp(1.0 - self.jump_reward_state.peak_clearance / target, 0.0, 1.0)
         # 晚于触地的失稳需补齐全额缺高惩罚，与此前的结算合计为 1。
         correction = torch.clamp(self.jump_reward_state.revoked_settled_clearance / target, 0.0, 1.0)
@@ -51,24 +51,23 @@ class JumpRewards:
 
     def _revoked_height_progress(self):
         return torch.clamp(
-            self.jump_reward_state.revoked_peak_clearance / self.wheel_clearance_target, 0.0, 1.0
+            self.jump_reward_state.revoked_peak_clearance / self.base_height_target, 0.0, 1.0
         )
 
     def _reward_flight_peak_height(self):
         """只在首次双轮腾空期间按新增峰值给分；累计最多一个目标高度。"""
         progress = torch.clamp(
-            self.jump_reward_state.peak_clearance / self.wheel_clearance_target,
+            self.jump_reward_state.peak_clearance / self.base_height_target,
             0.0,
             1.0,
         )
         previous = torch.clamp(
-            self.jump_reward_state.previous_peak_clearance / self.wheel_clearance_target, 0.0, 1.0
+            self.jump_reward_state.previous_peak_clearance / self.base_height_target, 0.0, 1.0
         )
         return self.flight_gate * torch.clamp(progress - previous, min=0.0) - self._revoked_height_progress()
 
     def _target_takeoff_velocity(self):
-        wheel_clearance = self.wheel_clearance_target
-        return (2.0 * self.gravity_magnitude * wheel_clearance) ** 0.5
+        return (2.0 * self.gravity_magnitude * self.base_height_target) ** 0.5
 
     def _reward_takeoff_upward_velocity(self):
         """首次离地前仍有轮子支撑时，持续奖励当前 base-link 向上速度。"""
@@ -87,8 +86,8 @@ class JumpRewards:
         return self.flight_gate
 
     def _reward_flight_height_progress(self):
-        target = self.wheel_clearance_target
-        progress = torch.clamp(self.wheel_clearance / target, 0.0, 1.0)
+        target = self.base_height_target
+        progress = torch.clamp(self.jump_base_height / target, 0.0, 1.0)
         return self.flight_gate * progress
 
     def _reward_flight_balance(self):
@@ -101,7 +100,7 @@ class JumpRewards:
         return self.flight_gate * torch.exp(-error)
 
     def _reward_flight_height_tracking(self):
-        error = torch.square(self.wheel_clearance - self.wheel_clearance_target)
+        error = torch.square(self.jump_base_height - self.base_height_target)
         return self.flight_gate * torch.exp(-error / self.reward_cfg["flight_height_sigma"])
 
     def _reward_flight_tuck(self):
