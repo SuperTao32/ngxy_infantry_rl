@@ -109,7 +109,6 @@ class MujocoLocomotionEnv:
         self.gravity = tensor(self.data.xmat[self.base_id].reshape(3, 3).T @ [0, 0, -1])
         s = self.scales
         self.components = {
-            "estimated_base_lin_vel": self.estimated_velocity * s["lin_vel"],
             "imu_ang_vel": self.gyro * s["ang_vel"],
             "imu_lin_acc": self.acc * s.get("lin_acc", 1 / 9.81),
             "projected_gravity": self.gravity,

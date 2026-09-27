@@ -16,7 +16,7 @@ from .config import MODE_NAMES, PHASE_NAMES, validate_configs, validate_mode_pro
 from .height_reference import sample_height_reference
 from .geometry import active_step_heights, target_wheel_support, trigger_distance
 from .terrain import JumpTerrain
-from .observation import JUMP_ESTIMATOR_LAYOUT, LOCOMOTION_ESTIMATOR_LAYOUT, layout_dim
+from .observation import JUMP_POLICY_LAYOUT, LOCOMOTION_POLICY_LAYOUT, layout_dim
 from .phase import phase_encoding, validate_phase_durations
 from .reward_state import JumpRewardState
 from .rewards import JumpRewards
@@ -25,7 +25,7 @@ from .rewards import JumpRewards
 class JumpEnv(JumpRewards, LocomotionEnv):
     """共享动作契约，以三维 one-hot 控制目标任务。"""
 
-    policy_observation_layout = JUMP_ESTIMATOR_LAYOUT
+    policy_observation_layout = JUMP_POLICY_LAYOUT
 
     # ============ 初始化与状态定义 ============
 
@@ -217,7 +217,7 @@ class JumpEnv(JumpRewards, LocomotionEnv):
     # ============ 每轮生命周期：teacher 预热 → jump 采集 → 统计结算 ============
 
     def prepare_locomotion_warmup(self, command_ranges=None):
-        """重置物理环境并采样固定 teacher command；返回 33D teacher 观测。"""
+        """重置物理环境并采样固定 teacher command；返回 32D teacher 观测。"""
         # teacher step 不推进 global_step，因此用已完成的 jump 步数在 warmup 前
         # 切换课程，保证新阶段 command 当轮生效，而不是到 jump 第一拍才更新。
         iteration = self.global_step // self.steps_per_iteration
@@ -706,12 +706,12 @@ class JumpEnv(JumpRewards, LocomotionEnv):
     # ============ 观测：teacher 公共前缀、actor 输入与 critic 真值 ============
 
     def get_locomotion_observations(self):
-        """返回 jump actor 的 33 维 locomotion 公共前缀。"""
+        """返回 jump actor 的 32 维 locomotion 公共前缀。"""
         self._update_observations()
-        names = tuple(name for name, _ in LOCOMOTION_ESTIMATOR_LAYOUT)
+        names = tuple(name for name, _ in LOCOMOTION_POLICY_LAYOUT)
         if tuple(self.obs_components)[:len(names)] != names:
             raise RuntimeError("jump observation no longer starts with the locomotion checkpoint contract")
-        width = layout_dim(LOCOMOTION_ESTIMATOR_LAYOUT)
+        width = layout_dim(LOCOMOTION_POLICY_LAYOUT)
         return TensorDict({"policy": self.obs_buf[:, :width]}, batch_size=[self.num_envs])
 
     def _update_observations(self):

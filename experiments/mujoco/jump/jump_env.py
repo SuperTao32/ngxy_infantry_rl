@@ -32,8 +32,8 @@ class MujocoJumpEnv:
         for key, value in source_configs["obs_cfg"]["obs_scales"].items():
             if self.configs["obs_cfg"]["obs_scales"].get(key) != value:
                 raise ValueError(f"Jump/source locomotion observation scale differs: {key}")
-        if self.configs["obs_cfg"].get("num_policy_obs") != 45:
-            raise ValueError("Expected the 45-dimensional jump observation contract")
+        if self.configs["obs_cfg"].get("num_policy_obs") != 44:
+            raise ValueError("Expected the 44-dimensional jump observation contract")
         durations = validate_phase_durations(cfg["jump_phase_durations_s"])
         self.cycle_s = sum(durations)
         if not math.isclose(self.cycle_s, cfg["episode_length_s"], abs_tol=1e-6):

@@ -67,7 +67,7 @@ def _env_cfg() -> dict:
         "wheel_kd": 0.25,
         "joint_force_limit": 40.0,
         "wheel_force_limit": 5.0,
-        "joint_pos_scale": 1.0,
+        "joint_pos_scale": 2.0,
         "wheel_vel_scale": 70.0,
         "clip_joint_action": 1.0,
         "clip_wheel_action": 1.0,
@@ -90,7 +90,7 @@ def _env_cfg() -> dict:
 
 def _obs_cfg() -> dict:
     return {
-        # actor 使用 IMU、轮速等真机观测；融合速度估计仅用于诊断，对应观测固定为零。
+        # actor 使用 IMU、轮速等真机观测；融合速度估计仅用于诊断，不占用输入维度。
         "imu": {
             "link_name": "base_link",
             "pos_offset": [0.0, 0.0, 0.0],

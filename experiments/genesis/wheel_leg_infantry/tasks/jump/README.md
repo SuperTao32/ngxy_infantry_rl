@@ -8,8 +8,9 @@
 | step_20cm | `[0, 1, 0]` | 0.20 m |
 | step_40cm | `[0, 0, 1]` | 0.40 m |
 
-actor 为 48D，最后 3D 是任务 mode。locomotion teacher 仍读取前 33D。
-critic 为 67D，额外可见边缘距离和落稳进度；actor 不读取位置、台阶距离或 ToF。
+actor 为 47D，最后 3D 是任务 mode。locomotion teacher 仍读取前 32D。
+critic 为 66D，额外可见边缘距离和落稳进度；actor 不读取位置、台阶距离或 ToF。
+速度估计已从观测中删除；旧输入维度的 checkpoint 不能直接加载，需重新训练 locomotion teacher 和 jump。
 动作空间保持原来的 4 个腿关节 + 2 个轮子。
 
 默认流程为起跳 0.15 s → 腾空 0.45 s → 落地 0.80 s，总时长 1.40 s。

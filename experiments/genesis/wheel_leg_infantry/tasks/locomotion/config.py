@@ -55,8 +55,8 @@ def _env_cfg() -> dict:
         "min_upper_link_angle": 0.5 * math.pi,
         # 气弹簧：F = F0 + k * compression - c * velocity。
         "gas_spring_preload_force": 420.0,
-        "gas_spring_stiffness": 1400.0,
-        "gas_spring_damping": 50.0,
+        "gas_spring_stiffness": 0.0,
+        "gas_spring_damping": 0.0,
         "gas_spring_max_compression": 0.06,
         "wheel_contact_force_threshold": 1.0,
         "base_contact_force_threshold": 5.0,
@@ -66,7 +66,7 @@ def _env_cfg() -> dict:
         "wheel_kd": 0.25,
         "joint_force_limit": 40.0,
         "wheel_force_limit": 5.0,
-        "joint_pos_scale": 1.0,
+        "joint_pos_scale": 2.0,
         "wheel_vel_scale": 70.0,
         "clip_joint_action": 1.0,
         "clip_wheel_action": 1.0,
@@ -88,7 +88,7 @@ def _env_cfg() -> dict:
 
 def _obs_cfg() -> dict:
     return {
-        # actor 使用 IMU、轮速等真机观测；融合速度估计仅用于诊断，对应观测固定为零。
+        # actor 使用 IMU、轮速等真机观测；融合速度估计仅用于诊断，不占用输入维度。
         "imu": {
             "link_name": "base_link",
             "pos_offset": [0.0, 0.0, 0.0],
@@ -100,13 +100,6 @@ def _obs_cfg() -> dict:
             "gyro_random_walk": 0.0,
             "delay": 0.0,
             "jitter": 0.0,
-        },
-        "velocity_estimator": {
-            "wheel_radius": 0.06,
-            "wheel_velocity_sign": 1.0,
-            "gravity_magnitude": 9.81,
-            "wheel_correction_time_constant_s": 0.5,
-            "max_abs_velocity": 4.2,
         },
         "obs_scales": {
             "lin_vel": 1.0 / 3.5,
@@ -406,24 +399,6 @@ def _curriculum_cfg() -> dict:
                         "lin_vel_range": [-3.5, 3.5],
                         "ang_vel_range": [-1.2, 1.2],
                         "base_height_range": [0.20, 0.34],
-                    },
-                    "tracking_gate": {
-                        "height_full_error": 0.01,
-                        "height_zero_error": 0.025,
-                        "attitude_full_angle_deg": 1.5,
-                        "attitude_zero_angle_deg": 3.0,
-                        "floor": 0.05,
-                    },
-                    "reward_scales": {
-                        "gated_tracking_lin_vel": 30.0,
-                        "gated_tracking_ang_vel": 30.0,
-                        "base_contact": -40.0,
-                        "leg_symmetry": -15.0,
-                        "base_height": -15.0,
-                        "height_gate": 15.0,
-                        "landing_base_oscillation": -0.7,
-                        "landing_joint_vel": -0.05,
-                        "joint_vel": -0.03,
                     },
                 },
             },

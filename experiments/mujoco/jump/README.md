@@ -1,5 +1,7 @@
 # MuJoCo jump sim2sim
 
+速度估计输入已删除，旧 33/45 维 checkpoint 无法直接加载。此适配器仍使用旧版平地 jump 结构（现为 44 维），不支持当前 Genesis 的 47 维多模式 jump。
+
 在项目根目录启动：
 
 ```bash
@@ -41,7 +43,7 @@ Jump 期间锁定触发时的 vx、保持 wz=0，高度命令由保存的 `heigh
 ## 观测、控制与交接
 
 - 共用 locomotion 的 MuJoCo 物理实现：50 Hz 控制、1 ms 子步、位置/轮速 PD、气弹簧、限幅及一拍动作延迟。
-- Locomotion 使用 33 维观测，jump 使用相同的 33 维前缀，加 6 维 `last_actions` 和 6 维多尺度时间编码。
+- Locomotion 使用 32 维观测，jump 使用相同的 32 维前缀，加 6 维 `last_actions` 和 6 维多尺度时间编码。
 - 动作历史按 Genesis 返回观测时的顺序保存：`actions` 是刚提交动作，`last_actions` 是前一拍动作；触发首帧二者相同。
 - Jump 开始时使用 `jump_motor_params` 非空覆盖值，结束恢复原参数。本模型腿部 Kp/Kd 从 60/3 切到 80/1。
 - 默认 `--handoff landing` 在确认双轮离地、随后双轮接触时交回 teacher，最迟到训练时间窗结束交回。
@@ -65,10 +67,10 @@ Jump 期间锁定触发时的 vx、保持 wz=0，高度命令由保存的 `heigh
 ```
 
 CSV 记录每拍使用的 `policy_mode`、输入观测、裁剪后动作、输入命令，以及步进后的状态与模式。
-Locomotion 行的 `obs_33..44` 留空，jump 行包含全部 45 维。
+Locomotion 行的 `obs_32..43` 留空，jump 行包含全部 44 维。
 时间触发按整次运行时间计时，不受 R 重置后的物理时间归零影响。
 
-已验证当前默认 checkpoint：
+以下为删除速度估计输入之前的历史 checkpoint 验证结果：
 
 | 测试 | 结果 |
 | --- | --- |

@@ -5,8 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 
-LOCOMOTION_ESTIMATOR_LAYOUT: tuple[tuple[str, int], ...] = (
-    ("estimated_base_lin_vel", 1),
+LOCOMOTION_POLICY_LAYOUT: tuple[tuple[str, int], ...] = (
     ("imu_ang_vel", 3),
     ("imu_lin_acc", 3),
     ("projected_gravity", 3),
@@ -19,10 +18,10 @@ LOCOMOTION_ESTIMATOR_LAYOUT: tuple[tuple[str, int], ...] = (
     ("actions", 6),
 )
 
-# 前 33 维的顺序和缩放与 locomotion 一致，checkpoint 第一层可按前缀复制。
+# 前 32 维的顺序和缩放与 locomotion 一致，checkpoint 第一层可按前缀复制。
 # warmup teacher 的 commands[:, 2] 为目标 base 离地高度。
 # jump 时第三项为目标 base 到左右轮底的平均世界竖直距离，由模式和计时器生成。
-JUMP_ESTIMATOR_LAYOUT = LOCOMOTION_ESTIMATOR_LAYOUT + (
+JUMP_POLICY_LAYOUT = LOCOMOTION_POLICY_LAYOUT + (
     ("last_actions", 6),
     ("jump_phase", 6),
     ("jump_mode", 3),  # flat / step_20cm / step_40cm one-hot

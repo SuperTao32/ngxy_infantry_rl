@@ -292,7 +292,7 @@ class LocomotionEnv(LocomotionRewards):
             ),
         )
 
-        # actor 固定使用 IMU 和轮速融合估计，仿真真值只供 critic 和诊断使用。
+        # actor 使用 IMU 和轮速观测，仿真真值只供 critic 和诊断使用。
         self.imu = self.scene.add_sensor(
             gs.sensors.IMU(
                 entity_idx=self.robot.idx,
@@ -413,7 +413,7 @@ class LocomotionEnv(LocomotionRewards):
         self.terrain_spawn_centers = torch.empty((self.num_envs, 2), dtype=gs.tc_float, device=gs.device)
         self.terrain_tile_index = torch.empty((self.num_envs,), dtype=torch.long, device=gs.device)
 
-        # actor 可部署的 IMU/轮速估计量
+        # actor 可部署的 IMU/轮速观测，以及仅供诊断的速度估计量
         self.imu_lin_acc = torch.empty((self.num_envs, 3), dtype=gs.tc_float, device=gs.device)
         self.imu_ang_vel = torch.empty((self.num_envs, 3), dtype=gs.tc_float, device=gs.device)
         self.forward_kinematic_acc = torch.empty((self.num_envs,), dtype=gs.tc_float, device=gs.device)
@@ -943,7 +943,7 @@ class LocomotionEnv(LocomotionRewards):
         self.robot.control_dofs_force(force, self.springs_dof_idx)
 
     def _update_velocity_estimator(self):
-        """更新前向速度估计供诊断；actor 中对应观测固定为零。"""
+        """更新前向速度估计供诊断；不作为 actor 或 critic 的输入。"""
         self.wheel_forward_vel.copy_(
             wheel_forward_velocity(
                 self.wheel_vel,
@@ -1029,8 +1029,6 @@ class LocomotionEnv(LocomotionRewards):
         """按固定顺序组装 actor 观测及包含仿真真值的 critic 观测。"""
         # 字典插入顺序就是策略输入的拼接顺序；调整顺序或维度后旧模型将不再兼容。
         self.obs_components = {
-            # 保留这一维及其位置，但屏蔽融合速度估计；估计器继续运行供诊断。
-            "estimated_base_lin_vel": torch.zeros_like(self.estimated_base_lin_vel).unsqueeze(-1),  # 1
             "imu_ang_vel": self.imu_ang_vel * self.obs_scales["ang_vel"],  # 3
             "imu_lin_acc": self.imu_lin_acc * self.imu_acc_scale,  # 3，IMU 比力（含重力）
             "projected_gravity": self.projected_gravity,  # 3

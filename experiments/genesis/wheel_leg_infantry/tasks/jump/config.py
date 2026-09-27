@@ -9,7 +9,7 @@ from typing import Mapping, Sequence
 from ...core.domain_randomization import default_domain_rand_cfg
 from ..locomotion.config import get_cfgs as get_locomotion_cfgs
 from .height_reference import validate_height_reference
-from .observation import JUMP_ESTIMATOR_LAYOUT, LOCOMOTION_ESTIMATOR_LAYOUT, layout_dim
+from .observation import JUMP_POLICY_LAYOUT, LOCOMOTION_POLICY_LAYOUT, layout_dim
 
 PHASE_NAMES = ("takeoff", "flight", "landing")
 MODE_NAMES = ("flat", "step_20cm", "step_40cm")
@@ -182,8 +182,8 @@ def _get_obs_cfg(locomotion_obs_cfg: Mapping):
         }
     )
     # 保留 locomotion 前缀和缩放；jump 的第三项为按时间变化的目标 base 到轮底距离。
-    obs_cfg["locomotion_policy_obs_dim"] = layout_dim(LOCOMOTION_ESTIMATOR_LAYOUT)
-    obs_cfg["num_policy_obs"] = layout_dim(JUMP_ESTIMATOR_LAYOUT)
+    obs_cfg["locomotion_policy_obs_dim"] = layout_dim(LOCOMOTION_POLICY_LAYOUT)
+    obs_cfg["num_policy_obs"] = layout_dim(JUMP_POLICY_LAYOUT)
     # critic 追加基础真值 9D、落地状态 1D、jump 真值 7D、距离/落稳进度 2D。
     obs_cfg["num_critic_obs"] = obs_cfg["num_policy_obs"] + 19
     return obs_cfg
@@ -227,7 +227,7 @@ def _get_reward_cfg():
             "flight_balance": 5.0,
             "flight_height_progress": 80.0,
             "flight_height_tracking": 80.0,
-            "flight_wheel_clearance": 80.0,
+            "flight_wheel_clearance": 200.0,
             # 落地
             "soft_landing": 1.0,
             "landing_stability": 1.0,
@@ -424,6 +424,6 @@ def validate_configs(env_cfg, obs_cfg, curriculum_cfg=None):
         validate_height_reference(cfg["height_references"][mode], env_cfg["episode_length_s"])
     if env_cfg["handoff_on_landing"]:
         raise ValueError("jump_modes requires the full landing stabilization window")
-    expected_policy = layout_dim(JUMP_ESTIMATOR_LAYOUT)
+    expected_policy = layout_dim(JUMP_POLICY_LAYOUT)
     if obs_cfg["num_policy_obs"] != expected_policy or obs_cfg["num_critic_obs"] != expected_policy + 19:
         raise ValueError("jump_modes observation dimensions must include 3D mode and 2D privileged state")

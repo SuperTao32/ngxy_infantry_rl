@@ -96,7 +96,7 @@ class JumpRewards:
 
     def _reward_flight_wheel_clearance(self):
         """奖励较低轮底离起跳面的距离，达到 base 高度减 20 cm 后饱和。"""
-        ceiling = torch.clamp(self.jump_base_height - 0.20, min=0.0)
+        ceiling = torch.clamp(self.jump_base_height - 0.18, min=0.0)
         clearance = torch.minimum(torch.clamp(self.wheel_clearance, min=0.0), ceiling)
         return self.flight_gate * clearance
 
