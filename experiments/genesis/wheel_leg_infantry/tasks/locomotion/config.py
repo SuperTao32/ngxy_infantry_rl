@@ -20,6 +20,7 @@ def get_cfgs():
     curriculum_cfg = _curriculum_cfg()
     return env_cfg, obs_cfg, reward_cfg, command_cfg, curriculum_cfg
 
+
 def _env_cfg() -> dict:
     return {
         "num_actions": 6,
@@ -63,20 +64,20 @@ def _env_cfg() -> dict:
         "landing_penalty_duration_s": 0.30,
         "joint_kp": 60.0,
         "joint_kd": 3.0,
-        "wheel_kd": 0.25,
+        "wheel_kd": 0.3,
         "joint_force_limit": 40.0,
         "wheel_force_limit": 5.0,
-        "joint_pos_scale": 2.0,
+        "joint_pos_scale": 1.2,
         "wheel_vel_scale": 70.0,
         "clip_joint_action": 1.0,
         "clip_wheel_action": 1.0,
         # 固定一拍动作延迟；不属于 domain_rand，本轮仍保持原有动作路径。
         "simulate_action_latency": True,
         # 只有连续超限一段时间才终止，给策略留下可学习的恢复窗口。
-        "termination_if_roll_greater_than": 20.0,
-        "termination_if_pitch_greater_than": 20.0,
-        "tilt_termination_duration_s": 0.30,
-        "base_contact_termination_duration_s": 0.25,
+        "termination_if_roll_greater_than": 10.0,
+        "termination_if_pitch_greater_than": 10.0,
+        "tilt_termination_duration_s": 0.20,
+        "base_contact_termination_duration_s": 0.1,
         # 从 0.22 m 起步只保留很小的落地行程，避免策略还没输出就先自由落体。
         "base_init_pos_range": [[0.0, 0.0], [0.0, 0.0], [0.22, 0.22]],
         "base_init_rpy_offset_range_deg": [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]],
@@ -85,6 +86,7 @@ def _env_cfg() -> dict:
         "episode_length_s": 100.0,
         "resampling_time_s": 10.0,
     }
+
 
 def _obs_cfg() -> dict:
     return {
@@ -105,8 +107,8 @@ def _obs_cfg() -> dict:
             "lin_vel": 1.0 / 3.5,
             "lin_acc": 1.0 / 9.81,
             "ang_vel": 1.0 / 4.0,
-            "joint_pos": 1.0,
-            "joint_vel": 0.1,
+            "joint_pos": 1.2,
+            "joint_vel": 0.05,
             "wheel_vel": 1.0 / 50.0,
             "base_height": 1.0 / 0.35,
             "leg_length": 1.0 / 0.35,
@@ -114,32 +116,33 @@ def _obs_cfg() -> dict:
         },
     }
 
+
 def _reward_cfg() -> dict:
     return {
         "tracking_sigma": 0.25,
         "landing_base_ang_vel_weight": 0.25,
         "tracking_gate": {
             "height_full_error": 0.03,
-            "height_zero_error": 0.10,
+            "height_zero_error": 0.05,
             "attitude_full_angle_deg": 5.0,
-            "attitude_zero_angle_deg": 15.0,
+            "attitude_zero_angle_deg": 10.0,
             "floor": 0.30,
         },
         "reward_scales": {
             "tracking_lin_vel": -0.5,
             "tracking_ang_vel": -0.5,
-            "gated_tracking_lin_vel": 5.0,
-            "gated_tracking_ang_vel": 5.0,
+            "gated_tracking_lin_vel": 2.0,
+            "gated_tracking_ang_vel": 2.0,
             "base_balance": -5.0,
             "leg_symmetry": -5.0,
-            "leg_symmetry_bonus": 2.0,
-            # height_gate 在误差小于 3 cm 时为 1，3~10 cm 之间连续衰减，
-            # 超过 10 cm 为 0；base_height 平方误差负责门外的全局引导。
+            "leg_symmetry_bonus": 1.0,
             "base_height": -10.0,
-            "height_gate": 5.0,
+            "height_gate": 1.0,
             # 已训练的同模型任务使用 5e-3 量级；原来的 1.0 让冲击速度
             # 惩罚淹没了全部站立收益。
-            "joint_vel": -0.005,
+            "joint_vel": -0.01,
+            "wheel_action_rate": -2.0,
+            "leg_action_rate": -0.2,
             "landing_base_oscillation": 0.0,
             "landing_joint_vel": 0.0,
             "base_contact": -10.0,
@@ -155,6 +158,7 @@ def _command_cfg() -> dict:
         "ang_vel_range": [0.0, 0.0],
         "base_height_range": [0.22, 0.22],
     }
+
 
 def _curriculum_cfg() -> dict:
     # 阶段采用累计覆盖：这里只写相对上一阶段发生变化的字段。
@@ -188,18 +192,18 @@ def _curriculum_cfg() -> dict:
             },
             {
                 "name": "gentle_motion",
-                "start_iteration": 1000,
+                "start_iteration": 500,
                 "targets": {
                     "domain_rand": {"strength": 0.0},
                     "terrain": {"max_difficulty": 0},
                     "reset_ranges": {
-                        "base_init_pos_range": [[0.0, 0.0], [0.0, 0.0], [0.22, 0.24]],
+                        "base_init_pos_range": [[0.0, 0.0], [0.0, 0.0], [0.22, 0.22]],
                         "base_init_rpy_offset_range_deg": [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]],
                         "base_init_lin_vel_range": [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]],
                         "base_init_ang_vel_range": [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]],
                     },
                     "command_ranges": {
-                        "lin_vel_range": [-0.5, 0.5],
+                        "lin_vel_range": [-1.0, 1.0],
                         "ang_vel_range": [-0.3, 0.3],
                         "base_height_range": [0.20, 0.24],
                     },
@@ -210,13 +214,9 @@ def _curriculum_cfg() -> dict:
                         "attitude_zero_angle_deg": 12.0,
                         "floor": 0.20,
                     },
-                    "termination_limits": {
-                        "termination_if_roll_greater_than": 15.0,
-                        "termination_if_pitch_greater_than": 15.0,
-                    },
                     "reward_scales": {
-                        "gated_tracking_lin_vel": 10.0,
-                        "gated_tracking_ang_vel": 10.0,
+                        "tracking_lin_vel": -1.0,
+                        "tracking_ang_vel": -1.0,
                         "base_balance": -10.0,
                         "base_contact": -20.0,
                         "base_height": -10.0,
@@ -226,12 +226,12 @@ def _curriculum_cfg() -> dict:
             },
             {
                 "name": "locomotion",
-                "start_iteration": 2000,
+                "start_iteration": 1000,
                 "targets": {
                     "domain_rand": {"strength": 0.0},
                     "terrain": {"max_difficulty": 0},
                     "reset_ranges": {
-                        "base_init_pos_range": [[0.0, 0.0], [0.0, 0.0], [0.22, 0.24]],
+                        "base_init_pos_range": [[0.0, 0.0], [0.0, 0.0], [0.22, 0.22]],
                         "base_init_rpy_offset_range_deg": [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]],
                         "base_init_lin_vel_range": [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]],
                         "base_init_ang_vel_range": [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]],
@@ -243,21 +243,12 @@ def _curriculum_cfg() -> dict:
                     },
                     "tracking_gate": {
                         "height_full_error": 0.02,
-                        "height_zero_error": 0.06,
+                        "height_zero_error": 0.05,
                         "attitude_full_angle_deg": 2.0,
                         "attitude_zero_angle_deg": 10.0,
                         "floor": 0.10,
                     },
-                    "termination_limits": {
-                        "termination_if_roll_greater_than": 20.0,
-                        "termination_if_pitch_greater_than": 20.0,
-                        "tilt_termination_duration_s": 0.30,
-                        "base_contact_termination_duration_s": 0.25,
-                    },
                     "reward_scales": {
-                        "gated_tracking_lin_vel": 15.0,
-                        "gated_tracking_ang_vel": 15.0,
-                        "base_balance": -10.0,
                         "leg_symmetry": -10.0,
                         "base_balance": -15.0,
                         "base_contact": -30.0,
@@ -268,15 +259,15 @@ def _curriculum_cfg() -> dict:
             },
             {
                 "name": "locomotion2",
-                "start_iteration": 4000,
+                "start_iteration": 2000,
                 "targets": {
                     "domain_rand": {"strength": 0.0},
                     "terrain": {"max_difficulty": 0},
                     "reset_ranges": {
-                        "base_init_pos_range": [[0.0, 0.0], [0.0, 0.0], [0.22, 0.24]],
+                        "base_init_pos_range": [[0.0, 0.0], [0.0, 0.0], [0.22, 0.22]],
                         "base_init_rpy_offset_range_deg": [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]],
-                        "base_init_lin_vel_range": [[-0.5, 0.5], [0.0, 0.0], [0.0, 0.0]],
-                        "base_init_ang_vel_range": [[0.0, 0.0], [0.0, 0.0], [1.0, 1.0]],
+                        "base_init_lin_vel_range": [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]],
+                        "base_init_ang_vel_range": [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]],
                     },
                     "command_ranges": {
                         "lin_vel_range": [-2.0, 2.0],
@@ -290,15 +281,9 @@ def _curriculum_cfg() -> dict:
                         "attitude_zero_angle_deg": 8.0,
                         "floor": 0.05,
                     },
-                    "termination_limits": {
-                        "termination_if_roll_greater_than": 25.0,
-                        "termination_if_pitch_greater_than": 25.0,
-                        "tilt_termination_duration_s": 0.50,
-                        "base_contact_termination_duration_s": 0.5,
-                    },
                     "reward_scales": {
-                        "gated_tracking_lin_vel": 20.0,
-                        "gated_tracking_ang_vel": 20.0,
+                        "gated_tracking_lin_vel": 10.0,
+                        "gated_tracking_ang_vel": 10.0,
                         "base_balance": -20.0,
                         "base_contact": -50.0,
                         "base_height": -15.0,
@@ -311,7 +296,7 @@ def _curriculum_cfg() -> dict:
             },
             {
                 "name": "locomotion3_rand",
-                "start_iteration": 6000,
+                "start_iteration": 3000,
                 "targets": {
                     "domain_rand": {"strength": 0.3},
                     "terrain": {"max_difficulty": 0},
@@ -319,12 +304,12 @@ def _curriculum_cfg() -> dict:
                         "base_init_pos_range": [[0.0, 0.0], [0.0, 0.0], [0.22, 0.24]],
                         "base_init_rpy_offset_range_deg": [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]],
                         "base_init_lin_vel_range": [[-0.5, 0.5], [0.0, 0.0], [0.0, 0.0]],
-                        "base_init_ang_vel_range": [[0.0, 0.0], [0.0, 0.0], [1.0, 1.0]],
+                        "base_init_ang_vel_range": [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]],
                     },
                     "command_ranges": {
                         "lin_vel_range": [-2.5, 2.5],
                         "ang_vel_range": [-1.2, 1.2],
-                        "base_height_range": [0.20, 0.34],
+                        "base_height_range": [0.20, 0.36],
                     },
                     "tracking_gate": {
                         "height_full_error": 0.015,
@@ -334,8 +319,6 @@ def _curriculum_cfg() -> dict:
                         "floor": 0.05,
                     },
                     "reward_scales": {
-                        "gated_tracking_lin_vel": 30.0,
-                        "gated_tracking_ang_vel": 30.0,
                         "base_contact": -40.0,
                         "leg_symmetry": -15.0,
                         "base_height": -15.0,
@@ -343,25 +326,27 @@ def _curriculum_cfg() -> dict:
                         "landing_base_oscillation": -0.5,
                         "landing_joint_vel": -0.03,
                         "joint_vel": -0.02,
+                        "wheel_action_rate": -2.0,
+                        "leg_action_rate": -0.2,
                     },
                 },
             },
             {
                 "name": "locomotion4_rand",
-                "start_iteration": 9000,
+                "start_iteration": 6000,
                 "targets": {
-                    "domain_rand": {"strength": 0.5},
+                    "domain_rand": {"strength": 0.4},
                     "terrain": {"max_difficulty": 0},
                     "reset_ranges": {
                         "base_init_pos_range": [[0.0, 0.0], [0.0, 0.0], [0.22, 0.24]],
                         "base_init_rpy_offset_range_deg": [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]],
                         "base_init_lin_vel_range": [[-0.5, 0.5], [0.0, 0.0], [0.0, 0.0]],
-                        "base_init_ang_vel_range": [[0.0, 0.0], [0.0, 0.0], [1.0, 1.0]],
+                        "base_init_ang_vel_range": [[0.0, 0.0], [0.0, 0.0], [-1.0, 1.0]],
                     },
                     "command_ranges": {
                         "lin_vel_range": [-3.0, 3.0],
                         "ang_vel_range": [-1.2, 1.2],
-                        "base_height_range": [0.20, 0.34],
+                        "base_height_range": [0.20, 0.36],
                     },
                     "tracking_gate": {
                         "height_full_error": 0.01,
@@ -371,8 +356,6 @@ def _curriculum_cfg() -> dict:
                         "floor": 0.05,
                     },
                     "reward_scales": {
-                        "gated_tracking_lin_vel": 30.0,
-                        "gated_tracking_ang_vel": 30.0,
                         "base_contact": -40.0,
                         "leg_symmetry": -15.0,
                         "base_height": -15.0,
@@ -385,7 +368,7 @@ def _curriculum_cfg() -> dict:
             },
             {
                 "name": "full_range",
-                "start_iteration": 12000,
+                "start_iteration": 8000,
                 "targets": {
                     "domain_rand": {"strength": 0.6},
                     "terrain": {"max_difficulty": 0},
@@ -393,48 +376,16 @@ def _curriculum_cfg() -> dict:
                         "base_init_pos_range": [[0.0, 0.0], [0.0, 0.0], [0.22, 0.24]],
                         "base_init_rpy_offset_range_deg": [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]],
                         "base_init_lin_vel_range": [[-0.5, 0.5], [0.0, 0.0], [0.0, 0.0]],
-                        "base_init_ang_vel_range": [[0.0, 0.0], [0.0, 0.0], [1.0, 1.0]],
+                        "base_init_ang_vel_range": [[0.0, 0.0], [0.0, 0.0], [-1.0, 1.0]],
                     },
                     "command_ranges": {
                         "lin_vel_range": [-3.5, 3.5],
-                        "ang_vel_range": [-1.2, 1.2],
-                        "base_height_range": [0.20, 0.34],
-                    },
-                },
-            },
-            {
-                "name": "low_speed",
-                "start_iteration": 15000,
-                "targets": {
-                    "domain_rand": {"strength": 0.6},
-                    "terrain": {"max_difficulty": 0},
-                    "reset_ranges": {
-                        "base_init_pos_range": [[0.0, 0.0], [0.0, 0.0], [0.22, 0.24]],
-                        "base_init_rpy_offset_range_deg": [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]],
-                        "base_init_lin_vel_range": [[-0.5, 0.5], [0.0, 0.0], [0.0, 0.0]],
-                        "base_init_ang_vel_range": [[0.0, 0.0], [0.0, 0.0], [1.0, 1.0]],
-                    },
-                    "command_ranges": {
-                        "lin_vel_range": [0.0, 0.0],
-                        "ang_vel_range": [-8.0, 8.0],
-                        "base_height_range": [0.22, 0.34],
-                    },
-                    "tracking_gate": {
-                        "height_full_error": 0.01,
-                        "height_zero_error": 0.025,
-                        "attitude_full_angle_deg": 1.5,
-                        "attitude_zero_angle_deg": 3.0,
-                        "floor": 0.05,
+                        "ang_vel_range": [-1.5, 1.5],
+                        "base_height_range": [0.20, 0.36],
                     },
                     "reward_scales": {
-                        "gated_tracking_ang_vel": 40.0,
-                        "base_contact": -40.0,
-                        "leg_symmetry": -5.0,
-                        "base_height": -15.0,
-                        "height_gate": 15.0,
-                        "landing_base_oscillation": -0.7,
-                        "landing_joint_vel": -0.05,
-                        "joint_vel": -0.03,
+                        "wheel_action_rate": -4.0,
+                        "leg_action_rate": -0.4,
                     },
                 },
             },

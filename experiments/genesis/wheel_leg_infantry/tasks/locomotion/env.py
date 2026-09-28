@@ -82,7 +82,7 @@ class LocomotionEnv(LocomotionRewards):
         self.num_commands = command_cfg["num_commands"]
 
         # 定义训练参数
-        self.dt = 0.02
+        self.dt = 0.01
         self.resample_step = self.env_cfg["resampling_time_s"] / self.dt
         self.simulate_action_latency = env_cfg["simulate_action_latency"]
         self.max_episode_length = math.ceil(env_cfg["episode_length_s"] / self.dt)
@@ -158,6 +158,10 @@ class LocomotionEnv(LocomotionRewards):
         self.leg_upper_link_length = float(env_cfg.get("leg_upper_link_length", 0.21))
         self.leg_lower_link_length = float(env_cfg.get("leg_lower_link_length", 0.25))
         self.max_motor_separation = math.pi - self.min_upper_link_angle
+        half_separation = 0.5 * self.max_motor_separation
+        self.max_leg_length = self.leg_upper_link_length * math.sin(half_separation) + math.sqrt(
+            max(self.leg_lower_link_length**2 - (self.leg_upper_link_length * math.cos(half_separation))**2, 0.0)
+        )
         # 初始关节位置、腿长和腿角
         self.init_joint_pos = torch.tensor(
             [self.env_cfg["default_joint_pos"][name] for name in joint_names],
@@ -532,6 +536,17 @@ class LocomotionEnv(LocomotionRewards):
         self._update_observations()
         return self.get_observations()
 
+    def _constrain_joint_targets(self, target_joint_pos):
+        """任务可覆盖目标约束；locomotion 保留腿角和上杆夹角限制。"""
+        return constrain_leg_targets(
+            target_joint_pos,
+            self.leg_front_joint_indices,
+            self.leg_rear_joint_indices,
+            self.leg_angle_lower,
+            self.leg_angle_upper,
+            self.max_motor_separation,
+        )
+
     def step(self, actions):
         """执行一个控制步，返回观测、奖励、重置标志和附加统计。"""
         # PPO runner 每采满 steps_per_iteration 个控制步完成一轮；课程只在轮次边界切换。
@@ -562,14 +577,7 @@ class LocomotionEnv(LocomotionRewards):
 
         target_joint_pos = target_joint_pos + self.default_joint_pos
         target_joint_pos = self.domain_rand.offset_joint_targets(target_joint_pos)
-        target_joint_pos = constrain_leg_targets(
-            target_joint_pos,
-            self.leg_front_joint_indices,
-            self.leg_rear_joint_indices,
-            self.leg_angle_lower,
-            self.leg_angle_upper,
-            self.max_motor_separation,
-        )
+        target_joint_pos = self._constrain_joint_targets(target_joint_pos)
         self.target_joint_pos.copy_(target_joint_pos)
         self.target_wheel_vel.copy_(target_wheel_vel)
 

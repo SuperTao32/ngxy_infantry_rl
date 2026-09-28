@@ -103,7 +103,7 @@ def _get_warmup_cfg():
         "max_steps": 500,
         "stable_steps": 10,
         "stable_fraction": 0.95,  # 避免整批环境被最慢的少数环境拖住。
-        "forward_velocity_tolerance": 0.1,
+        "forward_velocity_tolerance": 0.2,
         "yaw_rate_tolerance": 0.03,
         "base_height_tolerance": 0.012,
         "vertical_velocity_tolerance": 0.01,
@@ -213,6 +213,8 @@ def _get_reward_cfg():
             "tracking_lin_vel": 2.0,
             "tracking_ang_vel": 2.0,
             "action_rate": -0.001,
+            # 实测腿长达到 min_upper_link_angle 对应限位后，惩罚继续伸腿的目标角差平方。
+            "leg_extension_at_limit": -100.0,
             "base_contact": -5.0,
             "death": -100.0,
             "jump_invalid": -200.0,
@@ -233,7 +235,7 @@ def _get_reward_cfg():
             "landing_stability": 1.0,
             "landing_airborne": -100.0,
             "target_landing": 30.0,
-            "base_to_wheel_bottom_distance_tracking": 10.0,
+            "base_to_wheel_bottom_distance_tracking": 20.0,
             # 任务结果
             "task_success": 500.0,  # 事件奖励沿用框架的 dt 缩放。
             "task_failure": -500.0,
@@ -262,92 +264,92 @@ def _get_curriculum_cfg():
                 "start_iteration": 0,
                 "targets": {
                     "terrain": {
-                        "mode_probabilities": [1.0, 0, 0],
-                        "platform_enabled": [True, True, True],
+                        "mode_probabilities": [0.0, 0, 1.0],
+                        "platform_enabled": [True, True, False],
                     },
                     "command_ranges": {
-                        "lin_vel_range": [0.0, 0.0],
+                        "lin_vel_range": [1.2, 1.2],
                     },
                 },
             },
-            {
-                "name": "flat_medium",
-                "start_iteration": 500,
-                "targets": {
-                    "terrain": {"mode_probabilities": [1.0, 0, 0]},
-                    "command_ranges": {"lin_vel_range": [0.0, 1.0]},
-                    "reward_scales": {
-                        "base_balance": -20.0,
-                        "leg_symmetry": -20.0,
-                        "leg_symmetry_bonus": 20.0,
-                        "tracking_lin_vel": 20.0,
-                        "tracking_ang_vel": 20.0,
-                        "flight_balance": 20.0,
-                        "flight_airtime": 15.0,
-                        "flight_leg_vertical": 20.0,
-                    },
-                },
-            },
-            {
-                "name": "flat&20cm_medium",
-                "start_iteration": 1000,
-                "targets": {
-                    "terrain": {"mode_probabilities": [1 / 3, 2 / 3, 0]},
-                    "command_ranges": {"lin_vel_range": [0.0, 2.0]},
-                    "reward_scales": {
-                        "base_balance": -30.0,
-                        "leg_symmetry": -30.0,
-                        "leg_symmetry_bonus": 30.0,
-                        "tracking_lin_vel": 30.0,
-                        "tracking_ang_vel": 30.0,
-                        # 腾空
-                        "flight_balance": 30.0,
-                        "flight_leg_vertical": 30.0,
-                        # 落地
-                        "soft_landing": 50.0,
-                        "landing_stability": 50.0,
-                        "action_rate": -0.02,
-                        "base_contact": -300.0,
-                    },
-                },
-            },
-            {
-                "name": "flat_high_jump",
-                "start_iteration": 1300,
-                "targets": {
-                    "terrain": {
-                        "mode_probabilities": [1 / 6, 1 / 6, 2 / 3],
-                        "platform_enabled": [True, True, False],  # 001 在平地练习 base 原点离起跳地面达到 50 cm。
-                    },
-                    "command_ranges": {"lin_vel_range": [1.2, 2.0]},
-                    "reward_scales": {
-                        "base_balance": [-30.0, -30.0, -2.0],
-                        "leg_symmetry": [-30.0, -30.0, -2.0],
-                        "leg_symmetry_bonus": [30.0, 30.0, 2.0],
-                        "tracking_lin_vel": [30.0, 30.0, 2.0],
-                        "tracking_ang_vel": [30.0, 30.0, 2.0],
-                        # 落地
-                        "soft_landing": [50.0, 50.0, 2.0],
-                        "landing_stability": [50.0, 50.0, 2.0],
-                        "action_rate": [-0.05, -0.05, -0.001],
-                        "base_contact": [-300.0, -300.0, -2.0],
-                        # 按 [平地, 20 cm, 40 cm] 指定权重，仅提高 40 cm 任务。
-                        "flight_peak_height": [5000.0, 5000.0, 10000.0],
-                        "takeoff_vertical_velocity": [3000.0, 3000.0, 5000.0],
-                        "flight_height_progress": [80.0, 80.0, 200.0],
-                        "flight_height_tracking": [80.0, 80.0, 200.0],
-                        "task_success": [500.0, 500.0, 2000.0],
-                    },
-                },
-            },
-            {
-                "name": "step_40cm",
-                "start_iteration": 2500,
-                "targets": {
-                    # 保留 001 编码、采样比例、速度及奖励，只放回 40 cm 台阶。
-                    "terrain": {"platform_enabled": [True, True, True]},
-                },
-            },
+            # {
+            #     "name": "flat_medium",
+            #     "start_iteration": 500,
+            #     "targets": {
+            #         "terrain": {"mode_probabilities": [1.0, 0, 0]},
+            #         "command_ranges": {"lin_vel_range": [0.0, 1.0]},
+            #         "reward_scales": {
+            #             "base_balance": -20.0,
+            #             "leg_symmetry": -20.0,
+            #             "leg_symmetry_bonus": 20.0,
+            #             "tracking_lin_vel": 20.0,
+            #             "tracking_ang_vel": 20.0,
+            #             "flight_balance": 20.0,
+            #             "flight_airtime": 15.0,
+            #             "flight_leg_vertical": 20.0,
+            #         },
+            #     },
+            # },
+            # {
+            #     "name": "flat&20cm_medium",
+            #     "start_iteration": 1000,
+            #     "targets": {
+            #         "terrain": {"mode_probabilities": [1 / 3, 2 / 3, 0]},
+            #         "command_ranges": {"lin_vel_range": [0.0, 2.0]},
+            #         "reward_scales": {
+            #             "base_balance": -30.0,
+            #             "leg_symmetry": -30.0,
+            #             "leg_symmetry_bonus": 30.0,
+            #             "tracking_lin_vel": 30.0,
+            #             "tracking_ang_vel": 30.0,
+            #             # 腾空
+            #             "flight_balance": 30.0,
+            #             "flight_leg_vertical": 30.0,
+            #             # 落地
+            #             "soft_landing": 50.0,
+            #             "landing_stability": 50.0,
+            #             "action_rate": -0.02,
+            #             "base_contact": -300.0,
+            #         },
+            #     },
+            # },
+            # {
+            #     "name": "flat_high_jump",
+            #     "start_iteration": 1300,
+            #     "targets": {
+            #         "terrain": {
+            #             "mode_probabilities": [1 / 6, 1 / 6, 2 / 3],
+            #             "platform_enabled": [True, True, False],  # 001 在平地练习 base 原点离起跳地面达到 50 cm。
+            #         },
+            #         "command_ranges": {"lin_vel_range": [1.2, 2.0]},
+            #         "reward_scales": {
+            #             "base_balance": [-30.0, -30.0, -2.0],
+            #             "leg_symmetry": [-30.0, -30.0, -2.0],
+            #             "leg_symmetry_bonus": [30.0, 30.0, 2.0],
+            #             "tracking_lin_vel": [30.0, 30.0, 2.0],
+            #             "tracking_ang_vel": [30.0, 30.0, 2.0],
+            #             # 落地
+            #             "soft_landing": [50.0, 50.0, 2.0],
+            #             "landing_stability": [50.0, 50.0, 2.0],
+            #             "action_rate": [-0.05, -0.05, -0.001],
+            #             "base_contact": [-300.0, -300.0, -2.0],
+            #             # 按 [平地, 20 cm, 40 cm] 指定权重，仅提高 40 cm 任务。
+            #             "flight_peak_height": [5000.0, 5000.0, 10000.0],
+            #             "takeoff_vertical_velocity": [3000.0, 3000.0, 5000.0],
+            #             "flight_height_progress": [80.0, 80.0, 200.0],
+            #             "flight_height_tracking": [80.0, 80.0, 200.0],
+            #             "task_success": [500.0, 500.0, 2000.0],
+            #         },
+            #     },
+            # },
+            # {
+            #     "name": "step_40cm",
+            #     "start_iteration": 2500,
+            #     "targets": {
+            #         # 保留 001 编码、采样比例、速度及奖励，只放回 40 cm 台阶。
+            #         "terrain": {"platform_enabled": [True, True, True]},
+            #     },
+            # },
         ],
     }
 

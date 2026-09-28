@@ -76,6 +76,7 @@ class MujocoLocomotionEnv:
         # Apply generalized forces directly: PD limits come from the saved training config.
         self.model.actuator_gainprm[:, :] = 0
         self.model.actuator_biasprm[:, :] = 0
+        self.constrain_leg_targets_enabled = True
         self.commands = tensor(commands)
         self.reset()
 
@@ -133,11 +134,14 @@ class MujocoLocomotionEnv:
         clipped = torch.cat((action[:4].clamp(-self.cfg["clip_joint_action"], self.cfg["clip_joint_action"]),
                              action[4:].clamp(-self.cfg["clip_wheel_action"], self.cfg["clip_wheel_action"])))
         executed = self.actions if self.cfg["simulate_action_latency"] else clipped
-        limits = self.cfg.get("leg_angle_limit_range", [-np.pi / 4, np.pi / 4])
-        self.target_joint = constrain_leg_targets(
-            self.default + executed[:4] * self.cfg["joint_pos_scale"], self.front, self.rear,
-            *limits, np.pi - self.cfg.get("min_upper_link_angle", np.pi / 2),
-        ).numpy()
+        target_joint = self.default + executed[:4] * self.cfg["joint_pos_scale"]
+        if self.constrain_leg_targets_enabled:
+            limits = self.cfg.get("leg_angle_limit_range", [-np.pi / 4, np.pi / 4])
+            target_joint = constrain_leg_targets(
+                target_joint, self.front, self.rear,
+                *limits, np.pi - self.cfg.get("min_upper_link_angle", np.pi / 2),
+            )
+        self.target_joint = target_joint.numpy()
         self.target_wheel = (executed[4:] * self.cfg["wheel_vel_scale"]).numpy()
         self.actions = clipped.clone()
         # Genesis calculates spring force once per control tick and holds it over substeps.

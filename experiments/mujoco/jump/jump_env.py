@@ -67,6 +67,7 @@ class MujocoJumpEnv:
         self.reset()
 
     def reset(self):
+        self.sim.constrain_leg_targets_enabled = True
         self.sim.cfg.update(deepcopy(self.motor_defaults))
         self.mode = "locomotion"
         self.jump_step = 0
@@ -121,6 +122,7 @@ class MujocoJumpEnv:
         if self.mode != "locomotion":
             return False  # Space during jump is ignored, not queued for landing.
         self.mode = "jump"
+        self.sim.constrain_leg_targets_enabled = False
         self.jump_count += 1
         self.jump_step = 0
         self.locked_vx = self.command_vx
@@ -135,6 +137,7 @@ class MujocoJumpEnv:
         return True
 
     def _finish_jump(self, reason):
+        self.sim.constrain_leg_targets_enabled = True
         self.last_result = {"jump": self.jump_count, "reason": reason, "duration": self.jump_step * self.dt,
                             "taken_off": self.has_taken_off, "landed": self.has_landed,
                             "peak_clearance": self.peak_clearance}

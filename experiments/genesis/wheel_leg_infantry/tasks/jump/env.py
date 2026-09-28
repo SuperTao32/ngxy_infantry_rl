@@ -72,6 +72,13 @@ class JumpEnv(JumpRewards, LocomotionEnv):
         self.terrain_entity = self.terrain.add_to_scene(self.scene)
         self.friction_terrain_entities = self.terrain_entity
 
+    def _constrain_joint_targets(self, target_joint_pos):
+        # jump 允许越过几何目标限位，保留伸腿末段的 PD 位置误差和力矩。
+        # teacher 预热仍遵循 locomotion 的动作契约。
+        if self.collect_jump_data:
+            return target_joint_pos
+        return super()._constrain_joint_targets(target_joint_pos)
+
     def _requires_batched_motor_params(self):
         return self.env_cfg.get("jump_step_40cm_joint_kd") is not None
 

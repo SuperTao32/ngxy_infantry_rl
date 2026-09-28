@@ -141,6 +141,25 @@ class JumpRewards:
         )
         return self.jump_landing_gate * quality
 
+    def _reward_leg_extension_at_limit(self):
+        """实测腿长到限位后，惩罚实际下发目标中继续伸腿的电机角差（rad²）。"""
+        if not self.collect_jump_data:
+            return torch.zeros_like(self.leg_length[:, 0])
+        actual_separation = (
+            self.joint_pos[:, self.leg_front_joint_indices] - self.joint_pos[:, self.leg_rear_joint_indices]
+        )
+        target_separation = (
+            self.target_joint_pos[:, self.leg_front_joint_indices]
+            - self.target_joint_pos[:, self.leg_rear_joint_indices]
+        )
+        # sin 的符号对应虚拟腿长增加的方向；目标误差不 wrap，与 PD 一致。
+        # 不能比较两者绝对值：跨过零点的收腿目标可能具有更大的绝对角差。
+        extension_error = torch.clamp(
+            torch.sign(torch.sin(actual_separation)) * (target_separation - actual_separation), min=0.0,
+        )
+        at_limit = self.leg_length >= self.max_leg_length
+        return torch.mean(at_limit * torch.square(extension_error), dim=1)
+
     def _reward_action_rate(self):
         return torch.sum(torch.square(self.actions - self.last_actions), dim=1)
 

@@ -44,6 +44,16 @@ class LocomotionRewards:
     def _reward_joint_vel(self):
         return torch.sum(torch.square(self.joint_vel), dim=1)
 
+    def _reward_leg_action_rate(self):
+        """惩罚相邻控制拍的腿部动作变化，抑制逐拍反向振荡。"""
+        delta = self.actions[:, :self.num_joints] - self.last_actions[:, :self.num_joints]
+        return torch.sum(delta.square(), dim=1)
+
+    def _reward_wheel_action_rate(self):
+        wheel = slice(self.num_joints, self.num_joints + self.num_wheels)
+        delta = self.actions[:, wheel] - self.last_actions[:, wheel]
+        return torch.sum(delta.square(), dim=1)
+
     def _reward_landing_base_oscillation(self):
         # 两个向量都在机体系；点积对应沿世界重力方向的速度。
         vertical_velocity = torch.sum(self.base_lin_vel * self.projected_gravity, dim=1)

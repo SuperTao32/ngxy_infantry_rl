@@ -27,13 +27,13 @@ from .warm_start import validate_locomotion_source, warm_start_actor
 def _parse_args(argv=None):
     parser = argparse.ArgumentParser(description="平地 / 20 cm / 40 cm one-hot 混合跳跃；env 指定起跳距离")
     parser.add_argument("-v", "--vis", action="store_true")
-    parser.add_argument("-e", "--exp-name", default="infantry_jump_multi_v2")
+    parser.add_argument("-e", "--exp-name", default="jump_v2")
     parser.add_argument("-B", "--num-envs", type=int, default=8192)
     parser.add_argument("--max-iterations", type=int, default=3001)
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--log-root", default="logs")
     parser.add_argument("--locomotion-log-root", default=None)
-    parser.add_argument("--locomotion-exp-name", default="infantry_locomotion_v3")
+    parser.add_argument("--locomotion-exp-name", default="locomotion_v2")
     parser.add_argument("--locomotion-version", default=None)
     parser.add_argument("--locomotion-ckpt", type=int, default=None)
     parser.add_argument("--dry-run", action="store_true")
@@ -129,9 +129,9 @@ def main():
         env_cfg, obs_cfg, reward_cfg, command_cfg, curriculum_cfg = get_cfgs(locomotion_cfgs)
         train_cfg = get_train_cfg(args.exp_name)
     validate_configs(env_cfg, obs_cfg, curriculum_cfg)
-    jump_horizon = round(env_cfg["episode_length_s"] / 0.02)
-    if not abs(jump_horizon * 0.02 - env_cfg["episode_length_s"]) < 1e-9:
-        raise ValueError("jump phase cycle must contain an integer number of 20 ms control steps")
+    jump_horizon = round(env_cfg["episode_length_s"] / 0.01)
+    if not abs(jump_horizon * 0.01 - env_cfg["episode_length_s"]) < 1e-9:
+        raise ValueError("jump phase cycle must contain an integer number of 10 ms control steps")
     train_cfg["num_steps_per_env"] = jump_horizon
     validate_warmup_cfg(env_cfg["locomotion_warmup"])
 
