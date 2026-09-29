@@ -930,6 +930,24 @@ class LocomotionEnv(LocomotionRewards):
     def _resample_commands(self, envs_idx):
         """为全部环境采样指令，仅将选中行写回；None 表示全部写回。"""
         commands = sample_uniform(*self.commands_limit, (self.num_envs,))
+        high_speed_cfg = self.command_cfg.get("high_speed_ang_vel")
+        if high_speed_cfg is not None:
+            # 按 |vx| 分档，在收紧后的范围内均匀采样，避免截断造成边界堆积。
+            lower, upper = self.commands_limit
+            limit = high_speed_cfg["max_abs_ang_vel"]
+            high_speed_ang_vel = sample_uniform(
+                lower[1].clamp(min=-limit), upper[1].clamp(max=limit), (self.num_envs,)
+            )
+            commands[:, 1] = torch.where(
+                commands[:, 0].abs() > high_speed_cfg["lin_vel_threshold"],
+                high_speed_ang_vel,
+                commands[:, 1],
+            )
+        standing_probability = self.command_cfg.get("standing_probability", 0.0)
+        if standing_probability > 0.0:
+            # 静止样本只清零 vx、wz，仍跟踪当前课程采样的机身高度。
+            standing = torch.rand_like(commands[:, 0]) < standing_probability
+            commands[:, :2].masked_fill_(standing[:, None], 0.0)
         if envs_idx is None:
             self.commands.copy_(commands)
         else:
@@ -1076,6 +1094,20 @@ class LocomotionEnv(LocomotionRewards):
 
     def _build_command_limits(self):
         """构造 [vx, wz, base_height] 的采样上下限。"""
+        standing_probability = float(self.command_cfg.get("standing_probability", 0.0))
+        if not math.isfinite(standing_probability) or not 0.0 <= standing_probability <= 1.0:
+            raise ValueError("standing_probability must be finite and in [0, 1]")
+        high_speed_cfg = self.command_cfg.get("high_speed_ang_vel")
+        if high_speed_cfg is not None:
+            threshold = float(high_speed_cfg["lin_vel_threshold"])
+            limit = float(high_speed_cfg["max_abs_ang_vel"])
+            if not math.isfinite(threshold) or threshold < 0.0:
+                raise ValueError("high_speed_ang_vel.lin_vel_threshold must be finite and nonnegative")
+            if not math.isfinite(limit) or limit < 0.0:
+                raise ValueError("high_speed_ang_vel.max_abs_ang_vel must be finite and nonnegative")
+            lower, upper = self.command_cfg["ang_vel_range"]
+            if max(lower, -limit) > min(upper, limit):
+                raise ValueError("ang_vel_range must overlap the high-speed angular velocity limits")
         return tuple(
             torch.tensor(items, dtype=gs.tc_float, device=gs.device)
             for items in zip(

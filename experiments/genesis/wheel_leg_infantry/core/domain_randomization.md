@@ -224,13 +224,6 @@ jump 也可在自己的阶段 `targets` 中使用相同字段，其默认域随�
 manager 的 `bind/reset`；随机延迟可接入动作执行阶段，
 传感器噪声继续从 `obs_cfg["imu"]` 管理，避免重复加噪。
 
-## 验证
-
-```bash
-python -m unittest discover -s experiments/genesis/tests -v
-# 包含真实 Genesis CPU 仿真，首次运行需要编译内核
-NGXY_GENESIS_SMOKE=1 python -m unittest discover -s experiments/genesis/tests -v
-```
 
 覆盖关闭兼容、随机种子、范围校验、局部 reset 隔离、接触双方摩擦更新、
 电机模式切换及重复 reset 不累乘等行为。可选仿真测试检查 solver 中的

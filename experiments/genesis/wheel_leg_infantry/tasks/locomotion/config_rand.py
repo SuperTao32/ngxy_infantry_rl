@@ -165,6 +165,11 @@ def _command_cfg() -> dict:
         "lin_vel_range": [0.0, 0.0],
         "ang_vel_range": [0.0, 0.0],
         "base_height_range": [0.22, 0.22],
+        # |vx| <= 1 m/s 使用课程角速度范围；更快时收紧到 ±1 rad/s。
+        # 设为 None 可恢复线速度与角速度独立采样。
+        "high_speed_ang_vel": {"lin_vel_threshold": 1.0, "max_abs_ang_vel": 1.0},
+        # 每次重采样有 10% 概率令 vx=wz=0；高度仍按当前课程采样。
+        "standing_probability": 0.10,
     }
 
 
@@ -187,7 +192,7 @@ def _curriculum_cfg() -> dict:
                     },
                     "command_ranges": {
                         "lin_vel_range": [-2.5, 2.5],
-                        "ang_vel_range": [-0.9, 0.9],
+                        "ang_vel_range": [-4.0, 4.0],
                         "base_height_range": [0.20, 0.34],
                     },
                     "tracking_gate": {
@@ -230,7 +235,7 @@ def _curriculum_cfg() -> dict:
                     },
                     "command_ranges": {
                         "lin_vel_range": [-3.2, 3.2],
-                        "ang_vel_range": [-1.2, 1.2],
+                        "ang_vel_range": [-4.0, 4.0],
                         "base_height_range": [0.20, 0.38],
                     },
                     "tracking_gate": {
@@ -267,7 +272,7 @@ def _curriculum_cfg() -> dict:
                     },
                     "command_ranges": {
                         "lin_vel_range": [-3.8, 3.8],
-                        "ang_vel_range": [-1.2, 1.2],
+                        "ang_vel_range": [-4.0, 4.0],
                         "base_height_range": [0.20, 0.38],
                     },
                     "tracking_gate": {

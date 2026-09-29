@@ -54,17 +54,6 @@ Jump 期间锁定触发时的 vx、保持 wz=0，高度命令由保存的 `heigh
 当前只支持平地；`clearance` 为两侧轮底到地面距离的较小值，`peak_clearance` 是原始物理峰值，未套用 Genesis 奖励中的失稳归零规则。
 模型配置不兼容或观测维度不匹配会报错，不静默更换模型或截断观测。
 
-## 无窗口验证
-
-`--jump-at` 经过同一触发入口，可指定多次跳跃时间：
-
-```bash
-.venv/bin/python -m experiments.mujoco.jump.jump_eval \
-  --headless --duration 10 --jump-at 2 6 \
-  --csv /tmp/mujoco_jump.csv
-
-.venv/bin/python -m unittest discover -s experiments/mujoco/tests -v
-```
 
 CSV 记录每拍使用的 `policy_mode`、输入观测、裁剪后动作、输入命令，以及步进后的状态与模式。
 Locomotion 行的 `obs_32..43` 留空，jump 行包含全部 44 维。

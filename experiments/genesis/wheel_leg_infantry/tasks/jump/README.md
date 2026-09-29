@@ -73,10 +73,15 @@ base 到轮底的距离轨迹集中在 `base_to_wheel_bottom_trajectories`，按
   critic 的跳高与峰值通道使用同一机身高度，维度和缩放保持不变。
   日志使用 `peak_jump_base_height_m`。
 - 起跳速度基准为 `sqrt(2*g*max(目标绝对高度 - 最后支撑拍 base 高度, 0))`。
-  支撑高度与速度同步更新，首次离地后锁存；持续速度奖励限于 `[-1, 1]`，起跳事件速度奖励限于 `[0, 1]`。
-  达到所需速度后不再增加奖励，分母保底避免目标高度已达到时除零。
+  支撑高度与速度同步更新，首次离地后锁存；归一化分母最低为 `1 m/s`，避免剩余高度趋零时奖励骤增。
+  持续速度奖励下限为 `-1`，起跳事件速度奖励下限为 `0`；两者正向均不封顶，超过理论所需速度仍增分。
+- `flight_peak_height` 按新增峰值除以目标高度给分，`flight_height_progress` 按当前高度除以目标高度给分，
+  两者均无上界；失稳时峰值奖励全额撤回，包括超过目标的部分。缺高惩罚仍只在未达标时生效。
+  默认关闭 `flight_height_tracking`，避免高斯跟踪在接近目标时变平、超过目标后反向扣减收益。
+  目标高度继续用于归一化和成功判定，但不再是高度奖励上限；策略可能学到超过目标的跳高。
 - `flight_wheel_clearance` 在 `flight_gate` 内奖励较低轮底相对起跳面的高度（米），
-  到 `jump_base_height - 0.20 m` 后饱和；轮底高度及饱和上限均不低于零。
+  到 `jump_base_height - 0.18 m` 后饱和；轮底高度及饱和上限均不低于零。
+  这是相对机身的收腿上限，随实际机身高度上升，不限制整体跳高收益。
   默认权重为 `10.0`，用于鼓励双腿收起，不再奖励超过该上限的收腿动作。
 - `min_forward_speeds_m_s`：台阶默认至少 0.6 m/s；平地包含静止跳和移动跳。
 - 速度与任务采样比例均由课程阶段控制；被采样的台阶模式，其最小速度不能高于该阶段速度上限。
@@ -122,10 +127,3 @@ uv run --locked python -m experiments.genesis.wheel_leg_infantry.tasks.jump.eval
 
 只评估 40 cm：`--mode step_40cm --speed 1.0 -B 1`。
 评估关闭距离扰动和动力学随机化；默认随机速度来自保存的初始 warmup 配置，建议用 `--speed` 分别检查各速度点。
-
-测试：
-
-```bash
-.venv/bin/python -m unittest experiments.genesis.tests.test_jump -v
-NGXY_JUMP_SMOKE=1 NGXY_SMOKE_GPU=1 .venv/bin/python -m unittest experiments.genesis.tests.test_jump_smoke -v
-```

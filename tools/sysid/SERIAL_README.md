@@ -73,9 +73,3 @@ CSV 表头为 `time,torque_front,torque_rear,q_front,q_rear,dq_front,dq_rear`。
 500 Hz × 33 字节 = 16500 字节/秒，8N1 至少需要 165000 波特率；
 建议使用 230400 或更高，默认 921600，并与固件保持一致。
 500 Hz 由固件每 2 ms 发送一次保证，接收端不主动限速。
-
-验证解析器（无需串口硬件）：
-
-```bash
-.venv/bin/python -m unittest discover -s tools/sysid -p test_record_serial.py
-```

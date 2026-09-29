@@ -162,6 +162,10 @@ def _command_cfg() -> dict:
         "lin_vel_range": [0.0, 0.0],
         "ang_vel_range": [0.0, 0.0],
         "base_height_range": [0.22, 0.22],
+        # |vx| <= 1 m/s 使用课程角速度范围；更快时收紧到 ±1 rad/s。
+        "high_speed_ang_vel": {"lin_vel_threshold": 1.0, "max_abs_ang_vel": 1.0},
+        # 静止站立采样
+        "standing_probability": 0.10,
     }
 
 
@@ -209,7 +213,7 @@ def _curriculum_cfg() -> dict:
                     },
                     "command_ranges": {
                         "lin_vel_range": [-1.0, 1.0],
-                        "ang_vel_range": [-0.8, 0.8],
+                        "ang_vel_range": [-2.0, 2.0],
                         "base_height_range": [0.20, 0.30],
                     },
                     "tracking_gate": {
@@ -243,7 +247,7 @@ def _curriculum_cfg() -> dict:
                     },
                     "command_ranges": {
                         "lin_vel_range": [-2.0, 2.0],
-                        "ang_vel_range": [-1.2, 1.2],
+                        "ang_vel_range": [-3.0, 3.0],
                         "base_height_range": [0.20, 0.34],
                     },
                     "tracking_gate": {
@@ -264,38 +268,8 @@ def _curriculum_cfg() -> dict:
                 },
             },
             {
-                "name": "locomotion3_rand",
+                "name": "locomotion_rand",
                 "start_iteration": 4000,
-                "targets": {
-                    "domain_rand": {"strength": 0.3},
-                    "terrain": {"max_difficulty": 0},
-                    "reset_ranges": {
-                        "base_init_pos_range": [[0.0, 0.0], [0.0, 0.0], [0.22, 0.24]],
-                        "base_init_rpy_offset_range_deg": [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]],
-                        "base_init_lin_vel_range": [[-0.5, 0.5], [0.0, 0.0], [0.0, 0.0]],
-                        "base_init_ang_vel_range": [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]],
-                    },
-                    "command_ranges": {
-                        "lin_vel_range": [-2.5, 2.5],
-                        "ang_vel_range": [-1.2, 1.2],
-                        "base_height_range": [0.20, 0.36],
-                    },
-                    "tracking_gate": {
-                        "height_full_error": 0.01,
-                        "height_zero_error": 0.04,
-                        "attitude_full_angle_deg": 0.5,
-                        "attitude_zero_angle_deg": 3.0,
-                        "floor": 0.05,
-                    },
-                    "reward_scales": {
-                        "landing_base_oscillation": -0.5,
-                        "landing_joint_vel": -0.03,
-                    },
-                },
-            },
-            {
-                "name": "locomotion4_rand",
-                "start_iteration": 6000,
                 "targets": {
                     "domain_rand": {"strength": 0.4},
                     "terrain": {"max_difficulty": 0},
@@ -307,7 +281,7 @@ def _curriculum_cfg() -> dict:
                     },
                     "command_ranges": {
                         "lin_vel_range": [-3.0, 3.0],
-                        "ang_vel_range": [-1.2, 1.2],
+                        "ang_vel_range": [-5.0, 5.0],
                         "base_height_range": [0.20, 0.36],
                     },
                     "tracking_gate": {
@@ -319,14 +293,14 @@ def _curriculum_cfg() -> dict:
                     },
                     "reward_scales": {
                         "joint_vel": -0.01,
-                        "wheel_action_rate": -2.0,
-                        "leg_action_rate": -0.2,
+                        "wheel_action_rate": -1.5,
+                        "leg_action_rate": -0.15,
                     },
                 },
             },
             {
                 "name": "full_range",
-                "start_iteration": 8000,
+                "start_iteration": 6000,
                 "targets": {
                     "domain_rand": {"strength": 0.6},
                     "terrain": {"max_difficulty": 0},
@@ -338,7 +312,7 @@ def _curriculum_cfg() -> dict:
                     },
                     "command_ranges": {
                         "lin_vel_range": [-3.5, 3.5],
-                        "ang_vel_range": [-1.5, 1.5],
+                        "ang_vel_range": [-6.0, 6.0],
                         "base_height_range": [0.20, 0.36],
                     },
                     "reward_scales": {

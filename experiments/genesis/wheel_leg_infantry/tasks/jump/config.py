@@ -228,7 +228,7 @@ def _get_reward_cfg():
             "flight_airtime": 10.0,
             "flight_balance": 5.0,
             "flight_height_progress": 80.0,
-            "flight_height_tracking": 80.0,
+            "flight_height_tracking": 0.0,  # 关闭目标附近变平、超高后下降的跟踪项，使用线性高度进度。
             "flight_wheel_clearance": 200.0,
             # 落地
             "soft_landing": 1.0,

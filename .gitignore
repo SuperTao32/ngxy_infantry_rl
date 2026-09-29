@@ -6,3 +6,6 @@ __pycache__/
 logs/
 logs_old/
 .DS_Store
+
+# Local tests, stored alongside logs.
+/tests/

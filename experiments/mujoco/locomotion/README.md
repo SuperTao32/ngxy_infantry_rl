@@ -55,10 +55,5 @@ MuJoCo 的 `mjOBJ_BODY` 速度采用惯性主轴坐标系；这里用 `mjOBJ_XBO
 倾角超过 60°、基座高度低于 0.08 m 或发生数值警告时停止并保留 CSV，不自动重置掩盖失败。
 本基线跌倒条件用于诊断，不等同于 Genesis 训练中的 episode 终止规则；两引擎接触和约束求解也不保证完全相同。
 
-回归检查：
-
-```bash
-.venv/bin/python -m unittest discover -s experiments/mujoco/tests -v
-```
 
 覆盖观测初值与关节映射、动作延迟/裁剪/力矩限制、IMU 坐标系、气弹簧保持、控制时钟、非法动作，以及实际速度与位移差分的一致性。
