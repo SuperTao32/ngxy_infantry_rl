@@ -4,4 +4,5 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 logs/
+logs_old/
 .DS_Store

@@ -52,6 +52,7 @@ def _env_cfg() -> dict:
         # 虚拟腿仅作为观测和诊断；站立目标使用平地上的实际 base z。
         "leg_upper_link_length": 0.21,
         "leg_lower_link_length": 0.25,
+        # 同时用于目标摆角限幅与实际摆角越界惩罚，单位 rad。
         "leg_angle_limit_range": [-0.25 * math.pi, 0.25 * math.pi],
         "min_upper_link_angle": 0.5 * math.pi,
         # 气弹簧：F = F0 + k * compression - c * velocity。
@@ -142,12 +143,15 @@ def _reward_cfg() -> dict:
             "gated_tracking_ang_vel": 5.0,
             "base_balance": -5.0,
             "leg_symmetry": -5.0,
+            "leg_angle_limits": -5.0,
             "leg_symmetry_bonus": 2.0,
             "base_height": -10.0,
             "height_gate": 5.0,
             "joint_vel": -0.005,
             "landing_base_oscillation": 0.0,
             "landing_joint_vel": 0.0,
+            # 每个离地轮子持续扣分；接触由 wheel_contact_force_threshold 判定。
+            "wheel_airborne": -5.0,
             "base_contact": -10.0,
             "alive": 5.0,
             "death": -100.0,

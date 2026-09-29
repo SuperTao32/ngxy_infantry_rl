@@ -28,6 +28,12 @@ class LocomotionRewards:
     def _reward_leg_symmetry(self):
         return torch.square(self.leg_angle[:, 0] - self.leg_angle[:, 1])
 
+    def _reward_leg_angle_limits(self):
+        """惩罚实际虚拟腿摆角越界，范围内（含边界）不惩罚，单位为 rad²。"""
+        below = torch.clamp_min(self.leg_angle_lower - self.leg_angle, 0.0)
+        above = torch.clamp_min(self.leg_angle - self.leg_angle_upper, 0.0)
+        return torch.sum(below.square() + above.square(), dim=1)
+
     def _reward_leg_symmetry_bonus(self):
         error = torch.square(self.leg_angle[:, 0] - self.leg_angle[:, 1])
         return torch.exp(-error / 0.04)
@@ -66,6 +72,10 @@ class LocomotionRewards:
 
     def _reward_landing_joint_vel(self):
         return self.landing_penalty_gate * torch.sum(torch.square(self.joint_vel), dim=1)
+
+    def _reward_wheel_airborne(self):
+        """按未接触地面的轮子数量惩罚离地：双轮接触为 0，单轮/双轮离地为 1/2。"""
+        return torch.sum(1.0 - self.wheel_contact, dim=1)
 
     def _reward_base_contact(self):
         return self.base_contact
