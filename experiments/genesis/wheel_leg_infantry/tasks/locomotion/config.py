@@ -217,19 +217,17 @@ def _curriculum_cfg() -> dict:
                         "base_height_range": [0.20, 0.30],
                     },
                     "tracking_gate": {
-                        "height_full_error": 0.02,
-                        "height_zero_error": 0.08,
+                        "height_full_error": 0.03,
+                        "height_zero_error": 0.09,
                         "attitude_full_angle_deg": 1.0,
-                        "attitude_zero_angle_deg": 5.0,
+                        "attitude_zero_angle_deg": 2.0,
                         "floor": 0.10,
                     },
                     "reward_scales": {
                         "tracking_lin_vel": -2.0,
-                        "tracking_ang_vel": -5.0,
+                        "tracking_ang_vel": -3.0,
                         "leg_symmetry": -10.0,
                         "base_balance": -10.0,
-                        "base_height": -10.0,
-                        "height_gate": 3.0,
                     },
                 },
             },
@@ -251,7 +249,7 @@ def _curriculum_cfg() -> dict:
                         "base_height_range": [0.20, 0.34],
                     },
                     "tracking_gate": {
-                        "height_full_error": 0.015,
+                        "height_full_error": 0.02,
                         "height_zero_error": 0.05,
                         "attitude_full_angle_deg": 0.8,
                         "attitude_zero_angle_deg": 4.0,
@@ -259,7 +257,7 @@ def _curriculum_cfg() -> dict:
                     },
                     "reward_scales": {
                         "gated_tracking_lin_vel": 5.0,
-                        "gated_tracking_ang_vel": 10.0,
+                        "gated_tracking_ang_vel": 7.0,
                         "base_balance": -15.0,
                         "base_contact": -15.0,
                         "landing_base_oscillation": -0.3,
@@ -300,7 +298,7 @@ def _curriculum_cfg() -> dict:
             },
             {
                 "name": "full_range",
-                "start_iteration": 6000,
+                "start_iteration": 7000,
                 "targets": {
                     "domain_rand": {"strength": 0.6},
                     "terrain": {"max_difficulty": 0},
@@ -311,7 +309,7 @@ def _curriculum_cfg() -> dict:
                         "base_init_ang_vel_range": [[0.0, 0.0], [0.0, 0.0], [-1.0, 1.0]],
                     },
                     "command_ranges": {
-                        "lin_vel_range": [-3.5, 3.5],
+                        "lin_vel_range": [-4.0, 4.0],
                         "ang_vel_range": [-6.0, 6.0],
                         "base_height_range": [0.20, 0.36],
                     },

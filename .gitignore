@@ -9,3 +9,4 @@ logs_old/
 
 # Local tests, stored alongside logs.
 /tests/
+/records/
