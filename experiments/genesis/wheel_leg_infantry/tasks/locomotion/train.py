@@ -8,6 +8,7 @@ import genesis as gs
 
 # 项目内部模块
 from ...core.train_config import get_train_cfg
+from ...core.randomization import add_randomization_arguments, apply_randomization_arguments
 from ...tools.run_utils import (
     add_resume_arguments,
     create_versioned_run_dir,
@@ -43,6 +44,7 @@ def main():
         metavar="CHECKPOINT_PATH",
         help="load actor/critic weights only; use --config and start a new optimizer and curriculum at iteration 0",
     )
+    add_randomization_arguments(parser, evaluation=False)
     add_resume_arguments(parser)
     args = parser.parse_args()
 
@@ -81,6 +83,7 @@ def main():
             train_cfg = deepcopy(saved_configs["train_cfg"])
             print("[train] config: saved run (--config only applies with --resume-config current)")
 
+    apply_randomization_arguments(env_cfg, obs_cfg, args)
     remaining_iterations = args.max_iterations
 
     print(f"[train] terrain: {env_cfg.get('terrain', {}).get('preset', 'plane')}")

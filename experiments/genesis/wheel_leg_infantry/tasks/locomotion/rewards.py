@@ -8,6 +8,22 @@ import torch
 
 
 class LocomotionRewards:
+    def _standing_command_mask(self):
+        # 只由命令决定，避免实际漂移后退出静止约束；高度命令不参与判定。
+        return (
+            (self.commands[:, 0].abs() < self.reward_cfg.get("standing_lin_vel_threshold", 0.02))
+            & (self.commands[:, 1].abs() < self.reward_cfg.get("standing_ang_vel_threshold", 0.02))
+        )
+
+    def _tracking_sigma(self):
+        moving_sigma = self.reward_cfg["tracking_sigma"]
+        # 旧 checkpoint 缺少此配置时保持原来的跟踪容差。
+        return torch.where(
+            self._standing_command_mask(),
+            self.reward_cfg.get("standing_tracking_sigma", moving_sigma),
+            moving_sigma,
+        )
+
     def _reward_tracking_lin_vel(self):
         return torch.square(self.base_lin_vel[:, 0] - self.commands[:, 0])
 
@@ -16,11 +32,18 @@ class LocomotionRewards:
 
     def _reward_gated_tracking_lin_vel(self):
         error = torch.square(self.base_lin_vel[:, 0] - self.commands[:, 0])
-        return self.tracking_gate * torch.exp(-error / self.reward_cfg["tracking_sigma"])
+        return self.tracking_gate * torch.exp(-error / self._tracking_sigma())
 
     def _reward_gated_tracking_ang_vel(self):
         error = torch.square(self.base_ang_vel[:, 2] - self.commands[:, 1])
-        return self.tracking_gate * torch.exp(-error / self.reward_cfg["tracking_sigma"])
+        return self.tracking_gate * torch.exp(-error / self._tracking_sigma())
+
+    def _reward_standing_drift(self):
+        """静止命令下的水平 L1 漂移；保留平衡死区，不乘姿态/高度 gate。"""
+        excess_speed = torch.clamp_min(
+            self.base_lin_vel[:, :2].abs() - self.reward_cfg.get("standing_drift_deadband", 0.02), 0.0
+        )
+        return self._standing_command_mask() * excess_speed.sum(dim=1)
 
     def _reward_base_balance(self):
         return torch.sum(torch.square(self.projected_gravity[:, :2]), dim=1)

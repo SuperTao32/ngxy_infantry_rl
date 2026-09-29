@@ -7,6 +7,7 @@ import math
 from typing import Mapping, Sequence
 
 from ...core.domain_randomization import default_domain_rand_cfg
+from ...core.randomization import normalize_randomization_config
 from ..locomotion.config import get_cfgs as get_locomotion_cfgs
 from .height_reference import validate_height_reference
 from .observation import JUMP_POLICY_LAYOUT, LOCOMOTION_POLICY_LAYOUT, layout_dim
@@ -46,7 +47,6 @@ def get_cfgs(locomotion_cfgs: Sequence[Mapping] | None = None):
             "jump_phase_durations_s": phase_durations_s,
             "handoff_on_landing": False,
             # jump 独立选择随机化范围；teacher 预热与跳跃共用本轮随机参数。
-            "domain_rand": default_domain_rand_cfg(enabled=False),
             # 仅 jump 阶段覆盖；预热使用 locomotion 参数，下一轮自动恢复。
             # None 表示继承。标量或列表：腿按 joint_names、轮按 wheel_names 排序。
             "jump_motor_params": {
@@ -81,6 +81,7 @@ def get_cfgs(locomotion_cfgs: Sequence[Mapping] | None = None):
     command_cfg = deepcopy(dict(locomotion_cfgs[3]))
     command_cfg.update({"num_commands": 3, **deepcopy(warmup_cfg["command_ranges"])})
     obs_cfg = _get_obs_cfg(locomotion_cfgs[1])
+    normalize_randomization_config(env_cfg, obs_cfg)["dynamics"] = default_domain_rand_cfg(enabled=False)
     reward_cfg = _get_reward_cfg()
     curriculum_cfg = _get_curriculum_cfg()
     # 采样比例只在课程中配置；复制首阶段作为初始值，关闭课程时也使用这一比例。

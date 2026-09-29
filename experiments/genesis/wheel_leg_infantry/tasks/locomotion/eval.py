@@ -7,6 +7,7 @@ import genesis as gs
 import torch
 
 from ...core.terrain import TERRAIN_PRESETS, default_terrain_cfg
+from ...core.randomization import add_randomization_arguments, apply_randomization_arguments
 from ...tools.run_utils import (
     load_run_configs,
     load_runner_class,
@@ -24,8 +25,7 @@ COMPACT_EVAL_TERRAIN_SIZE = (12.0, 6.0)
 def _parse_args(argv=None):
     """解析并校验评估命令行参数。"""
     parser = argparse.ArgumentParser()
-    parser.add_argument("--domain-rand", action=argparse.BooleanOptionalAction, default=False,
-                        help="enable dynamics randomization; evaluation defaults to nominal dynamics")
+    add_randomization_arguments(parser, evaluation=True)
     parser.add_argument("-e", "--exp_name", type=str, default="infantry_locomotion_v3")
     parser.add_argument("--log-root", type=str, default="logs")
     parser.add_argument("--version", type=str, default=None, help="version_0003 or 3; default: latest valid run")
@@ -144,9 +144,9 @@ def main():
     checkpoint_path = resolve_checkpoint(run_dir, args.ckpt)
     configs = load_run_configs(run_dir)
     env_cfg = deepcopy(configs["env_cfg"])
-    env_cfg.setdefault("domain_rand", {})["enabled"] = args.domain_rand
     _apply_terrain_overrides(env_cfg, args)
-    obs_cfg = configs["obs_cfg"]
+    obs_cfg = deepcopy(configs["obs_cfg"])
+    apply_randomization_arguments(env_cfg, obs_cfg, args)
     reward_cfg = deepcopy(configs["reward_cfg"])
     command_cfg = get_final_command_cfg(configs["command_cfg"], configs["curriculum_cfg"])
     train_cfg = configs["train_cfg"]

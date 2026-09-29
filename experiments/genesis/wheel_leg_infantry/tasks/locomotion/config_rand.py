@@ -8,7 +8,7 @@ import math
 from copy import deepcopy
 
 from ...core.terrain import default_terrain_cfg
-from ...core.domain_randomization import default_domain_rand_cfg
+from ...core.randomization import default_randomization_cfg
 
 
 def get_cfgs():
@@ -29,7 +29,7 @@ def _env_cfg() -> dict:
         "robot_mjcf": "assets/robot/wheelbipeV14_2/mjcf/wheelbipeV14_2.xml",
         # 地形由所选配置决定；多地形训练可在此使用 "mixed"。
         "terrain": default_terrain_cfg("plane"),
-        "domain_rand": default_domain_rand_cfg(enabled=True),
+        "randomization": default_randomization_cfg(dynamics_enabled=True, sensors_enabled=True),
         "default_joint_pos": {
             "left_front1_joint": 0.0,
             "left_rear1_joint": 0.0,
@@ -95,14 +95,6 @@ def _obs_cfg() -> dict:
         "imu": {
             "link_name": "base_link",
             "pos_offset": [0.0, 0.0, 0.0],
-            "acc_noise": 0.05,  # 白噪声标准差，m/s²
-            "acc_bias": 0.0,  # 固定偏置，m/s²；先假设已校准
-            "acc_random_walk": 0.0001,  # 每次更新的偏置随机增量标准差
-            "gyro_noise": 0.003,  # 白噪声标准差，rad/s，约 0.17°/s
-            "gyro_bias": 0.0,  # 固定偏置，rad/s；先假设已校准
-            "gyro_random_walk": 0.00001,
-            "delay": 0.0,  # 秒；先单独验证噪声影响
-            "jitter": 0.0,
         },
         "velocity_estimator": {
             "wheel_radius": 0.06,
@@ -128,6 +120,11 @@ def _obs_cfg() -> dict:
 def _reward_cfg() -> dict:
     return {
         "tracking_sigma": 0.25,
+        # 初学站立保留运动跟踪容差；课程通过 standing_reward 逐步收紧。
+        "standing_tracking_sigma": 0.25,
+        "standing_lin_vel_threshold": 0.02,  # m/s，命令判定阈值
+        "standing_ang_vel_threshold": 0.02,  # rad/s，命令判定阈值
+        "standing_drift_deadband": 0.02,  # m/s，每个水平轴允许的平衡微动
         "landing_base_ang_vel_weight": 0.25,
         "tracking_gate": {
             "height_full_error": 0.03,
@@ -139,6 +136,7 @@ def _reward_cfg() -> dict:
         "reward_scales": {
             "tracking_lin_vel": -0.5,
             "tracking_ang_vel": -0.5,
+            "standing_drift": 0.0,  # 先学平衡，后续课程再逐步启用漂移惩罚。
             "gated_tracking_lin_vel": 5.0,
             "gated_tracking_ang_vel": 5.0,
             "base_balance": -5.0,
@@ -168,8 +166,8 @@ def _command_cfg() -> dict:
         # |vx| <= 1 m/s 使用课程角速度范围；更快时收紧到 ±1 rad/s。
         # 设为 None 可恢复线速度与角速度独立采样。
         "high_speed_ang_vel": {"lin_vel_threshold": 1.0, "max_abs_ang_vel": 1.0},
-        # 每次重采样有 10% 概率令 vx=wz=0；高度仍按当前课程采样。
-        "standing_probability": 0.10,
+        # 默认 25% 概率令 vx=wz=0；高度仍按当前课程采样，概率可由课程覆盖。
+        "standing_probability": 0.25,
     }
 
 
@@ -182,7 +180,9 @@ def _curriculum_cfg() -> dict:
                 "name": "low",
                 "start_iteration": 0,
                 "targets": {
+                    "standing_reward": {"tracking_sigma": 0.04},
                     "domain_rand": {"strength": 0.6},
+                    "sensor_noise": {"strength": 0.6},
                     "terrain": {"max_difficulty": 1},
                     "reset_ranges": {
                         "base_init_pos_range": [[0.0, 0.0], [0.0, 0.0], [0.22, 0.24]],
@@ -191,6 +191,7 @@ def _curriculum_cfg() -> dict:
                         "base_init_ang_vel_range": [[0.0, 0.0], [0.0, 0.0], [1.0, 1.0]],
                     },
                     "command_ranges": {
+                        "standing_probability": 0.25,
                         "lin_vel_range": [-2.5, 2.5],
                         "ang_vel_range": [-4.0, 4.0],
                         "base_height_range": [0.20, 0.34],
@@ -209,6 +210,7 @@ def _curriculum_cfg() -> dict:
                         "base_contact_termination_duration_s": 0.5,
                     },
                     "reward_scales": {
+                        "standing_drift": -1.0,
                         "gated_tracking_lin_vel": 20.0,
                         "gated_tracking_ang_vel": 20.0,
                         "base_balance": -20.0,
@@ -225,7 +227,9 @@ def _curriculum_cfg() -> dict:
                 "name": "middle",
                 "start_iteration": 4000,
                 "targets": {
+                    "standing_reward": {"tracking_sigma": 0.02},
                     "domain_rand": {"strength": 0.8},
+                    "sensor_noise": {"strength": 0.8},
                     "terrain": {"max_difficulty": 1},
                     "reset_ranges": {
                         "base_init_pos_range": [[0.0, 0.0], [0.0, 0.0], [0.22, 0.24]],
@@ -234,6 +238,7 @@ def _curriculum_cfg() -> dict:
                         "base_init_ang_vel_range": [[-0.1, 0.1], [-0.1, 0.1], [-3.0, 3.0]],
                     },
                     "command_ranges": {
+                        "standing_probability": 0.25,
                         "lin_vel_range": [-3.2, 3.2],
                         "ang_vel_range": [-4.0, 4.0],
                         "base_height_range": [0.20, 0.38],
@@ -246,6 +251,7 @@ def _curriculum_cfg() -> dict:
                         "floor": 0.05,
                     },
                     "reward_scales": {
+                        "standing_drift": -2.0,
                         "gated_tracking_lin_vel": 30.0,
                         "gated_tracking_ang_vel": 30.0,
                         "base_contact": -40.0,
@@ -262,7 +268,9 @@ def _curriculum_cfg() -> dict:
                 "name": "full_range",
                 "start_iteration": 8000,
                 "targets": {
+                    "standing_reward": {"tracking_sigma": 0.01},
                     "domain_rand": {"strength": 1.0},
+                    "sensor_noise": {"strength": 1.0},
                     "terrain": {"max_difficulty": 1},
                     "reset_ranges": {
                         "base_init_pos_range": [[0.0, 0.0], [0.0, 0.0], [0.22, 0.24]],
@@ -271,6 +279,7 @@ def _curriculum_cfg() -> dict:
                         "base_init_ang_vel_range": [[-0.1, 0.1], [-0.1, 0.1], [-5.1, 5.1]],
                     },
                     "command_ranges": {
+                        "standing_probability": 0.25,
                         "lin_vel_range": [-3.8, 3.8],
                         "ang_vel_range": [-4.0, 4.0],
                         "base_height_range": [0.20, 0.38],
@@ -283,6 +292,7 @@ def _curriculum_cfg() -> dict:
                         "floor": 0.05,
                     },
                     "reward_scales": {
+                        "standing_drift": -3.0,
                         "gated_tracking_lin_vel": 30.0,
                         "gated_tracking_ang_vel": 30.0,
                         "base_contact": -40.0,
@@ -300,13 +310,13 @@ def _curriculum_cfg() -> dict:
 
 
 def get_final_command_cfg(command_cfg: dict, curriculum_cfg: dict) -> dict:
-    """返回 eval 使用的命令范围，并累计应用到课程最终阶段。"""
+    """返回 eval 使用的命令配置（含静止采样率），累计应用到课程最终阶段。"""
     resolved = deepcopy(command_cfg)
     if not curriculum_cfg.get("enabled", False):
         return resolved
 
     for stage in curriculum_cfg.get("stages", []):
         command_ranges = stage.get("targets", {}).get("command_ranges", {})
-        for name, limits in command_ranges.items():
-            resolved[name] = list(limits)
+        for name, value in command_ranges.items():
+            resolved[name] = deepcopy(value)
     return resolved

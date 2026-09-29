@@ -6,6 +6,7 @@ import math
 
 import torch
 
+from ...core.randomization import add_randomization_arguments, apply_randomization_arguments
 from ...tools.run_utils import load_run_configs, load_runner_class, resolve_checkpoint, resolve_recorded_run, resolve_run_dir
 from .staged_runner import build_frozen_locomotion_actor, stabilize_with_locomotion
 from .warm_start import validate_locomotion_source
@@ -39,6 +40,7 @@ def _parse_args(argv=None):
     parser.add_argument("--episodes", type=int, default=10, help="批次，每批 num-envs 次跳跃")
     parser.add_argument("--headless", action="store_true")
     parser.add_argument("--seed", type=int, default=1)
+    add_randomization_arguments(parser, evaluation=True)
     args = parser.parse_args(argv)
     if args.num_envs <= 0 or args.episodes <= 0:
         parser.error("num-envs and episodes must be positive")
@@ -56,7 +58,8 @@ def main():
     configs = load_run_configs(run_dir)
     env_cfg = deepcopy(configs["env_cfg"])
     validate_configs(env_cfg, configs["obs_cfg"])
-    env_cfg.setdefault("domain_rand", {})["enabled"] = False
+    obs_cfg = deepcopy(configs["obs_cfg"])
+    apply_randomization_arguments(env_cfg, obs_cfg, args)
     env_cfg.update(show_FPS=False, viewer_realtime_factor=None)
     task = env_cfg["jump_modes"]
     task["distance_jitter_m"] = 0.0
@@ -79,7 +82,7 @@ def main():
 
     gs.init(backend=gs.gpu, precision="32", logging_level="warning", seed=args.seed)
     env = JumpEnv(
-        num_envs=args.num_envs, env_cfg=env_cfg, obs_cfg=configs["obs_cfg"],
+        num_envs=args.num_envs, env_cfg=env_cfg, obs_cfg=obs_cfg,
         reward_cfg=deepcopy(configs["reward_cfg"]), command_cfg=deepcopy(configs["command_cfg"]),
         curriculum_cfg={"enabled": False, "stages": []},
         steps_per_iteration=configs["train_cfg"]["num_steps_per_env"], show_viewer=not args.headless,

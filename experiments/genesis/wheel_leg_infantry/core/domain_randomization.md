@@ -6,10 +6,11 @@
 
 ## 配置与启动
 
-配置入口是各任务的 `env_cfg["domain_rand"]`：
+统一入口是各任务的 `env_cfg["randomization"]`，包含独立的 `dynamics` 和 `sensors`。
+以下为 `env_cfg["randomization"]["dynamics"]` 的内容（推扰暂保留在 `dynamics.push`）：
 
 ```python
-"domain_rand": {
+"dynamics": {
     "enabled": True,
     "strength": 1.0,  # 无课程覆盖时的强度，范围 0–1
     "push": {
@@ -59,10 +60,10 @@
 所有范围均匀采样；推扰、质量、质心、零点和被动关节参数使用标注的物理单位，其余为倍率。
 上面的被动关节 override 仅演示单独配置，默认 `overrides={}`。
 新 locomotion 配置默认启用全部项目，但课程从强度 0 开始逐渐增加；
-旧配置缺少 `domain_rand` 时关闭。
+旧配置缺少动力学随机化字段时关闭；旧 `env_cfg["domain_rand"]` 会自动迁移到新入口。
 已保存的配置若缺少新增的推扰、质量、质心、强度、零点、气弹簧或被动关节组，该组默认关闭，
 避免续训时改变原实验分布；需要启用时在配置中显式添加对应组。
-jump 的 25cm/45cm 配置独立设置，暂时默认关闭，
+jump 的动力学配置独立设置，暂时默认关闭，
 以后将对应配置中的 `default_domain_rand_cfg(enabled=False)` 改为 `True` 即可。
 这些范围是温和的起始值，尚未经过训练效果验证。
 
@@ -81,15 +82,88 @@ python -m experiments.genesis.wheel_leg_infantry.tasks.locomotion.eval --domain-
 
 locomotion 训练通过 `--config config`（默认，`config.py`）或 `--config config_rand`
 （`config_rand.py`）选择配置，域随机化开关和地形在所选文件中设置。
-训练入口不再支持 `--domain-rand`、`--no-domain-rand` 和 `--terrain`。
-locomotion 和 jump 的评估仍支持 `--domain-rand` / `--no-domain-rand`，默认总开关关闭。
-IMU 噪声与固定动作延迟仍由原配置控制，不受这个总开关影响。
+locomotion 和 jump 的训练、评估均支持 `--domain-rand` / `--no-domain-rand`，
+以及独立的 `--sensor-noise` / `--no-sensor-noise`。
+训练默认沿用配置；评估默认关闭动力学随机化，传感器噪声沿用保存的配置。
+命令行覆盖会在保存新运行配置之前应用。固定动作延迟仍由 `simulate_action_latency` 控制。
 
 `--load-weights PATH` 加载 actor/critic 权重（包含模型中保存的观测归一化状态），
 不加载源运行配置、优化器、学习率或迭代数。训练和课程从所选配置的第 0 轮开始，
 `--max_iterations` 为本次新训练的总轮数，结果保存到新版本目录。
 该选项不能与 `--resume`、`--checkpoint` 或 `--resume-config current` 混用；
 网络结构、观测和动作定义应与源权重兼容，权重加载使用严格形状检查。
+
+## 传感器噪声
+
+默认值定义在 `core/sensor_noise.py::default_sensor_noise_cfg()`：
+
+```python
+sensors = env_cfg["randomization"]["sensors"]
+sensors["enabled"] = True
+sensors["strength"] = 1.0
+sensors["joint_vel"].update(std=0.1, bias_range=[-0.02, 0.02])  # rad/s
+sensors["wheel_vel"].update(std=0.2, bias_range=[0.0, 0.0])  # rad/s
+sensors["joint_pos"].update(enabled=True, std=0.001, bias_range=[0.0, 0.0])  # rad
+sensors["imu"]["acc_noise"] = 0.05  # m/s²
+sensors["imu"]["gyro_noise"] = 0.003  # rad/s
+```
+
+`config.py` 和 `config_rand.py` 均开启传感器总开关；普通课程前三阶段强度为 0，后两阶段为 0.4、0.6；随机化课程为 0.6、0.8、1.0。
+关节位置噪声默认关闭。jump 继承来源 locomotion 的传感器配置，并深拷贝以便独立调参。
+默认标准差是待实机标定的起点；应依据固件滤波后实际送入策略的反馈数据调整。
+
+编码器通道各有 `enabled`、高斯白噪声 `std` 和均匀分布 `bias_range`。
+每次物理 reset 为选中的环境、各个关节/轮子独立采样偏置，回合内保持；白噪声每控制步更新一次。
+同一拍的 actor、critic 观测前缀、速度估计器共享测量缓存，重复组装观测不重新加噪。
+局部 reset 只更新对应环境；locomotion → jump 交接保留测量和偏置状态。
+
+`strength` 范围为 `[0, 1]`，只控制传感器误差幅度，与动力学课程独立。
+课程通过独立的 `targets.sensor_noise` 覆盖幅度，省略时继承上一阶段：
+
+```python
+"targets": {
+    "domain_rand": {"strength": 0.4},
+    "sensor_noise": {"strength": 0.4},
+}
+```
+
+课程不会覆盖 `enabled`，`--no-sensor-noise` 始终有效；没有此课程目标的旧配置保持原强度。
+幅度为 0 时关闭白噪声、偏置和随机游走增量；`enabled=False` 还关闭固定延迟/抖动。
+编码器关闭时不消耗额外随机数。阶段切换后下一次测量使用新幅度；已有编码器偏置按比例缩放，
+从 0 开启时初始化偏置，不重置机器人物理状态。IMU 使用 Genesis 公开 setter，仍只加噪一次。
+IMU 随机游走更新的是后续增量幅度，历史累积状态沿用 Genesis 的生命周期。
+
+IMU 白噪声、固定偏置和随机游走幅度由此缩放后交给 Genesis；
+`delay`/`jitter` 使用秒，启用时保留配置值，不随幅度缩放；`jitter <= delay`。
+随机游走沿用 Genesis 每传感器更新的增量定义，改变更新频率时需要重新标定。
+IMU 偏置保留 Genesis 的固定参数语义，不是编码器的每回合随机偏置。
+IMU 在 reset 首帧仍沿用原来的初始化读数，从后续仿真步开始读取 Genesis 传感器。
+
+安装信息 `link_name`、`pos_offset` 仍在 `obs_cfg["imu"]`，观测缩放仍在 `obs_scales`。
+旧存档中的 IMU 误差字段会迁移，保留原值，不为旧实验自动开启编码器噪声。
+如果同时存在新旧误差配置，以新 `randomization` 中对应组为准，保存时移除旧入口。
+新旧配置不会在 IMU 上重复加噪。
+
+测量误差在物理单位下施加，然后才做观测缩放。
+`joint_pos/joint_vel/wheel_vel` 继续保留真值供控制、奖励、终止判断和 PD 诊断使用；
+`measured_*` 供观测及轮速估计使用。腿长、腿角从带噪关节位置重新计算。
+观测顺序和维度不变，critic 仍继承 actor 观测并追加仿真特权信息。
+本次未加入姿态估计误差，`projected_gravity` 仍来自仿真姿态；
+编码器滤波、随机游走和延迟也尚未建模。
+
+```bash
+# 纯净评估
+python -m experiments.genesis.wheel_leg_infantry.tasks.locomotion.eval --no-domain-rand --no-sensor-noise
+# 只测试传感器误差（使用 checkpoint 保存的幅度）
+python -m experiments.genesis.wheel_leg_infantry.tasks.locomotion.eval --no-domain-rand --sensor-noise
+# 两组同时开启
+python -m experiments.genesis.wheel_leg_infantry.tasks.locomotion.eval --domain-rand --sensor-noise
+# config_rand 训练时只保留动力学随机化
+python -m experiments.genesis.wheel_leg_infantry.tasks.locomotion.train --config config_rand --no-sensor-noise
+```
+
+注意：旧存档若保存的幅度为零，`--sensor-noise` 只打开开关，不自动替换这些幅度。
+动力学课程目标名仍为 `domain_rand`，仅影响 `randomization.dynamics`。
 
 ## 随机化强度课程
 
@@ -220,9 +294,8 @@ jump 也可在自己的阶段 `targets` 中使用相同字段，其默认域随�
 `env.gas_spring_preload_force/stiffness/damping` 为 `[num_envs, num_springs]`，
 与 manager 的实际参数共用 buffer；任务配置中的标称值保持不变。
 
-本轮不加入随机延迟。后续固定动力学参数可扩展
-manager 的 `bind/reset`；随机延迟可接入动作执行阶段，
-传感器噪声继续从 `obs_cfg["imu"]` 管理，避免重复加噪。
+后续动力学参数可扩展 manager 的 `bind/reset`。传感器误差统一由
+`randomization.sensors` 配置，IMU 的执行仍交给 Genesis，避免重复加噪。
 
 
 覆盖关闭兼容、随机种子、范围校验、局部 reset 隔离、接触双方摩擦更新、

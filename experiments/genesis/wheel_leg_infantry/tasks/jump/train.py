@@ -6,6 +6,7 @@ import argparse
 from copy import deepcopy
 
 from ...core.train_config import get_train_cfg
+from ...core.randomization import add_randomization_arguments, apply_randomization_arguments
 from ...tools.run_utils import (
     add_resume_arguments,
     create_versioned_run_dir,
@@ -37,6 +38,7 @@ def _parse_args(argv=None):
     parser.add_argument("--locomotion-version", default=None)
     parser.add_argument("--locomotion-ckpt", type=int, default=None)
     parser.add_argument("--dry-run", action="store_true")
+    add_randomization_arguments(parser, evaluation=False)
     add_resume_arguments(parser)
     args = parser.parse_args(argv)
     if args.num_envs <= 0 or args.max_iterations <= 0:
@@ -55,6 +57,7 @@ def main():
         print(f"[jump] config={get_cfgs.__module__}")
     if args.dry_run:
         env_cfg, obs_cfg, reward_cfg, command_cfg, curriculum_cfg = get_cfgs()
+        apply_randomization_arguments(env_cfg, obs_cfg, args)
         validate_configs(env_cfg, obs_cfg, curriculum_cfg)
         validate_phase_durations(env_cfg["jump_phase_durations_s"])
         jump_horizon = round(env_cfg["episode_length_s"] / 0.02)
@@ -128,6 +131,7 @@ def main():
     else:
         env_cfg, obs_cfg, reward_cfg, command_cfg, curriculum_cfg = get_cfgs(locomotion_cfgs)
         train_cfg = get_train_cfg(args.exp_name)
+    apply_randomization_arguments(env_cfg, obs_cfg, args)
     validate_configs(env_cfg, obs_cfg, curriculum_cfg)
     jump_horizon = round(env_cfg["episode_length_s"] / 0.01)
     if not abs(jump_horizon * 0.01 - env_cfg["episode_length_s"]) < 1e-9:

@@ -17,6 +17,8 @@ from tensordict import TensorDict
 
 from ...core.curriculum import CurriculumManager
 from ...core.domain_randomization import DomainRandomizationManager, MOTOR_NAMES, SPRING_NAMES
+from ...core.randomization import normalize_randomization_config
+from ...core.sensor_noise import SensorNoise
 from ...core.kinematics import compute_leg_angle, compute_leg_length, constrain_leg_targets
 from ...core.tensor_utils import as_gain_tensor, as_range_tensors, sample_uniform
 from ...core.terrain import TerrainManager
@@ -61,8 +63,10 @@ class LocomotionEnv(LocomotionRewards):
         # 记录 TerrainManager 补齐后的配置，保证课程、日志与运行状态一致。
         self.env_cfg["terrain"] = self.terrain.config
 
-        self.domain_rand = DomainRandomizationManager(env_cfg.get("domain_rand"))
-        self.env_cfg["domain_rand"] = self.domain_rand.config
+        randomization = normalize_randomization_config(env_cfg, obs_cfg)
+        self.domain_rand = DomainRandomizationManager(randomization["dynamics"])
+        randomization["dynamics"] = self.domain_rand.config
+        self.sensor_noise = SensorNoise(randomization["sensors"])
         self.batch_dofs_info = (
             self.domain_rand.requires_batched_dofs
             or bool(env_cfg.get("handoff_on_landing", False))
@@ -88,7 +92,7 @@ class LocomotionEnv(LocomotionRewards):
         self.max_episode_length = math.ceil(env_cfg["episode_length_s"] / self.dt)
 
         # IMU配置
-        self.imu_cfg = dict(obs_cfg.get("imu", {}))
+        self.imu_cfg = self.sensor_noise.imu_options(obs_cfg.get("imu", {}))
         self.imu_acc_scale = float(obs_cfg["obs_scales"].get("lin_acc", 1.0 / 9.81))
 
         # 速度估计器配置
@@ -250,11 +254,13 @@ class LocomotionEnv(LocomotionRewards):
         self.curriculum.register_target("command_ranges", self._apply_command_ranges)
         self.curriculum.register_target("reward_scales", self._apply_reward_scales)
         self.curriculum.register_target("tracking_gate", self._apply_tracking_gate)
+        self.curriculum.register_target("standing_reward", self._apply_standing_reward)
         self.curriculum.register_target("termination_limits", self._apply_termination_limits)
         self.curriculum.register_target("action_limits", self._apply_action_limits)
         self.curriculum.register_target("reset_ranges", self._apply_reset_ranges)
         self.curriculum.register_target("terrain", self._apply_terrain_curriculum)
         self.curriculum.register_target("domain_rand", self.domain_rand.apply_curriculum)
+        self.curriculum.register_target("sensor_noise", self._apply_sensor_noise)
         if self.curriculum.update(0, force=True):
             print(f"[curriculum] stage={self.curriculum.current_stage_name} step=0")
 
@@ -315,6 +321,7 @@ class LocomotionEnv(LocomotionRewards):
 
         # build环境
         self.scene.build(n_envs=num_envs)
+        self.sensor_noise.bind_imu(self.imu)
         # Genesis 在 build 后才生成 terrain_hf，此时才能绑定高度场供 reset/step 查询。
         self.terrain.bind_entity(
             self.terrain_entity,
@@ -401,6 +408,11 @@ class LocomotionEnv(LocomotionRewards):
         self.joint_pos = torch.empty((self.num_envs, self.num_joints), dtype=gs.tc_float, device=gs.device)
         self.joint_vel = torch.empty_like(self.joint_pos)
         self.wheel_vel = torch.empty((self.num_envs, self.num_wheels), dtype=gs.tc_float, device=gs.device)
+        self.sensor_noise.bind(self._encoder_truth())
+        for name, value in self.sensor_noise.measurements.items():
+            setattr(self, "measured_" + name, value)
+        self.measured_leg_length = torch.empty((self.num_envs, 2), dtype=gs.tc_float, device=gs.device)
+        self.measured_leg_angle = torch.empty_like(self.measured_leg_length)
         self.leg_length = torch.empty((self.num_envs, 2), dtype=gs.tc_float, device=gs.device)
         self.leg_angle = torch.empty((self.num_envs, 2), dtype=gs.tc_float, device=gs.device)
         self.gas_spring_force = torch.empty((self.num_envs, 2), dtype=gs.tc_float, device=gs.device)
@@ -608,6 +620,7 @@ class LocomotionEnv(LocomotionRewards):
         self.joint_pos = self.robot.get_dofs_position(self.joints_dof_idx)
         self.joint_vel = self.robot.get_dofs_velocity(self.joints_dof_idx)
         self.wheel_vel = self.robot.get_dofs_velocity(self.wheels_dof_idx)
+        self._update_encoder_measurements()
         self._update_velocity_estimator()
         self._update_wheel_contact()
 
@@ -840,6 +853,7 @@ class LocomotionEnv(LocomotionRewards):
             self.target_wheel_vel.masked_fill_(env_idx[:, None], 0.0)
             self.episode_length_buf.masked_fill_(env_idx, 0)
 
+        self._update_encoder_measurements(reset_env_ids)
         self._reset_task_buffers(env_idx)
 
         # 更新extras和episoded的reward
@@ -968,11 +982,30 @@ class LocomotionEnv(LocomotionRewards):
         self.gas_spring_force.copy_(force)
         self.robot.control_dofs_force(force, self.springs_dof_idx)
 
+    def _encoder_truth(self):
+        return {"joint_pos": self.joint_pos, "joint_vel": self.joint_vel, "wheel_vel": self.wheel_vel}
+
+    def _update_encoder_measurements(self, reset_env_ids=None):
+        # 每个控制步只采样一次；reset 仅刷新被重置的环境。
+        if reset_env_ids is None:
+            self.sensor_noise.update(self._encoder_truth())
+        else:
+            self.sensor_noise.reset(reset_env_ids, self._encoder_truth())
+        selected = slice(None) if reset_env_ids is None else reset_env_ids
+        measured_pos = self.measured_joint_pos[selected]
+        self.measured_leg_length[selected] = compute_leg_length(
+            measured_pos, self.leg_front_joint_indices, self.leg_rear_joint_indices,
+            self.leg_upper_link_length, self.leg_lower_link_length,
+        )
+        self.measured_leg_angle[selected] = compute_leg_angle(
+            measured_pos, self.leg_front_joint_indices, self.leg_rear_joint_indices,
+        )
+
     def _update_velocity_estimator(self):
         """更新前向速度估计供诊断；不作为 actor 或 critic 的输入。"""
         self.wheel_forward_vel.copy_(
             wheel_forward_velocity(
-                self.wheel_vel,
+                self.measured_wheel_vel,
                 self.wheel_radius,
                 self.wheel_velocity_sign,
             )
@@ -1059,11 +1092,11 @@ class LocomotionEnv(LocomotionRewards):
             "imu_lin_acc": self.imu_lin_acc * self.imu_acc_scale,  # 3，IMU 比力（含重力）
             "projected_gravity": self.projected_gravity,  # 3
             **self._get_command_observation_components(),
-            "joint_pos_offset": (self.joint_pos - self.default_joint_pos) * self.obs_scales["joint_pos"],
-            "joint_vel": self.joint_vel * self.obs_scales["joint_vel"],
-            "wheel_vel": self.wheel_vel * self.obs_scales["wheel_vel"],
-            "leg_length": self.leg_length * self.obs_scales["leg_length"],  # 2
-            "leg_angle": self.leg_angle * self.obs_scales["leg_angle"],  # 2
+            "joint_pos_offset": (self.measured_joint_pos - self.default_joint_pos) * self.obs_scales["joint_pos"],
+            "joint_vel": self.measured_joint_vel * self.obs_scales["joint_vel"],
+            "wheel_vel": self.measured_wheel_vel * self.obs_scales["wheel_vel"],
+            "leg_length": self.measured_leg_length * self.obs_scales["leg_length"],  # 2
+            "leg_angle": self.measured_leg_angle * self.obs_scales["leg_angle"],  # 2
             "actions": self.actions,
             **self._get_task_observation_components(),
         }
@@ -1118,15 +1151,23 @@ class LocomotionEnv(LocomotionRewards):
         )
 
     def _apply_command_ranges(self, values):
-        """应用课程指令范围，并重建采样使用的上下限 Tensor。"""
-        allowed = {"lin_vel_range", "ang_vel_range", "base_height_range"}
+        """应用课程指令范围和静止采样率；在下一次命令重采样时生效。"""
+        allowed = {"lin_vel_range", "ang_vel_range", "base_height_range", "standing_probability"}
         unknown = set(values).difference(allowed)
         if unknown:
             raise KeyError(f"Unsupported command range curriculum keys: {sorted(unknown)}")
+        normalized = {}
         for name, limits in values.items():
+            if name == "standing_probability":
+                probability = float(limits)
+                if not math.isfinite(probability) or not 0.0 <= probability <= 1.0:
+                    raise ValueError("standing_probability must be finite and in [0, 1]")
+                normalized[name] = probability
+                continue
             if len(limits) != 2 or limits[0] > limits[1]:
                 raise ValueError(f"{name} must be [lower, upper], got {limits}")
-            self.command_cfg[name] = list(limits)
+            normalized[name] = list(limits)
+        self.command_cfg.update(normalized)
         self.commands_limit = self._build_command_limits()
 
     def _get_reward_scale(self, name):
@@ -1143,6 +1184,25 @@ class LocomotionEnv(LocomotionRewards):
             self.reward_functions[name] = reward_function
             if name not in self.episode_sums:
                 self.episode_sums[name] = torch.zeros((self.num_envs,), dtype=gs.tc_float, device=gs.device)
+
+    def _apply_sensor_noise(self, values):
+        self.sensor_noise.apply_curriculum(values)
+        # 第 0 阶段在创建 IMU 前执行，必须同步它的初始配置。
+        self.imu_cfg = self.sensor_noise.imu_options(self.obs_cfg.get("imu", {}))
+
+    def _apply_standing_reward(self, values):
+        """随课程收紧静止跟踪容差/漂移死区；惩罚权重仍由 reward_scales 设置。"""
+        allowed = {"tracking_sigma", "drift_deadband"}
+        unknown = set(values).difference(allowed)
+        if unknown:
+            raise KeyError(f"Unsupported standing reward curriculum keys: {sorted(unknown)}")
+        normalized = {}
+        for name, value in values.items():
+            value = float(value)
+            if not math.isfinite(value) or value < 0.0 or (name == "tracking_sigma" and value == 0.0):
+                raise ValueError(f"standing_reward.{name} must be finite and {'positive' if name == 'tracking_sigma' else 'nonnegative'}")
+            normalized["standing_" + name] = value
+        self.reward_cfg.update(normalized)
 
     def _apply_tracking_gate(self, values):
         """应用速度跟踪门控参数。"""
