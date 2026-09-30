@@ -275,7 +275,7 @@ class LocomotionEnv(LocomotionRewards):
                 batch_dofs_info=self.batch_dofs_info,
                 enable_self_collision=False,
                 tolerance=1e-5,
-                max_collision_pairs=20,
+                max_collision_pairs=self.terrain.max_collision_pairs,
             ),
             viewer_options=gs.options.ViewerOptions(
                 camera_pos=(1.8, -2.8, 1.5),
@@ -520,9 +520,9 @@ class LocomotionEnv(LocomotionRewards):
             raise ValueError("joint_force_limit and wheel_force_limit must be positive")
 
     def _joint_dof_indices(self, names):
-        """按配置名称顺序构造关节自由度索引。"""
+        """实体控制接口需要局部索引；地形动态球会占用前面的场景自由度。"""
         return torch.tensor(
-            [self.robot.get_joint(name).dof_start for name in names],
+            [self.robot.get_joint(name).dof_start - self.robot.dof_start for name in names],
             dtype=gs.tc_int,
             device=self.device,
         )
@@ -606,6 +606,7 @@ class LocomotionEnv(LocomotionRewards):
         self.terrain_height.copy_(self.terrain.height_at(self.base_pos[:, :2]))
         self.base_height.copy_(self.base_pos[:, 2] - self.terrain_height)
         self.base_quat = self.robot.get_quat()
+        # init_base_quat 为单位四元数：这里是世界水平面基准的绝对姿态，不扣除地形坡角。
         self.base_euler = quat_to_xyz(
             transform_quat_by_quat(self.base_quat, self.init_base_quat_inv),
             rpy=True,
@@ -615,6 +616,7 @@ class LocomotionEnv(LocomotionRewards):
         base_quat_inv = inv_quat(self.base_quat)
         self.base_lin_vel = transform_by_quat(self.robot.get_vel(), base_quat_inv)
         self.base_ang_vel = transform_by_quat(self.robot.get_ang(), base_quat_inv)
+        # 世界重力在机身坐标系中的方向，保留绝对 roll/pitch 信息，不包含 yaw。
         self.projected_gravity = transform_by_quat(self.global_gravity_dir, base_quat_inv)
 
         self.joint_pos = self.robot.get_dofs_position(self.joints_dof_idx)
@@ -745,6 +747,7 @@ class LocomotionEnv(LocomotionRewards):
             reset_terrain_centers,
             reset_terrain_tile_index,
         ) = self._sample_base_reset_state(reset_env_ids)
+        self.terrain.reset(reset_env_ids)
         self.domain_rand.reset(reset_env_ids)
 
         reset_quat_inv = inv_quat(reset_base_quat)
@@ -895,6 +898,12 @@ class LocomotionEnv(LocomotionRewards):
         terrain_centers, terrain_tile_index = self.terrain.sample_spawn_tiles(env_ids)
         # 配置中的 x/y 是相对 patch 中心的扰动，z 是相对当地地面的初始高度。
         reset_base_pos[:, :2] += terrain_centers
+        if self.terrain.is_platform_ridge:
+            # 下台阶训练从二级平台中央开始；保留真实 patch 中心用于越界判定。
+            # 固定 x/y，避免通用位置随机化把机器人放到窄凸台或平台外。
+            lower, upper = self.terrain.platform_boxes[-1]
+            reset_base_pos[:, 0] = 0.5 * (lower[0] + upper[0])
+            reset_base_pos[:, 1] = 0.5 * (lower[1] + upper[1])
         terrain_height = self.terrain.height_at(reset_base_pos[:, :2])
         reset_base_pos[:, 2] += terrain_height
 
@@ -903,6 +912,9 @@ class LocomotionEnv(LocomotionRewards):
             self.base_init_rpy_upper,
             (num_resets,),
         )
+        if self.terrain.is_platform_ridge:
+            # +x 指向二级平台末端的下台阶；不受通用 yaw 随机化影响。
+            rpy_offset_deg[:, 2] = 0.0
         quat_offset = xyz_to_quat(rpy_offset_deg, rpy=True, degrees=True)
         nominal_quat = self.init_base_quat.expand(num_resets, -1)
         reset_base_quat = transform_quat_by_quat(quat_offset, nominal_quat)

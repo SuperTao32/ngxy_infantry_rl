@@ -27,7 +27,7 @@ def _env_cfg() -> dict:
         "num_joints": 4,
         "num_wheels": 2,
         "robot_mjcf": "assets/robot/wheelbipeV14_2/mjcf/wheelbipeV14_2.xml",
-        # 地形由所选配置决定；多地形训练可在此使用 "mixed"。
+        # 地形由所选配置决定，也可通过 --terrain 覆盖。
         "terrain": default_terrain_cfg("plane"),
         "randomization": default_randomization_cfg(dynamics_enabled=True, sensors_enabled=True),
         "default_joint_pos": {

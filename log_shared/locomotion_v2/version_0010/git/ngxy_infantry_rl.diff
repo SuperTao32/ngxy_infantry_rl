@@ -1,0 +1,940 @@
+--- git commit ---
+aaf27d3e80853c340f9015c4252b6f2b303986f6
+
+
+--- git status ---
+On branch main
+Your branch is up to date with 'origin/main'.
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	modified:   experiments/genesis/wheel_leg_infantry/core/domain_randomization.md
+	modified:   experiments/genesis/wheel_leg_infantry/tasks/jump/config.py
+	modified:   experiments/genesis/wheel_leg_infantry/tasks/jump/eval.py
+	modified:   experiments/genesis/wheel_leg_infantry/tasks/jump/train.py
+	modified:   experiments/genesis/wheel_leg_infantry/tasks/locomotion/config.py
+	modified:   experiments/genesis/wheel_leg_infantry/tasks/locomotion/config_rand.py
+	modified:   experiments/genesis/wheel_leg_infantry/tasks/locomotion/env.py
+	modified:   experiments/genesis/wheel_leg_infantry/tasks/locomotion/eval.py
+	modified:   experiments/genesis/wheel_leg_infantry/tasks/locomotion/rewards.py
+	modified:   experiments/genesis/wheel_leg_infantry/tasks/locomotion/train.py
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	experiments/genesis/wheel_leg_infantry/core/randomization.py
+	experiments/genesis/wheel_leg_infantry/core/sensor_noise.py
+
+no changes added to commit (use "git add" and/or "git commit -a") 
+
+
+--- git diff ---
+diff --git a/experiments/genesis/wheel_leg_infantry/core/domain_randomization.md b/experiments/genesis/wheel_leg_infantry/core/domain_randomization.md
+index 3890c8a..434b527 100644
+--- a/experiments/genesis/wheel_leg_infantry/core/domain_randomization.md
++++ b/experiments/genesis/wheel_leg_infantry/core/domain_randomization.md
+@@ -6,10 +6,11 @@
+ 
+ ## 配置与启动
+ 
+-配置入口是各任务的 `env_cfg["domain_rand"]`：
++统一入口是各任务的 `env_cfg["randomization"]`，包含独立的 `dynamics` 和 `sensors`。
++以下为 `env_cfg["randomization"]["dynamics"]` 的内容（推扰暂保留在 `dynamics.push`）：
+ 
+ ```python
+-"domain_rand": {
++"dynamics": {
+     "enabled": True,
+     "strength": 1.0,  # 无课程覆盖时的强度，范围 0–1
+     "push": {
+@@ -59,10 +60,10 @@
+ 所有范围均匀采样；推扰、质量、质心、零点和被动关节参数使用标注的物理单位，其余为倍率。
+ 上面的被动关节 override 仅演示单独配置，默认 `overrides={}`。
+ 新 locomotion 配置默认启用全部项目，但课程从强度 0 开始逐渐增加；
+-旧配置缺少 `domain_rand` 时关闭。
++旧配置缺少动力学随机化字段时关闭；旧 `env_cfg["domain_rand"]` 会自动迁移到新入口。
+ 已保存的配置若缺少新增的推扰、质量、质心、强度、零点、气弹簧或被动关节组，该组默认关闭，
+ 避免续训时改变原实验分布；需要启用时在配置中显式添加对应组。
+-jump 的 25cm/45cm 配置独立设置，暂时默认关闭，
++jump 的动力学配置独立设置，暂时默认关闭，
+ 以后将对应配置中的 `default_domain_rand_cfg(enabled=False)` 改为 `True` 即可。
+ 这些范围是温和的起始值，尚未经过训练效果验证。
+ 
+@@ -81,9 +82,10 @@ python -m experiments.genesis.wheel_leg_infantry.tasks.locomotion.eval --domain-
+ 
+ locomotion 训练通过 `--config config`（默认，`config.py`）或 `--config config_rand`
+ （`config_rand.py`）选择配置，域随机化开关和地形在所选文件中设置。
+-训练入口不再支持 `--domain-rand`、`--no-domain-rand` 和 `--terrain`。
+-locomotion 和 jump 的评估仍支持 `--domain-rand` / `--no-domain-rand`，默认总开关关闭。
+-IMU 噪声与固定动作延迟仍由原配置控制，不受这个总开关影响。
++locomotion 和 jump 的训练、评估均支持 `--domain-rand` / `--no-domain-rand`，
++以及独立的 `--sensor-noise` / `--no-sensor-noise`。
++训练默认沿用配置；评估默认关闭动力学随机化，传感器噪声沿用保存的配置。
++命令行覆盖会在保存新运行配置之前应用。固定动作延迟仍由 `simulate_action_latency` 控制。
+ 
+ `--load-weights PATH` 加载 actor/critic 权重（包含模型中保存的观测归一化状态），
+ 不加载源运行配置、优化器、学习率或迭代数。训练和课程从所选配置的第 0 轮开始，
+@@ -91,6 +93,78 @@ IMU 噪声与固定动作延迟仍由原配置控制，不受这个总开关影
+ 该选项不能与 `--resume`、`--checkpoint` 或 `--resume-config current` 混用；
+ 网络结构、观测和动作定义应与源权重兼容，权重加载使用严格形状检查。
+ 
++## 传感器噪声
++
++默认值定义在 `core/sensor_noise.py::default_sensor_noise_cfg()`：
++
++```python
++sensors = env_cfg["randomization"]["sensors"]
++sensors["enabled"] = True
++sensors["strength"] = 1.0
++sensors["joint_vel"].update(std=0.1, bias_range=[-0.02, 0.02])  # rad/s
++sensors["wheel_vel"].update(std=0.2, bias_range=[0.0, 0.0])  # rad/s
++sensors["joint_pos"].update(enabled=True, std=0.001, bias_range=[0.0, 0.0])  # rad
++sensors["imu"]["acc_noise"] = 0.05  # m/s²
++sensors["imu"]["gyro_noise"] = 0.003  # rad/s
++```
++
++`config.py` 和 `config_rand.py` 均开启传感器总开关；普通课程前三阶段强度为 0，后两阶段为 0.4、0.6；随机化课程为 0.6、0.8、1.0。
++关节位置噪声默认关闭。jump 继承来源 locomotion 的传感器配置，并深拷贝以便独立调参。
++默认标准差是待实机标定的起点；应依据固件滤波后实际送入策略的反馈数据调整。
++
++编码器通道各有 `enabled`、高斯白噪声 `std` 和均匀分布 `bias_range`。
++每次物理 reset 为选中的环境、各个关节/轮子独立采样偏置，回合内保持；白噪声每控制步更新一次。
++同一拍的 actor、critic 观测前缀、速度估计器共享测量缓存，重复组装观测不重新加噪。
++局部 reset 只更新对应环境；locomotion → jump 交接保留测量和偏置状态。
++
++`strength` 范围为 `[0, 1]`，只控制传感器误差幅度，与动力学课程独立。
++课程通过独立的 `targets.sensor_noise` 覆盖幅度，省略时继承上一阶段：
++
++```python
++"targets": {
++    "domain_rand": {"strength": 0.4},
++    "sensor_noise": {"strength": 0.4},
++}
++```
++
++课程不会覆盖 `enabled`，`--no-sensor-noise` 始终有效；没有此课程目标的旧配置保持原强度。
++幅度为 0 时关闭白噪声、偏置和随机游走增量；`enabled=False` 还关闭固定延迟/抖动。
++编码器关闭时不消耗额外随机数。阶段切换后下一次测量使用新幅度；已有编码器偏置按比例缩放，
++从 0 开启时初始化偏置，不重置机器人物理状态。IMU 使用 Genesis 公开 setter，仍只加噪一次。
++IMU 随机游走更新的是后续增量幅度，历史累积状态沿用 Genesis 的生命周期。
++
++IMU 白噪声、固定偏置和随机游走幅度由此缩放后交给 Genesis；
++`delay`/`jitter` 使用秒，启用时保留配置值，不随幅度缩放；`jitter <= delay`。
++随机游走沿用 Genesis 每传感器更新的增量定义，改变更新频率时需要重新标定。
++IMU 偏置保留 Genesis 的固定参数语义，不是编码器的每回合随机偏置。
++IMU 在 reset 首帧仍沿用原来的初始化读数，从后续仿真步开始读取 Genesis 传感器。
++
++安装信息 `link_name`、`pos_offset` 仍在 `obs_cfg["imu"]`，观测缩放仍在 `obs_scales`。
++旧存档中的 IMU 误差字段会迁移，保留原值，不为旧实验自动开启编码器噪声。
++如果同时存在新旧误差配置，以新 `randomization` 中对应组为准，保存时移除旧入口。
++新旧配置不会在 IMU 上重复加噪。
++
++测量误差在物理单位下施加，然后才做观测缩放。
++`joint_pos/joint_vel/wheel_vel` 继续保留真值供控制、奖励、终止判断和 PD 诊断使用；
++`measured_*` 供观测及轮速估计使用。腿长、腿角从带噪关节位置重新计算。
++观测顺序和维度不变，critic 仍继承 actor 观测并追加仿真特权信息。
++本次未加入姿态估计误差，`projected_gravity` 仍来自仿真姿态；
++编码器滤波、随机游走和延迟也尚未建模。
++
++```bash
++# 纯净评估
++python -m experiments.genesis.wheel_leg_infantry.tasks.locomotion.eval --no-domain-rand --no-sensor-noise
++# 只测试传感器误差（使用 checkpoint 保存的幅度）
++python -m experiments.genesis.wheel_leg_infantry.tasks.locomotion.eval --no-domain-rand --sensor-noise
++# 两组同时开启
++python -m experiments.genesis.wheel_leg_infantry.tasks.locomotion.eval --domain-rand --sensor-noise
++# config_rand 训练时只保留动力学随机化
++python -m experiments.genesis.wheel_leg_infantry.tasks.locomotion.train --config config_rand --no-sensor-noise
++```
++
++注意：旧存档若保存的幅度为零，`--sensor-noise` 只打开开关，不自动替换这些幅度。
++动力学课程目标名仍为 `domain_rand`，仅影响 `randomization.dynamics`。
++
+ ## 随机化强度课程
+ 
+ 在课程阶段的 `targets` 中加入：
+@@ -220,9 +294,8 @@ jump 也可在自己的阶段 `targets` 中使用相同字段，其默认域随
+ `env.gas_spring_preload_force/stiffness/damping` 为 `[num_envs, num_springs]`，
+ 与 manager 的实际参数共用 buffer；任务配置中的标称值保持不变。
+ 
+-本轮不加入随机延迟。后续固定动力学参数可扩展
+-manager 的 `bind/reset`；随机延迟可接入动作执行阶段，
+-传感器噪声继续从 `obs_cfg["imu"]` 管理，避免重复加噪。
++后续动力学参数可扩展 manager 的 `bind/reset`。传感器误差统一由
++`randomization.sensors` 配置，IMU 的执行仍交给 Genesis，避免重复加噪。
+ 
+ 
+ 覆盖关闭兼容、随机种子、范围校验、局部 reset 隔离、接触双方摩擦更新、
+diff --git a/experiments/genesis/wheel_leg_infantry/tasks/jump/config.py b/experiments/genesis/wheel_leg_infantry/tasks/jump/config.py
+index 53115a6..eda87ee 100644
+--- a/experiments/genesis/wheel_leg_infantry/tasks/jump/config.py
++++ b/experiments/genesis/wheel_leg_infantry/tasks/jump/config.py
+@@ -7,6 +7,7 @@ import math
+ from typing import Mapping, Sequence
+ 
+ from ...core.domain_randomization import default_domain_rand_cfg
++from ...core.randomization import normalize_randomization_config
+ from ..locomotion.config import get_cfgs as get_locomotion_cfgs
+ from .height_reference import validate_height_reference
+ from .observation import JUMP_POLICY_LAYOUT, LOCOMOTION_POLICY_LAYOUT, layout_dim
+@@ -46,7 +47,6 @@ def get_cfgs(locomotion_cfgs: Sequence[Mapping] | None = None):
+             "jump_phase_durations_s": phase_durations_s,
+             "handoff_on_landing": False,
+             # jump 独立选择随机化范围；teacher 预热与跳跃共用本轮随机参数。
+-            "domain_rand": default_domain_rand_cfg(enabled=False),
+             # 仅 jump 阶段覆盖；预热使用 locomotion 参数，下一轮自动恢复。
+             # None 表示继承。标量或列表：腿按 joint_names、轮按 wheel_names 排序。
+             "jump_motor_params": {
+@@ -81,6 +81,7 @@ def get_cfgs(locomotion_cfgs: Sequence[Mapping] | None = None):
+     command_cfg = deepcopy(dict(locomotion_cfgs[3]))
+     command_cfg.update({"num_commands": 3, **deepcopy(warmup_cfg["command_ranges"])})
+     obs_cfg = _get_obs_cfg(locomotion_cfgs[1])
++    normalize_randomization_config(env_cfg, obs_cfg)["dynamics"] = default_domain_rand_cfg(enabled=False)
+     reward_cfg = _get_reward_cfg()
+     curriculum_cfg = _get_curriculum_cfg()
+     # 采样比例只在课程中配置；复制首阶段作为初始值，关闭课程时也使用这一比例。
+diff --git a/experiments/genesis/wheel_leg_infantry/tasks/jump/eval.py b/experiments/genesis/wheel_leg_infantry/tasks/jump/eval.py
+index d348ae6..b02b41f 100644
+--- a/experiments/genesis/wheel_leg_infantry/tasks/jump/eval.py
++++ b/experiments/genesis/wheel_leg_infantry/tasks/jump/eval.py
+@@ -6,6 +6,7 @@ import math
+ 
+ import torch
+ 
++from ...core.randomization import add_randomization_arguments, apply_randomization_arguments
+ from ...tools.run_utils import load_run_configs, load_runner_class, resolve_checkpoint, resolve_recorded_run, resolve_run_dir
+ from .staged_runner import build_frozen_locomotion_actor, stabilize_with_locomotion
+ from .warm_start import validate_locomotion_source
+@@ -39,6 +40,7 @@ def _parse_args(argv=None):
+     parser.add_argument("--episodes", type=int, default=10, help="批次，每批 num-envs 次跳跃")
+     parser.add_argument("--headless", action="store_true")
+     parser.add_argument("--seed", type=int, default=1)
++    add_randomization_arguments(parser, evaluation=True)
+     args = parser.parse_args(argv)
+     if args.num_envs <= 0 or args.episodes <= 0:
+         parser.error("num-envs and episodes must be positive")
+@@ -56,7 +58,8 @@ def main():
+     configs = load_run_configs(run_dir)
+     env_cfg = deepcopy(configs["env_cfg"])
+     validate_configs(env_cfg, configs["obs_cfg"])
+-    env_cfg.setdefault("domain_rand", {})["enabled"] = False
++    obs_cfg = deepcopy(configs["obs_cfg"])
++    apply_randomization_arguments(env_cfg, obs_cfg, args)
+     env_cfg.update(show_FPS=False, viewer_realtime_factor=None)
+     task = env_cfg["jump_modes"]
+     task["distance_jitter_m"] = 0.0
+@@ -79,7 +82,7 @@ def main():
+ 
+     gs.init(backend=gs.gpu, precision="32", logging_level="warning", seed=args.seed)
+     env = JumpEnv(
+-        num_envs=args.num_envs, env_cfg=env_cfg, obs_cfg=configs["obs_cfg"],
++        num_envs=args.num_envs, env_cfg=env_cfg, obs_cfg=obs_cfg,
+         reward_cfg=deepcopy(configs["reward_cfg"]), command_cfg=deepcopy(configs["command_cfg"]),
+         curriculum_cfg={"enabled": False, "stages": []},
+         steps_per_iteration=configs["train_cfg"]["num_steps_per_env"], show_viewer=not args.headless,
+diff --git a/experiments/genesis/wheel_leg_infantry/tasks/jump/train.py b/experiments/genesis/wheel_leg_infantry/tasks/jump/train.py
+index 4f2ef53..d054137 100644
+--- a/experiments/genesis/wheel_leg_infantry/tasks/jump/train.py
++++ b/experiments/genesis/wheel_leg_infantry/tasks/jump/train.py
+@@ -6,6 +6,7 @@ import argparse
+ from copy import deepcopy
+ 
+ from ...core.train_config import get_train_cfg
++from ...core.randomization import add_randomization_arguments, apply_randomization_arguments
+ from ...tools.run_utils import (
+     add_resume_arguments,
+     create_versioned_run_dir,
+@@ -37,6 +38,7 @@ def _parse_args(argv=None):
+     parser.add_argument("--locomotion-version", default=None)
+     parser.add_argument("--locomotion-ckpt", type=int, default=None)
+     parser.add_argument("--dry-run", action="store_true")
++    add_randomization_arguments(parser, evaluation=False)
+     add_resume_arguments(parser)
+     args = parser.parse_args(argv)
+     if args.num_envs <= 0 or args.max_iterations <= 0:
+@@ -55,6 +57,7 @@ def main():
+         print(f"[jump] config={get_cfgs.__module__}")
+     if args.dry_run:
+         env_cfg, obs_cfg, reward_cfg, command_cfg, curriculum_cfg = get_cfgs()
++        apply_randomization_arguments(env_cfg, obs_cfg, args)
+         validate_configs(env_cfg, obs_cfg, curriculum_cfg)
+         validate_phase_durations(env_cfg["jump_phase_durations_s"])
+         jump_horizon = round(env_cfg["episode_length_s"] / 0.02)
+@@ -128,6 +131,7 @@ def main():
+     else:
+         env_cfg, obs_cfg, reward_cfg, command_cfg, curriculum_cfg = get_cfgs(locomotion_cfgs)
+         train_cfg = get_train_cfg(args.exp_name)
++    apply_randomization_arguments(env_cfg, obs_cfg, args)
+     validate_configs(env_cfg, obs_cfg, curriculum_cfg)
+     jump_horizon = round(env_cfg["episode_length_s"] / 0.01)
+     if not abs(jump_horizon * 0.01 - env_cfg["episode_length_s"]) < 1e-9:
+diff --git a/experiments/genesis/wheel_leg_infantry/tasks/locomotion/config.py b/experiments/genesis/wheel_leg_infantry/tasks/locomotion/config.py
+index 013b68b..216a8c4 100644
+--- a/experiments/genesis/wheel_leg_infantry/tasks/locomotion/config.py
++++ b/experiments/genesis/wheel_leg_infantry/tasks/locomotion/config.py
+@@ -8,7 +8,7 @@ import math
+ from copy import deepcopy
+ 
+ from ...core.terrain import default_terrain_cfg
+-from ...core.domain_randomization import default_domain_rand_cfg
++from ...core.randomization import default_randomization_cfg
+ 
+ 
+ def get_cfgs():
+@@ -29,7 +29,7 @@ def _env_cfg() -> dict:
+         "robot_mjcf": "assets/robot/wheelbipeV14_2/mjcf/wheelbipeV14_2.xml",
+         # 地形由所选配置决定；多地形训练可在此使用 "mixed"。
+         "terrain": default_terrain_cfg("plane"),
+-        "domain_rand": default_domain_rand_cfg(enabled=True),
++        "randomization": default_randomization_cfg(dynamics_enabled=True, sensors_enabled=True),
+         "default_joint_pos": {
+             "left_front1_joint": 0.0,
+             "left_rear1_joint": 0.0,
+@@ -95,14 +95,6 @@ def _obs_cfg() -> dict:
+         "imu": {
+             "link_name": "base_link",
+             "pos_offset": [0.0, 0.0, 0.0],
+-            "acc_noise": 0.0,
+-            "acc_bias": 0.0,
+-            "acc_random_walk": 0.0,
+-            "gyro_noise": 0.0,
+-            "gyro_bias": 0.0,
+-            "gyro_random_walk": 0.0,
+-            "delay": 0.0,
+-            "jitter": 0.0,
+         },
+         "obs_scales": {
+             "lin_vel": 1.0 / 3.5,
+@@ -121,6 +113,11 @@ def _obs_cfg() -> dict:
+ def _reward_cfg() -> dict:
+     return {
+         "tracking_sigma": 0.25,
++        # 初学站立保留运动跟踪容差；课程通过 standing_reward 逐步收紧。
++        "standing_tracking_sigma": 0.25,
++        "standing_lin_vel_threshold": 0.02,  # m/s，命令判定阈值
++        "standing_ang_vel_threshold": 0.02,  # rad/s，命令判定阈值
++        "standing_drift_deadband": 0.02,  # m/s，每个水平轴允许的平衡微动
+         "landing_base_ang_vel_weight": 0.25,
+         "tracking_gate": {
+             "height_full_error": 0.03,
+@@ -132,6 +129,7 @@ def _reward_cfg() -> dict:
+         "reward_scales": {
+             "tracking_lin_vel": -0.5,
+             "tracking_ang_vel": -0.5,
++            "standing_drift": 0.0,  # 先学平衡，后续课程再逐步启用漂移惩罚。
+             "gated_tracking_lin_vel": 2.0,
+             "gated_tracking_ang_vel": 2.0,
+             "base_balance": -5.0,
+@@ -164,8 +162,8 @@ def _command_cfg() -> dict:
+         "base_height_range": [0.22, 0.22],
+         # |vx| <= 1 m/s 使用课程角速度范围；更快时收紧到 ±1 rad/s。
+         "high_speed_ang_vel": {"lin_vel_threshold": 1.0, "max_abs_ang_vel": 1.0},
+-        # 静止站立采样
+-        "standing_probability": 0.10,
++        # 静止站立采样；课程可通过 command_ranges.standing_probability 覆盖。
++        "standing_probability": 0.25,
+     }
+ 
+ 
+@@ -179,6 +177,7 @@ def _curriculum_cfg() -> dict:
+                 "start_iteration": 0,
+                 "targets": {
+                     "domain_rand": {"strength": 0.0},
++                    "sensor_noise": {"strength": 0.0},
+                     "terrain": {"max_difficulty": 0},
+                     "reset_ranges": {
+                         "base_init_pos_range": [[0.0, 0.0], [0.0, 0.0], [0.22, 0.22]],
+@@ -187,6 +186,7 @@ def _curriculum_cfg() -> dict:
+                         "base_init_ang_vel_range": [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]],
+                     },
+                     "command_ranges": {
++                        "standing_probability": 1.0,
+                         "lin_vel_range": [0.0, 0.0],
+                         "ang_vel_range": [0.0, 0.0],
+                         "base_height_range": [0.22, 0.22],
+@@ -203,7 +203,9 @@ def _curriculum_cfg() -> dict:
+                 "name": "locomotion",
+                 "start_iteration": 500,
+                 "targets": {
++                    "standing_reward": {"tracking_sigma": 0.10},
+                     "domain_rand": {"strength": 0.0},
++                    "sensor_noise": {"strength": 0.0},
+                     "terrain": {"max_difficulty": 0},
+                     "reset_ranges": {
+                         "base_init_pos_range": [[0.0, 0.0], [0.0, 0.0], [0.22, 0.22]],
+@@ -212,6 +214,7 @@ def _curriculum_cfg() -> dict:
+                         "base_init_ang_vel_range": [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]],
+                     },
+                     "command_ranges": {
++                        "standing_probability": 0.1,
+                         "lin_vel_range": [-1.0, 1.0],
+                         "ang_vel_range": [-2.0, 2.0],
+                         "base_height_range": [0.20, 0.30],
+@@ -224,6 +227,7 @@ def _curriculum_cfg() -> dict:
+                         "floor": 0.10,
+                     },
+                     "reward_scales": {
++                        "standing_drift": -1.0,
+                         "tracking_lin_vel": -2.0,
+                         "tracking_ang_vel": -3.0,
+                         "leg_symmetry": -10.0,
+@@ -235,7 +239,9 @@ def _curriculum_cfg() -> dict:
+                 "name": "locomotion2",
+                 "start_iteration": 2000,
+                 "targets": {
++                    "standing_reward": {"tracking_sigma": 0.05},
+                     "domain_rand": {"strength": 0.0},
++                    "sensor_noise": {"strength": 0.0},
+                     "terrain": {"max_difficulty": 0},
+                     "reset_ranges": {
+                         "base_init_pos_range": [[0.0, 0.0], [0.0, 0.0], [0.22, 0.22]],
+@@ -244,6 +250,7 @@ def _curriculum_cfg() -> dict:
+                         "base_init_ang_vel_range": [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]],
+                     },
+                     "command_ranges": {
++                        "standing_probability": 0.1,
+                         "lin_vel_range": [-2.0, 2.0],
+                         "ang_vel_range": [-3.0, 3.0],
+                         "base_height_range": [0.20, 0.34],
+@@ -256,6 +263,7 @@ def _curriculum_cfg() -> dict:
+                         "floor": 0.05,
+                     },
+                     "reward_scales": {
++                        "standing_drift": -2.0,
+                         "gated_tracking_lin_vel": 5.0,
+                         "gated_tracking_ang_vel": 7.0,
+                         "base_balance": -15.0,
+@@ -269,7 +277,9 @@ def _curriculum_cfg() -> dict:
+                 "name": "locomotion_rand",
+                 "start_iteration": 4000,
+                 "targets": {
++                    "standing_reward": {"tracking_sigma": 0.02},
+                     "domain_rand": {"strength": 0.4},
++                    "sensor_noise": {"strength": 0.4},
+                     "terrain": {"max_difficulty": 0},
+                     "reset_ranges": {
+                         "base_init_pos_range": [[0.0, 0.0], [0.0, 0.0], [0.22, 0.24]],
+@@ -278,18 +288,20 @@ def _curriculum_cfg() -> dict:
+                         "base_init_ang_vel_range": [[0.0, 0.0], [0.0, 0.0], [-1.0, 1.0]],
+                     },
+                     "command_ranges": {
++                        "standing_probability": 0.25,
+                         "lin_vel_range": [-3.0, 3.0],
+                         "ang_vel_range": [-5.0, 5.0],
+                         "base_height_range": [0.20, 0.36],
+                     },
+                     "tracking_gate": {
+-                        "height_full_error": 0.01,
+-                        "height_zero_error": 0.025,
+-                        "attitude_full_angle_deg": 0.5,
++                        "height_full_error": 0.02,
++                        "height_zero_error": 0.04,
++                        "attitude_full_angle_deg": 0.6,
+                         "attitude_zero_angle_deg": 2.0,
+                         "floor": 0.05,
+                     },
+                     "reward_scales": {
++                        "standing_drift": -3.0,
+                         "joint_vel": -0.01,
+                         "wheel_action_rate": -1.5,
+                         "leg_action_rate": -0.15,
+@@ -301,6 +313,7 @@ def _curriculum_cfg() -> dict:
+                 "start_iteration": 7000,
+                 "targets": {
+                     "domain_rand": {"strength": 0.6},
++                    "sensor_noise": {"strength": 0.6},
+                     "terrain": {"max_difficulty": 0},
+                     "reset_ranges": {
+                         "base_init_pos_range": [[0.0, 0.0], [0.0, 0.0], [0.22, 0.24]],
+@@ -309,12 +322,12 @@ def _curriculum_cfg() -> dict:
+                         "base_init_ang_vel_range": [[0.0, 0.0], [0.0, 0.0], [-1.0, 1.0]],
+                     },
+                     "command_ranges": {
++                        "standing_probability": 0.25,
+                         "lin_vel_range": [-4.0, 4.0],
+                         "ang_vel_range": [-6.0, 6.0],
+                         "base_height_range": [0.20, 0.36],
+                     },
+-                    "reward_scales": {
+-                    },
++                    "reward_scales": {},
+                 },
+             },
+         ],
+@@ -322,13 +335,13 @@ def _curriculum_cfg() -> dict:
+ 
+ 
+ def get_final_command_cfg(command_cfg: dict, curriculum_cfg: dict) -> dict:
+-    """返回 eval 使用的命令范围，并累计应用到课程最终阶段。"""
++    """返回 eval 使用的命令配置（含静止采样率），累计应用到课程最终阶段。"""
+     resolved = deepcopy(command_cfg)
+     if not curriculum_cfg.get("enabled", False):
+         return resolved
+ 
+     for stage in curriculum_cfg.get("stages", []):
+         command_ranges = stage.get("targets", {}).get("command_ranges", {})
+-        for name, limits in command_ranges.items():
+-            resolved[name] = list(limits)
++        for name, value in command_ranges.items():
++            resolved[name] = deepcopy(value)
+     return resolved
+diff --git a/experiments/genesis/wheel_leg_infantry/tasks/locomotion/config_rand.py b/experiments/genesis/wheel_leg_infantry/tasks/locomotion/config_rand.py
+index b0cd523..2584806 100644
+--- a/experiments/genesis/wheel_leg_infantry/tasks/locomotion/config_rand.py
++++ b/experiments/genesis/wheel_leg_infantry/tasks/locomotion/config_rand.py
+@@ -8,7 +8,7 @@ import math
+ from copy import deepcopy
+ 
+ from ...core.terrain import default_terrain_cfg
+-from ...core.domain_randomization import default_domain_rand_cfg
++from ...core.randomization import default_randomization_cfg
+ 
+ 
+ def get_cfgs():
+@@ -29,7 +29,7 @@ def _env_cfg() -> dict:
+         "robot_mjcf": "assets/robot/wheelbipeV14_2/mjcf/wheelbipeV14_2.xml",
+         # 地形由所选配置决定；多地形训练可在此使用 "mixed"。
+         "terrain": default_terrain_cfg("plane"),
+-        "domain_rand": default_domain_rand_cfg(enabled=True),
++        "randomization": default_randomization_cfg(dynamics_enabled=True, sensors_enabled=True),
+         "default_joint_pos": {
+             "left_front1_joint": 0.0,
+             "left_rear1_joint": 0.0,
+@@ -95,14 +95,6 @@ def _obs_cfg() -> dict:
+         "imu": {
+             "link_name": "base_link",
+             "pos_offset": [0.0, 0.0, 0.0],
+-            "acc_noise": 0.05,  # 白噪声标准差，m/s²
+-            "acc_bias": 0.0,  # 固定偏置，m/s²；先假设已校准
+-            "acc_random_walk": 0.0001,  # 每次更新的偏置随机增量标准差
+-            "gyro_noise": 0.003,  # 白噪声标准差，rad/s，约 0.17°/s
+-            "gyro_bias": 0.0,  # 固定偏置，rad/s；先假设已校准
+-            "gyro_random_walk": 0.00001,
+-            "delay": 0.0,  # 秒；先单独验证噪声影响
+-            "jitter": 0.0,
+         },
+         "velocity_estimator": {
+             "wheel_radius": 0.06,
+@@ -128,6 +120,11 @@ def _obs_cfg() -> dict:
+ def _reward_cfg() -> dict:
+     return {
+         "tracking_sigma": 0.25,
++        # 初学站立保留运动跟踪容差；课程通过 standing_reward 逐步收紧。
++        "standing_tracking_sigma": 0.25,
++        "standing_lin_vel_threshold": 0.02,  # m/s，命令判定阈值
++        "standing_ang_vel_threshold": 0.02,  # rad/s，命令判定阈值
++        "standing_drift_deadband": 0.02,  # m/s，每个水平轴允许的平衡微动
+         "landing_base_ang_vel_weight": 0.25,
+         "tracking_gate": {
+             "height_full_error": 0.03,
+@@ -139,6 +136,7 @@ def _reward_cfg() -> dict:
+         "reward_scales": {
+             "tracking_lin_vel": -0.5,
+             "tracking_ang_vel": -0.5,
++            "standing_drift": 0.0,  # 先学平衡，后续课程再逐步启用漂移惩罚。
+             "gated_tracking_lin_vel": 5.0,
+             "gated_tracking_ang_vel": 5.0,
+             "base_balance": -5.0,
+@@ -168,8 +166,8 @@ def _command_cfg() -> dict:
+         # |vx| <= 1 m/s 使用课程角速度范围；更快时收紧到 ±1 rad/s。
+         # 设为 None 可恢复线速度与角速度独立采样。
+         "high_speed_ang_vel": {"lin_vel_threshold": 1.0, "max_abs_ang_vel": 1.0},
+-        # 每次重采样有 10% 概率令 vx=wz=0；高度仍按当前课程采样。
+-        "standing_probability": 0.10,
++        # 默认 25% 概率令 vx=wz=0；高度仍按当前课程采样，概率可由课程覆盖。
++        "standing_probability": 0.25,
+     }
+ 
+ 
+@@ -182,7 +180,9 @@ def _curriculum_cfg() -> dict:
+                 "name": "low",
+                 "start_iteration": 0,
+                 "targets": {
++                    "standing_reward": {"tracking_sigma": 0.04},
+                     "domain_rand": {"strength": 0.6},
++                    "sensor_noise": {"strength": 0.6},
+                     "terrain": {"max_difficulty": 1},
+                     "reset_ranges": {
+                         "base_init_pos_range": [[0.0, 0.0], [0.0, 0.0], [0.22, 0.24]],
+@@ -191,6 +191,7 @@ def _curriculum_cfg() -> dict:
+                         "base_init_ang_vel_range": [[0.0, 0.0], [0.0, 0.0], [1.0, 1.0]],
+                     },
+                     "command_ranges": {
++                        "standing_probability": 0.25,
+                         "lin_vel_range": [-2.5, 2.5],
+                         "ang_vel_range": [-4.0, 4.0],
+                         "base_height_range": [0.20, 0.34],
+@@ -209,6 +210,7 @@ def _curriculum_cfg() -> dict:
+                         "base_contact_termination_duration_s": 0.5,
+                     },
+                     "reward_scales": {
++                        "standing_drift": -1.0,
+                         "gated_tracking_lin_vel": 20.0,
+                         "gated_tracking_ang_vel": 20.0,
+                         "base_balance": -20.0,
+@@ -225,7 +227,9 @@ def _curriculum_cfg() -> dict:
+                 "name": "middle",
+                 "start_iteration": 4000,
+                 "targets": {
++                    "standing_reward": {"tracking_sigma": 0.02},
+                     "domain_rand": {"strength": 0.8},
++                    "sensor_noise": {"strength": 0.8},
+                     "terrain": {"max_difficulty": 1},
+                     "reset_ranges": {
+                         "base_init_pos_range": [[0.0, 0.0], [0.0, 0.0], [0.22, 0.24]],
+@@ -234,6 +238,7 @@ def _curriculum_cfg() -> dict:
+                         "base_init_ang_vel_range": [[-0.1, 0.1], [-0.1, 0.1], [-3.0, 3.0]],
+                     },
+                     "command_ranges": {
++                        "standing_probability": 0.25,
+                         "lin_vel_range": [-3.2, 3.2],
+                         "ang_vel_range": [-4.0, 4.0],
+                         "base_height_range": [0.20, 0.38],
+@@ -246,6 +251,7 @@ def _curriculum_cfg() -> dict:
+                         "floor": 0.05,
+                     },
+                     "reward_scales": {
++                        "standing_drift": -2.0,
+                         "gated_tracking_lin_vel": 30.0,
+                         "gated_tracking_ang_vel": 30.0,
+                         "base_contact": -40.0,
+@@ -262,7 +268,9 @@ def _curriculum_cfg() -> dict:
+                 "name": "full_range",
+                 "start_iteration": 8000,
+                 "targets": {
++                    "standing_reward": {"tracking_sigma": 0.01},
+                     "domain_rand": {"strength": 1.0},
++                    "sensor_noise": {"strength": 1.0},
+                     "terrain": {"max_difficulty": 1},
+                     "reset_ranges": {
+                         "base_init_pos_range": [[0.0, 0.0], [0.0, 0.0], [0.22, 0.24]],
+@@ -271,6 +279,7 @@ def _curriculum_cfg() -> dict:
+                         "base_init_ang_vel_range": [[-0.1, 0.1], [-0.1, 0.1], [-5.1, 5.1]],
+                     },
+                     "command_ranges": {
++                        "standing_probability": 0.25,
+                         "lin_vel_range": [-3.8, 3.8],
+                         "ang_vel_range": [-4.0, 4.0],
+                         "base_height_range": [0.20, 0.38],
+@@ -283,6 +292,7 @@ def _curriculum_cfg() -> dict:
+                         "floor": 0.05,
+                     },
+                     "reward_scales": {
++                        "standing_drift": -3.0,
+                         "gated_tracking_lin_vel": 30.0,
+                         "gated_tracking_ang_vel": 30.0,
+                         "base_contact": -40.0,
+@@ -300,13 +310,13 @@ def _curriculum_cfg() -> dict:
+ 
+ 
+ def get_final_command_cfg(command_cfg: dict, curriculum_cfg: dict) -> dict:
+-    """返回 eval 使用的命令范围，并累计应用到课程最终阶段。"""
++    """返回 eval 使用的命令配置（含静止采样率），累计应用到课程最终阶段。"""
+     resolved = deepcopy(command_cfg)
+     if not curriculum_cfg.get("enabled", False):
+         return resolved
+ 
+     for stage in curriculum_cfg.get("stages", []):
+         command_ranges = stage.get("targets", {}).get("command_ranges", {})
+-        for name, limits in command_ranges.items():
+-            resolved[name] = list(limits)
++        for name, value in command_ranges.items():
++            resolved[name] = deepcopy(value)
+     return resolved
+diff --git a/experiments/genesis/wheel_leg_infantry/tasks/locomotion/env.py b/experiments/genesis/wheel_leg_infantry/tasks/locomotion/env.py
+index b0a00f7..46ee45a 100644
+--- a/experiments/genesis/wheel_leg_infantry/tasks/locomotion/env.py
++++ b/experiments/genesis/wheel_leg_infantry/tasks/locomotion/env.py
+@@ -17,6 +17,8 @@ from tensordict import TensorDict
+ 
+ from ...core.curriculum import CurriculumManager
+ from ...core.domain_randomization import DomainRandomizationManager, MOTOR_NAMES, SPRING_NAMES
++from ...core.randomization import normalize_randomization_config
++from ...core.sensor_noise import SensorNoise
+ from ...core.kinematics import compute_leg_angle, compute_leg_length, constrain_leg_targets
+ from ...core.tensor_utils import as_gain_tensor, as_range_tensors, sample_uniform
+ from ...core.terrain import TerrainManager
+@@ -61,8 +63,10 @@ class LocomotionEnv(LocomotionRewards):
+         # 记录 TerrainManager 补齐后的配置，保证课程、日志与运行状态一致。
+         self.env_cfg["terrain"] = self.terrain.config
+ 
+-        self.domain_rand = DomainRandomizationManager(env_cfg.get("domain_rand"))
+-        self.env_cfg["domain_rand"] = self.domain_rand.config
++        randomization = normalize_randomization_config(env_cfg, obs_cfg)
++        self.domain_rand = DomainRandomizationManager(randomization["dynamics"])
++        randomization["dynamics"] = self.domain_rand.config
++        self.sensor_noise = SensorNoise(randomization["sensors"])
+         self.batch_dofs_info = (
+             self.domain_rand.requires_batched_dofs
+             or bool(env_cfg.get("handoff_on_landing", False))
+@@ -88,7 +92,7 @@ class LocomotionEnv(LocomotionRewards):
+         self.max_episode_length = math.ceil(env_cfg["episode_length_s"] / self.dt)
+ 
+         # IMU配置
+-        self.imu_cfg = dict(obs_cfg.get("imu", {}))
++        self.imu_cfg = self.sensor_noise.imu_options(obs_cfg.get("imu", {}))
+         self.imu_acc_scale = float(obs_cfg["obs_scales"].get("lin_acc", 1.0 / 9.81))
+ 
+         # 速度估计器配置
+@@ -250,11 +254,13 @@ class LocomotionEnv(LocomotionRewards):
+         self.curriculum.register_target("command_ranges", self._apply_command_ranges)
+         self.curriculum.register_target("reward_scales", self._apply_reward_scales)
+         self.curriculum.register_target("tracking_gate", self._apply_tracking_gate)
++        self.curriculum.register_target("standing_reward", self._apply_standing_reward)
+         self.curriculum.register_target("termination_limits", self._apply_termination_limits)
+         self.curriculum.register_target("action_limits", self._apply_action_limits)
+         self.curriculum.register_target("reset_ranges", self._apply_reset_ranges)
+         self.curriculum.register_target("terrain", self._apply_terrain_curriculum)
+         self.curriculum.register_target("domain_rand", self.domain_rand.apply_curriculum)
++        self.curriculum.register_target("sensor_noise", self._apply_sensor_noise)
+         if self.curriculum.update(0, force=True):
+             print(f"[curriculum] stage={self.curriculum.current_stage_name} step=0")
+ 
+@@ -315,6 +321,7 @@ class LocomotionEnv(LocomotionRewards):
+ 
+         # build环境
+         self.scene.build(n_envs=num_envs)
++        self.sensor_noise.bind_imu(self.imu)
+         # Genesis 在 build 后才生成 terrain_hf，此时才能绑定高度场供 reset/step 查询。
+         self.terrain.bind_entity(
+             self.terrain_entity,
+@@ -401,6 +408,11 @@ class LocomotionEnv(LocomotionRewards):
+         self.joint_pos = torch.empty((self.num_envs, self.num_joints), dtype=gs.tc_float, device=gs.device)
+         self.joint_vel = torch.empty_like(self.joint_pos)
+         self.wheel_vel = torch.empty((self.num_envs, self.num_wheels), dtype=gs.tc_float, device=gs.device)
++        self.sensor_noise.bind(self._encoder_truth())
++        for name, value in self.sensor_noise.measurements.items():
++            setattr(self, "measured_" + name, value)
++        self.measured_leg_length = torch.empty((self.num_envs, 2), dtype=gs.tc_float, device=gs.device)
++        self.measured_leg_angle = torch.empty_like(self.measured_leg_length)
+         self.leg_length = torch.empty((self.num_envs, 2), dtype=gs.tc_float, device=gs.device)
+         self.leg_angle = torch.empty((self.num_envs, 2), dtype=gs.tc_float, device=gs.device)
+         self.gas_spring_force = torch.empty((self.num_envs, 2), dtype=gs.tc_float, device=gs.device)
+@@ -608,6 +620,7 @@ class LocomotionEnv(LocomotionRewards):
+         self.joint_pos = self.robot.get_dofs_position(self.joints_dof_idx)
+         self.joint_vel = self.robot.get_dofs_velocity(self.joints_dof_idx)
+         self.wheel_vel = self.robot.get_dofs_velocity(self.wheels_dof_idx)
++        self._update_encoder_measurements()
+         self._update_velocity_estimator()
+         self._update_wheel_contact()
+ 
+@@ -840,6 +853,7 @@ class LocomotionEnv(LocomotionRewards):
+             self.target_wheel_vel.masked_fill_(env_idx[:, None], 0.0)
+             self.episode_length_buf.masked_fill_(env_idx, 0)
+ 
++        self._update_encoder_measurements(reset_env_ids)
+         self._reset_task_buffers(env_idx)
+ 
+         # 更新extras和episoded的reward
+@@ -968,11 +982,30 @@ class LocomotionEnv(LocomotionRewards):
+         self.gas_spring_force.copy_(force)
+         self.robot.control_dofs_force(force, self.springs_dof_idx)
+ 
++    def _encoder_truth(self):
++        return {"joint_pos": self.joint_pos, "joint_vel": self.joint_vel, "wheel_vel": self.wheel_vel}
++
++    def _update_encoder_measurements(self, reset_env_ids=None):
++        # 每个控制步只采样一次；reset 仅刷新被重置的环境。
++        if reset_env_ids is None:
++            self.sensor_noise.update(self._encoder_truth())
++        else:
++            self.sensor_noise.reset(reset_env_ids, self._encoder_truth())
++        selected = slice(None) if reset_env_ids is None else reset_env_ids
++        measured_pos = self.measured_joint_pos[selected]
++        self.measured_leg_length[selected] = compute_leg_length(
++            measured_pos, self.leg_front_joint_indices, self.leg_rear_joint_indices,
++            self.leg_upper_link_length, self.leg_lower_link_length,
++        )
++        self.measured_leg_angle[selected] = compute_leg_angle(
++            measured_pos, self.leg_front_joint_indices, self.leg_rear_joint_indices,
++        )
++
+     def _update_velocity_estimator(self):
+         """更新前向速度估计供诊断；不作为 actor 或 critic 的输入。"""
+         self.wheel_forward_vel.copy_(
+             wheel_forward_velocity(
+-                self.wheel_vel,
++                self.measured_wheel_vel,
+                 self.wheel_radius,
+                 self.wheel_velocity_sign,
+             )
+@@ -1059,11 +1092,11 @@ class LocomotionEnv(LocomotionRewards):
+             "imu_lin_acc": self.imu_lin_acc * self.imu_acc_scale,  # 3，IMU 比力（含重力）
+             "projected_gravity": self.projected_gravity,  # 3
+             **self._get_command_observation_components(),
+-            "joint_pos_offset": (self.joint_pos - self.default_joint_pos) * self.obs_scales["joint_pos"],
+-            "joint_vel": self.joint_vel * self.obs_scales["joint_vel"],
+-            "wheel_vel": self.wheel_vel * self.obs_scales["wheel_vel"],
+-            "leg_length": self.leg_length * self.obs_scales["leg_length"],  # 2
+-            "leg_angle": self.leg_angle * self.obs_scales["leg_angle"],  # 2
++            "joint_pos_offset": (self.measured_joint_pos - self.default_joint_pos) * self.obs_scales["joint_pos"],
++            "joint_vel": self.measured_joint_vel * self.obs_scales["joint_vel"],
++            "wheel_vel": self.measured_wheel_vel * self.obs_scales["wheel_vel"],
++            "leg_length": self.measured_leg_length * self.obs_scales["leg_length"],  # 2
++            "leg_angle": self.measured_leg_angle * self.obs_scales["leg_angle"],  # 2
+             "actions": self.actions,
+             **self._get_task_observation_components(),
+         }
+@@ -1118,15 +1151,23 @@ class LocomotionEnv(LocomotionRewards):
+         )
+ 
+     def _apply_command_ranges(self, values):
+-        """应用课程指令范围，并重建采样使用的上下限 Tensor。"""
+-        allowed = {"lin_vel_range", "ang_vel_range", "base_height_range"}
++        """应用课程指令范围和静止采样率；在下一次命令重采样时生效。"""
++        allowed = {"lin_vel_range", "ang_vel_range", "base_height_range", "standing_probability"}
+         unknown = set(values).difference(allowed)
+         if unknown:
+             raise KeyError(f"Unsupported command range curriculum keys: {sorted(unknown)}")
++        normalized = {}
+         for name, limits in values.items():
++            if name == "standing_probability":
++                probability = float(limits)
++                if not math.isfinite(probability) or not 0.0 <= probability <= 1.0:
++                    raise ValueError("standing_probability must be finite and in [0, 1]")
++                normalized[name] = probability
++                continue
+             if len(limits) != 2 or limits[0] > limits[1]:
+                 raise ValueError(f"{name} must be [lower, upper], got {limits}")
+-            self.command_cfg[name] = list(limits)
++            normalized[name] = list(limits)
++        self.command_cfg.update(normalized)
+         self.commands_limit = self._build_command_limits()
+ 
+     def _get_reward_scale(self, name):
+@@ -1144,6 +1185,25 @@ class LocomotionEnv(LocomotionRewards):
+             if name not in self.episode_sums:
+                 self.episode_sums[name] = torch.zeros((self.num_envs,), dtype=gs.tc_float, device=gs.device)
+ 
++    def _apply_sensor_noise(self, values):
++        self.sensor_noise.apply_curriculum(values)
++        # 第 0 阶段在创建 IMU 前执行，必须同步它的初始配置。
++        self.imu_cfg = self.sensor_noise.imu_options(self.obs_cfg.get("imu", {}))
++
++    def _apply_standing_reward(self, values):
++        """随课程收紧静止跟踪容差/漂移死区；惩罚权重仍由 reward_scales 设置。"""
++        allowed = {"tracking_sigma", "drift_deadband"}
++        unknown = set(values).difference(allowed)
++        if unknown:
++            raise KeyError(f"Unsupported standing reward curriculum keys: {sorted(unknown)}")
++        normalized = {}
++        for name, value in values.items():
++            value = float(value)
++            if not math.isfinite(value) or value < 0.0 or (name == "tracking_sigma" and value == 0.0):
++                raise ValueError(f"standing_reward.{name} must be finite and {'positive' if name == 'tracking_sigma' else 'nonnegative'}")
++            normalized["standing_" + name] = value
++        self.reward_cfg.update(normalized)
++
+     def _apply_tracking_gate(self, values):
+         """应用速度跟踪门控参数。"""
+         self.tracking_gate_cfg = merge_tracking_gate_config(self.tracking_gate_cfg, values)
+diff --git a/experiments/genesis/wheel_leg_infantry/tasks/locomotion/eval.py b/experiments/genesis/wheel_leg_infantry/tasks/locomotion/eval.py
+index 74d709d..2578f7d 100644
+--- a/experiments/genesis/wheel_leg_infantry/tasks/locomotion/eval.py
++++ b/experiments/genesis/wheel_leg_infantry/tasks/locomotion/eval.py
+@@ -7,6 +7,7 @@ import genesis as gs
+ import torch
+ 
+ from ...core.terrain import TERRAIN_PRESETS, default_terrain_cfg
++from ...core.randomization import add_randomization_arguments, apply_randomization_arguments
+ from ...tools.run_utils import (
+     load_run_configs,
+     load_runner_class,
+@@ -24,8 +25,7 @@ COMPACT_EVAL_TERRAIN_SIZE = (12.0, 6.0)
+ def _parse_args(argv=None):
+     """解析并校验评估命令行参数。"""
+     parser = argparse.ArgumentParser()
+-    parser.add_argument("--domain-rand", action=argparse.BooleanOptionalAction, default=False,
+-                        help="enable dynamics randomization; evaluation defaults to nominal dynamics")
++    add_randomization_arguments(parser, evaluation=True)
+     parser.add_argument("-e", "--exp_name", type=str, default="infantry_locomotion_v3")
+     parser.add_argument("--log-root", type=str, default="logs")
+     parser.add_argument("--version", type=str, default=None, help="version_0003 or 3; default: latest valid run")
+@@ -144,9 +144,9 @@ def main():
+     checkpoint_path = resolve_checkpoint(run_dir, args.ckpt)
+     configs = load_run_configs(run_dir)
+     env_cfg = deepcopy(configs["env_cfg"])
+-    env_cfg.setdefault("domain_rand", {})["enabled"] = args.domain_rand
+     _apply_terrain_overrides(env_cfg, args)
+-    obs_cfg = configs["obs_cfg"]
++    obs_cfg = deepcopy(configs["obs_cfg"])
++    apply_randomization_arguments(env_cfg, obs_cfg, args)
+     reward_cfg = deepcopy(configs["reward_cfg"])
+     command_cfg = get_final_command_cfg(configs["command_cfg"], configs["curriculum_cfg"])
+     train_cfg = configs["train_cfg"]
+diff --git a/experiments/genesis/wheel_leg_infantry/tasks/locomotion/rewards.py b/experiments/genesis/wheel_leg_infantry/tasks/locomotion/rewards.py
+index cdb52f9..5625139 100644
+--- a/experiments/genesis/wheel_leg_infantry/tasks/locomotion/rewards.py
++++ b/experiments/genesis/wheel_leg_infantry/tasks/locomotion/rewards.py
+@@ -8,6 +8,22 @@ import torch
+ 
+ 
+ class LocomotionRewards:
++    def _standing_command_mask(self):
++        # 只由命令决定，避免实际漂移后退出静止约束；高度命令不参与判定。
++        return (
++            (self.commands[:, 0].abs() < self.reward_cfg.get("standing_lin_vel_threshold", 0.02))
++            & (self.commands[:, 1].abs() < self.reward_cfg.get("standing_ang_vel_threshold", 0.02))
++        )
++
++    def _tracking_sigma(self):
++        moving_sigma = self.reward_cfg["tracking_sigma"]
++        # 旧 checkpoint 缺少此配置时保持原来的跟踪容差。
++        return torch.where(
++            self._standing_command_mask(),
++            self.reward_cfg.get("standing_tracking_sigma", moving_sigma),
++            moving_sigma,
++        )
++
+     def _reward_tracking_lin_vel(self):
+         return torch.square(self.base_lin_vel[:, 0] - self.commands[:, 0])
+ 
+@@ -16,11 +32,18 @@ class LocomotionRewards:
+ 
+     def _reward_gated_tracking_lin_vel(self):
+         error = torch.square(self.base_lin_vel[:, 0] - self.commands[:, 0])
+-        return self.tracking_gate * torch.exp(-error / self.reward_cfg["tracking_sigma"])
++        return self.tracking_gate * torch.exp(-error / self._tracking_sigma())
+ 
+     def _reward_gated_tracking_ang_vel(self):
+         error = torch.square(self.base_ang_vel[:, 2] - self.commands[:, 1])
+-        return self.tracking_gate * torch.exp(-error / self.reward_cfg["tracking_sigma"])
++        return self.tracking_gate * torch.exp(-error / self._tracking_sigma())
++
++    def _reward_standing_drift(self):
++        """静止命令下的水平 L1 漂移；保留平衡死区，不乘姿态/高度 gate。"""
++        excess_speed = torch.clamp_min(
++            self.base_lin_vel[:, :2].abs() - self.reward_cfg.get("standing_drift_deadband", 0.02), 0.0
++        )
++        return self._standing_command_mask() * excess_speed.sum(dim=1)
+ 
+     def _reward_base_balance(self):
+         return torch.sum(torch.square(self.projected_gravity[:, :2]), dim=1)
+diff --git a/experiments/genesis/wheel_leg_infantry/tasks/locomotion/train.py b/experiments/genesis/wheel_leg_infantry/tasks/locomotion/train.py
+index d2735be..4939a9a 100644
+--- a/experiments/genesis/wheel_leg_infantry/tasks/locomotion/train.py
++++ b/experiments/genesis/wheel_leg_infantry/tasks/locomotion/train.py
+@@ -8,6 +8,7 @@ import genesis as gs
+ 
+ # 项目内部模块
+ from ...core.train_config import get_train_cfg
++from ...core.randomization import add_randomization_arguments, apply_randomization_arguments
+ from ...tools.run_utils import (
+     add_resume_arguments,
+     create_versioned_run_dir,
+@@ -43,6 +44,7 @@ def main():
+         metavar="CHECKPOINT_PATH",
+         help="load actor/critic weights only; use --config and start a new optimizer and curriculum at iteration 0",
+     )
++    add_randomization_arguments(parser, evaluation=False)
+     add_resume_arguments(parser)
+     args = parser.parse_args()
+ 
+@@ -81,6 +83,7 @@ def main():
+             train_cfg = deepcopy(saved_configs["train_cfg"])
+             print("[train] config: saved run (--config only applies with --resume-config current)")
+ 
++    apply_randomization_arguments(env_cfg, obs_cfg, args)
+     remaining_iterations = args.max_iterations
+ 
+     print(f"[train] terrain: {env_cfg.get('terrain', {}).get('preset', 'plane')}")
