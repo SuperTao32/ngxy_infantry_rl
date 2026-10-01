@@ -30,7 +30,7 @@ def _parse_args(argv=None):
     parser.add_argument("-v", "--vis", action="store_true")
     parser.add_argument("-e", "--exp-name", default="jump_v2")
     parser.add_argument("-B", "--num-envs", type=int, default=8192)
-    parser.add_argument("--max-iterations", type=int, default=3001)
+    parser.add_argument("--max-iterations", type=int, default=1001)
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--log-root", default="logs")
     parser.add_argument("--locomotion-log-root", default=None)

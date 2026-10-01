@@ -6,6 +6,16 @@
 
 单向斜坡 `slope` / `sloped_terrain` 及由它和平地组成的 `mixed` 已移除。旧配置若选用了 `slope` 或 `mixed`，需通过 `--terrain plane` 或 `--terrain trapezoidal_wave` 等选项显式选择替代地形，避免恢复训练时悄悄改变任务。旧配置中多余的斜坡参数会被忽略。
 
+## 直接选择地形
+
+训练、评估和模型检查均使用 `--terrain` 直接选择地形；不指定时沿用配置中的 `terrain.preset`（默认 `plane`，恢复实验时使用保存的配置）。例如：
+
+```bash
+.venv/bin/python -m experiments.genesis.wheel_leg_infantry.tasks.locomotion.train \
+  --terrain trapezoidal_wave -e locomotion_trapezoidal_wave -B 64
+```
+
+
 ## 散落刚性球地形
 
 `loose_spheres` 是平地上的独立动态刚体球，直径 **17 mm**（半径 8.5 mm），单球质量 **3.2 g**，材料邵氏硬度 **90A**。球与地面、机器人及其他球参与碰撞，可滚动、可被车轮推动。每个并行环境独立采样；每次物理 reset 重新散布并清零球体线速度和角速度，仅影响被重置的环境。
@@ -26,7 +36,6 @@
   --log-root log_shared -e locomotion_v2 --terrain loose_spheres
 ```
 
-在所选 `config.py` 或 `config_2real.py` 的 `env_cfg` 中可调整：
 
 ```python
 "terrain": {

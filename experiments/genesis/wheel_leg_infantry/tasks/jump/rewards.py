@@ -72,7 +72,6 @@ class JumpRewards:
 
     def _reward_takeoff_upward_velocity(self):
         """支撑期间向上速度奖励无上界；下落惩罚仍保底为 -1。"""
-        # 归一化速度至少 1 m/s，避免剩余高度趋零时放大到百万量级。
         target = self._target_takeoff_velocity().clamp_min(1.0)
         progress = torch.clamp(self.world_vertical_velocity / target, min=-1.0)
         return self.takeoff_gate * progress
@@ -94,8 +93,7 @@ class JumpRewards:
         return self.flight_gate * progress
 
     def _reward_flight_wheel_clearance(self):
-        """奖励较低轮底高度；仅收腿在 base 下 18 cm 饱和，整体跳高仍增分。"""
-        ceiling = torch.clamp(self.jump_base_height - 0.18, min=0.0)
+        ceiling = torch.clamp(self.jump_base_height - 0.20, min=0.0)
         clearance = torch.minimum(torch.clamp(self.wheel_clearance, min=0.0), ceiling)
         return self.flight_gate * clearance
 
@@ -116,6 +114,12 @@ class JumpRewards:
         target = self.reward_cfg["short_leg_length_target"]
         error = torch.mean(torch.square(self.leg_length - target), dim=1)
         return self.flight_gate * torch.exp(-error / self.reward_cfg["leg_length_sigma"])
+
+    def _reward_landing_vertical_velocity(self):
+        """首次着陆结算触地前 base_link 世界竖直速度平方，配合负权重惩罚。"""
+        # 取最后腾空拍，避免接触冲量改变触地当拍速度；向上/向下均惩罚。
+        # 任意轮或机身首次触地均结算，失稳或错误落台也不能免除惩罚。
+        return self.jump_landing_event * torch.square(self.last_airborne_vertical_velocity)
 
     def _reward_soft_landing(self):
         tilt_error = self._jump_tilt_error()

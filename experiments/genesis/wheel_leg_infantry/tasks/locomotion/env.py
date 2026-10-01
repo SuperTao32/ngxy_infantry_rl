@@ -1293,9 +1293,13 @@ class LocomotionEnv(LocomotionRewards):
             self.env_cfg[name] = [list(axis_limits) for axis_limits in limits]
 
     def _apply_terrain_curriculum(self, values):
-        """更新允许出生的地形难度，不改变 actor/critic 接口。"""
-        self.terrain.apply_curriculum(values)
-        self.env_cfg["terrain"]["max_difficulty"] = self.terrain.max_difficulty
+        """兼容旧实验的难度课程；地形始终由 preset 决定。
+
+        保留此钩子供 JumpEnv 扩展模式比例和台阶启用课程。
+        """
+        unknown = set(values).difference({"max_difficulty"})
+        if unknown:
+            raise KeyError(f"Unsupported terrain curriculum keys: {sorted(unknown)}")
 
     # ============ 诊断与可视化：查询状态或调整相机，不推进训练时钟 ============
     def get_observation_components(self, env_idx=0):

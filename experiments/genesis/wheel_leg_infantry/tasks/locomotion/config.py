@@ -161,7 +161,7 @@ def _command_cfg() -> dict:
         "ang_vel_range": [0.0, 0.0],
         "base_height_range": [0.22, 0.22],
         # |vx| <= 1 m/s 使用课程角速度范围；更快时收紧到 ±1 rad/s。
-        "high_speed_ang_vel": {"lin_vel_threshold": 1.0, "max_abs_ang_vel": 1.0},
+        "high_speed_ang_vel": {"lin_vel_threshold": 1.5, "max_abs_ang_vel": 2.0},
         # 静止站立采样；课程可通过 command_ranges.standing_probability 覆盖。
         "standing_probability": 0.25,
     }
@@ -178,7 +178,6 @@ def _curriculum_cfg() -> dict:
                 "targets": {
                     "domain_rand": {"strength": 0.0},
                     "sensor_noise": {"strength": 0.0},
-                    "terrain": {"max_difficulty": 0},
                     "reset_ranges": {
                         "base_init_pos_range": [[0.0, 0.0], [0.0, 0.0], [0.22, 0.22]],
                         "base_init_rpy_offset_range_deg": [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]],
@@ -206,7 +205,6 @@ def _curriculum_cfg() -> dict:
                     "standing_reward": {"tracking_sigma": 0.10},
                     "domain_rand": {"strength": 0.0},
                     "sensor_noise": {"strength": 0.0},
-                    "terrain": {"max_difficulty": 0},
                     "reset_ranges": {
                         "base_init_pos_range": [[0.0, 0.0], [0.0, 0.0], [0.22, 0.22]],
                         "base_init_rpy_offset_range_deg": [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]],
@@ -242,7 +240,6 @@ def _curriculum_cfg() -> dict:
                     "standing_reward": {"tracking_sigma": 0.05},
                     "domain_rand": {"strength": 0.0},
                     "sensor_noise": {"strength": 0.0},
-                    "terrain": {"max_difficulty": 0},
                     "reset_ranges": {
                         "base_init_pos_range": [[0.0, 0.0], [0.0, 0.0], [0.22, 0.22]],
                         "base_init_rpy_offset_range_deg": [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]],
@@ -280,7 +277,6 @@ def _curriculum_cfg() -> dict:
                     "standing_reward": {"tracking_sigma": 0.02},
                     "domain_rand": {"strength": 0.4},
                     "sensor_noise": {"strength": 0.4},
-                    "terrain": {"max_difficulty": 0},
                     "reset_ranges": {
                         "base_init_pos_range": [[0.0, 0.0], [0.0, 0.0], [0.22, 0.24]],
                         "base_init_rpy_offset_range_deg": [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]],
@@ -312,9 +308,8 @@ def _curriculum_cfg() -> dict:
                 "name": "full_range",
                 "start_iteration": 7000,
                 "targets": {
-                    "domain_rand": {"strength": 0.6},
-                    "sensor_noise": {"strength": 0.6},
-                    "terrain": {"max_difficulty": 0},
+                    "domain_rand": {"strength": 1.0},
+                    "sensor_noise": {"strength": 1.0},
                     "reset_ranges": {
                         "base_init_pos_range": [[0.0, 0.0], [0.0, 0.0], [0.22, 0.24]],
                         "base_init_rpy_offset_range_deg": [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]],
@@ -323,7 +318,7 @@ def _curriculum_cfg() -> dict:
                     },
                     "command_ranges": {
                         "standing_probability": 0.25,
-                        "lin_vel_range": [-4.0, 4.0],
+                        "lin_vel_range": [-3.7, 3.7],
                         "ang_vel_range": [-6.0, 6.0],
                         "base_height_range": [0.20, 0.36],
                     },

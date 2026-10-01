@@ -1,0 +1,1475 @@
+--- git commit ---
+1c51ce7633686133cedce14a57cca0e6bcb00329
+
+
+--- git status ---
+On branch main
+Your branch is ahead of 'origin/main' by 1 commit.
+  (use "git push" to publish your local commits)
+
+Changes not staged for commit:
+  (use "git add/rm <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	deleted:    experiments/genesis/wheel_leg_infantry/core/domain_randomization.md
+	modified:   experiments/genesis/wheel_leg_infantry/core/terrain.py
+	modified:   experiments/genesis/wheel_leg_infantry/tasks/jump/README.md
+	modified:   experiments/genesis/wheel_leg_infantry/tasks/jump/config.py
+	modified:   experiments/genesis/wheel_leg_infantry/tasks/jump/env.py
+	modified:   experiments/genesis/wheel_leg_infantry/tasks/jump/train.py
+	modified:   experiments/genesis/wheel_leg_infantry/tasks/locomotion/README.md
+	modified:   experiments/genesis/wheel_leg_infantry/tasks/locomotion/config.py
+	deleted:    experiments/genesis/wheel_leg_infantry/tasks/locomotion/config_rand.py
+	modified:   experiments/genesis/wheel_leg_infantry/tasks/locomotion/env.py
+	modified:   experiments/genesis/wheel_leg_infantry/tasks/locomotion/train.py
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	experiments/genesis/wheel_leg_infantry/core/loose_spheres.py
+	experiments/genesis/wheel_leg_infantry/core/trapezoidal_wave.py
+	experiments/genesis/wheel_leg_infantry/tasks/locomotion/config_terrain.py
+
+no changes added to commit (use "git add" and/or "git commit -a") 
+
+
+--- git diff ---
+diff --git a/experiments/genesis/wheel_leg_infantry/core/domain_randomization.md b/experiments/genesis/wheel_leg_infantry/core/domain_randomization.md
+deleted file mode 100644
+index 434b527..0000000
+--- a/experiments/genesis/wheel_leg_infantry/core/domain_randomization.md
++++ /dev/null
+@@ -1,306 +0,0 @@
+-# 域随机化
+-
+-`DomainRandomizationManager` 负责采样和应用动力学参数，`LocomotionEnv`
+-负责在物理 reset 时调用；外力推扰由 `core/push.py` 按物理控制步调度，
+-在 `scene.step()` 前施加。`JumpEnv` 继承相同路径，任务交接不重新采样或重置计时。
+-
+-## 配置与启动
+-
+-统一入口是各任务的 `env_cfg["randomization"]`，包含独立的 `dynamics` 和 `sensors`。
+-以下为 `env_cfg["randomization"]["dynamics"]` 的内容（推扰暂保留在 `dynamics.push`）：
+-
+-```python
+-"dynamics": {
+-    "enabled": True,
+-    "strength": 1.0,  # 无课程覆盖时的强度，范围 0–1
+-    "push": {
+-        "enabled": True,
+-        "targets": ["base", "left_wheel", "right_wheel"],
+-        "interval_s_range": [3.0, 8.0],
+-        "duration_s": 0.02,
+-        "force_x_range": [-30.0, 30.0],  # N，世界坐标系
+-        "force_y_range": [-30.0, 30.0],
+-        "force_z_range": [-30.0, 30.0],  # 正值向上，负值向下
+-    },
+-    "friction": {"enabled": True, "ratio_range": [0.8, 1.2]},
+-    "base_mass": {"enabled": True, "added_mass_range": [-1.0, 1.0]},  # kg
+-    "com_displacement": {"enabled": True, "displacement_range": [-0.01, 0.01]},  # m
+-    "motor_strength": {"enabled": True, "ratio_range": [0.9, 1.1]},
+-    "motor_offset": {"enabled": True, "offset_range": [-0.02, 0.02]},  # rad
+-    "passive_joints": {
+-        "enabled": True,
+-        "frictionloss_range": [0.005, 0.015],  # N·m，绝对值
+-        "damping_range": [0.005, 0.015],  # N·m·s/rad，绝对值
+-        "overrides": {
+-            # 可为每个被动铰链单独设置；缺少的字段沿用上面的公共范围。
+-            "left_front2_joint": {
+-                "frictionloss_range": [0.01, 0.03],
+-                "damping_range": [0.02, 0.02],  # 固定值，不随 reset 变化
+-            },
+-        },
+-    },
+-    "gas_spring": {
+-        "enabled": True,
+-        "preload_force_range": [0.9, 1.1],
+-        "stiffness_range": [0.9, 1.1],
+-        "damping_range": [0.9, 1.1],
+-    },
+-    "motor_gains": {
+-        "enabled": True,
+-        "joint_kp_enabled": True,
+-        "joint_kd_enabled": True,
+-        "wheel_kd_enabled": True,
+-        "joint_kp_range": [0.9, 1.1],
+-        "joint_kd_range": [0.9, 1.1],
+-        "wheel_kd_range": [0.9, 1.1],
+-    },
+-}
+-```
+-
+-所有范围均匀采样；推扰、质量、质心、零点和被动关节参数使用标注的物理单位，其余为倍率。
+-上面的被动关节 override 仅演示单独配置，默认 `overrides={}`。
+-新 locomotion 配置默认启用全部项目，但课程从强度 0 开始逐渐增加；
+-旧配置缺少动力学随机化字段时关闭；旧 `env_cfg["domain_rand"]` 会自动迁移到新入口。
+-已保存的配置若缺少新增的推扰、质量、质心、强度、零点、气弹簧或被动关节组，该组默认关闭，
+-避免续训时改变原实验分布；需要启用时在配置中显式添加对应组。
+-jump 的动力学配置独立设置，暂时默认关闭，
+-以后将对应配置中的 `default_domain_rand_cfg(enabled=False)` 改为 `True` 即可。
+-这些范围是温和的起始值，尚未经过训练效果验证。
+-
+-```bash
+-# 按当前配置训练（默认开启）
+-python -m experiments.genesis.wheel_leg_infantry.tasks.locomotion.train
+-# 选择另一套训练配置（包含动力学随机化、地形、观测、奖励和课程）
+-python -m experiments.genesis.wheel_leg_infantry.tasks.locomotion.train --config config_rand
+-# 续训时使用所选配置文件；不加 --resume-config current 则沿用已保存的配置
+-python -m experiments.genesis.wheel_leg_infantry.tasks.locomotion.train --resume latest --resume-config current --config config_rand
+-# 只加载模型权重，用 config_rand.py 从第 0 轮重新训练（替换为实际 checkpoint 路径）
+-python -m experiments.genesis.wheel_leg_infantry.tasks.locomotion.train --config config_rand --load-weights /path/to/model_6000.pt
+-# 普通评估默认关闭动力学域随机化；启用时采用已保存的范围
+-python -m experiments.genesis.wheel_leg_infantry.tasks.locomotion.eval --domain-rand
+-```
+-
+-locomotion 训练通过 `--config config`（默认，`config.py`）或 `--config config_rand`
+-（`config_rand.py`）选择配置，域随机化开关和地形在所选文件中设置。
+-locomotion 和 jump 的训练、评估均支持 `--domain-rand` / `--no-domain-rand`，
+-以及独立的 `--sensor-noise` / `--no-sensor-noise`。
+-训练默认沿用配置；评估默认关闭动力学随机化，传感器噪声沿用保存的配置。
+-命令行覆盖会在保存新运行配置之前应用。固定动作延迟仍由 `simulate_action_latency` 控制。
+-
+-`--load-weights PATH` 加载 actor/critic 权重（包含模型中保存的观测归一化状态），
+-不加载源运行配置、优化器、学习率或迭代数。训练和课程从所选配置的第 0 轮开始，
+-`--max_iterations` 为本次新训练的总轮数，结果保存到新版本目录。
+-该选项不能与 `--resume`、`--checkpoint` 或 `--resume-config current` 混用；
+-网络结构、观测和动作定义应与源权重兼容，权重加载使用严格形状检查。
+-
+-## 传感器噪声
+-
+-默认值定义在 `core/sensor_noise.py::default_sensor_noise_cfg()`：
+-
+-```python
+-sensors = env_cfg["randomization"]["sensors"]
+-sensors["enabled"] = True
+-sensors["strength"] = 1.0
+-sensors["joint_vel"].update(std=0.1, bias_range=[-0.02, 0.02])  # rad/s
+-sensors["wheel_vel"].update(std=0.2, bias_range=[0.0, 0.0])  # rad/s
+-sensors["joint_pos"].update(enabled=True, std=0.001, bias_range=[0.0, 0.0])  # rad
+-sensors["imu"]["acc_noise"] = 0.05  # m/s²
+-sensors["imu"]["gyro_noise"] = 0.003  # rad/s
+-```
+-
+-`config.py` 和 `config_rand.py` 均开启传感器总开关；普通课程前三阶段强度为 0，后两阶段为 0.4、0.6；随机化课程为 0.6、0.8、1.0。
+-关节位置噪声默认关闭。jump 继承来源 locomotion 的传感器配置，并深拷贝以便独立调参。
+-默认标准差是待实机标定的起点；应依据固件滤波后实际送入策略的反馈数据调整。
+-
+-编码器通道各有 `enabled`、高斯白噪声 `std` 和均匀分布 `bias_range`。
+-每次物理 reset 为选中的环境、各个关节/轮子独立采样偏置，回合内保持；白噪声每控制步更新一次。
+-同一拍的 actor、critic 观测前缀、速度估计器共享测量缓存，重复组装观测不重新加噪。
+-局部 reset 只更新对应环境；locomotion → jump 交接保留测量和偏置状态。
+-
+-`strength` 范围为 `[0, 1]`，只控制传感器误差幅度，与动力学课程独立。
+-课程通过独立的 `targets.sensor_noise` 覆盖幅度，省略时继承上一阶段：
+-
+-```python
+-"targets": {
+-    "domain_rand": {"strength": 0.4},
+-    "sensor_noise": {"strength": 0.4},
+-}
+-```
+-
+-课程不会覆盖 `enabled`，`--no-sensor-noise` 始终有效；没有此课程目标的旧配置保持原强度。
+-幅度为 0 时关闭白噪声、偏置和随机游走增量；`enabled=False` 还关闭固定延迟/抖动。
+-编码器关闭时不消耗额外随机数。阶段切换后下一次测量使用新幅度；已有编码器偏置按比例缩放，
+-从 0 开启时初始化偏置，不重置机器人物理状态。IMU 使用 Genesis 公开 setter，仍只加噪一次。
+-IMU 随机游走更新的是后续增量幅度，历史累积状态沿用 Genesis 的生命周期。
+-
+-IMU 白噪声、固定偏置和随机游走幅度由此缩放后交给 Genesis；
+-`delay`/`jitter` 使用秒，启用时保留配置值，不随幅度缩放；`jitter <= delay`。
+-随机游走沿用 Genesis 每传感器更新的增量定义，改变更新频率时需要重新标定。
+-IMU 偏置保留 Genesis 的固定参数语义，不是编码器的每回合随机偏置。
+-IMU 在 reset 首帧仍沿用原来的初始化读数，从后续仿真步开始读取 Genesis 传感器。
+-
+-安装信息 `link_name`、`pos_offset` 仍在 `obs_cfg["imu"]`，观测缩放仍在 `obs_scales`。
+-旧存档中的 IMU 误差字段会迁移，保留原值，不为旧实验自动开启编码器噪声。
+-如果同时存在新旧误差配置，以新 `randomization` 中对应组为准，保存时移除旧入口。
+-新旧配置不会在 IMU 上重复加噪。
+-
+-测量误差在物理单位下施加，然后才做观测缩放。
+-`joint_pos/joint_vel/wheel_vel` 继续保留真值供控制、奖励、终止判断和 PD 诊断使用；
+-`measured_*` 供观测及轮速估计使用。腿长、腿角从带噪关节位置重新计算。
+-观测顺序和维度不变，critic 仍继承 actor 观测并追加仿真特权信息。
+-本次未加入姿态估计误差，`projected_gravity` 仍来自仿真姿态；
+-编码器滤波、随机游走和延迟也尚未建模。
+-
+-```bash
+-# 纯净评估
+-python -m experiments.genesis.wheel_leg_infantry.tasks.locomotion.eval --no-domain-rand --no-sensor-noise
+-# 只测试传感器误差（使用 checkpoint 保存的幅度）
+-python -m experiments.genesis.wheel_leg_infantry.tasks.locomotion.eval --no-domain-rand --sensor-noise
+-# 两组同时开启
+-python -m experiments.genesis.wheel_leg_infantry.tasks.locomotion.eval --domain-rand --sensor-noise
+-# config_rand 训练时只保留动力学随机化
+-python -m experiments.genesis.wheel_leg_infantry.tasks.locomotion.train --config config_rand --no-sensor-noise
+-```
+-
+-注意：旧存档若保存的幅度为零，`--sensor-noise` 只打开开关，不自动替换这些幅度。
+-动力学课程目标名仍为 `domain_rand`，仅影响 `randomization.dynamics`。
+-
+-## 随机化强度课程
+-
+-在课程阶段的 `targets` 中加入：
+-
+-```python
+-{
+-    "name": "gentle_motion",
+-    "start_iteration": 1000,
+-    "targets": {
+-        "domain_rand": {"strength": 0.2},
+-        # 其他已有课程目标继续放在这里
+-    },
+-}
+-```
+-
+-`strength` 必须在 `[0, 1]` 内；0 表示域随机化使用标称参数且不触发推扰，
+-1 使用完整配置范围。设为 0 不会关闭命令、初始姿态或地形等独立课程，
+-也不改变 IMU 噪声和原有固定动作延迟。
+-
+-目前 locomotion 的默认阶段为：
+-
+-| PPO iteration 起点 | 阶段 | strength |
+-| --- | --- | --- |
+-| 0 | stand | 0.0 |
+-| 1000 | gentle_motion | 0.2 |
+-| 2000 | locomotion | 0.4 |
+-| 4000 | locomotion2 | 0.6 |
+-| 6000 | locomotion3 | 0.8 |
+-| 8000 | full_range | 1.0 |
+-
+-强度收缩规则是 `标称值 + strength × (完整范围采样值 - 标称值)`：
+-
+-- 摩擦、电机增益/强度和气弹簧倍率的标称值为 1。
+-  例如 `[0.8, 1.2]` 在强度 0.5 下变成 `[0.9, 1.1]`。
+-- 质量增量、质心和电机零点偏移的标称值为 0。
+-  例如质量 ±1 kg 在强度 0.5 下为 ±0.5 kg。
+-- 被动关节摩擦/阻尼围绕 scene.build 后读取的模型值插值，
+-  而非围绕 0；`overrides` 中的固定值也参与此插值。
+-- 推扰三轴分力乘以该环境的回合强度，强度 0 不触发事件；
+-  触发间隔和持续时间不随强度改变。
+-
+-课程只更新**下一次物理 reset 的目标强度**，不会立即重置环境或覆盖正在运行的
+-动力学参数。局部 reset 只让选中的环境采用新强度；长回合可能在旧强度下继续运行。
+-推扰同样保持本回合强度，正在施加的脉冲不会因课程切换突然改变。
+-`begin_jump_rollout()` 不属于物理 reset，因此保留当前强度和推扰计时。
+-
+-课程的强度不会隐式打开被配置关闭的项目，也不会修改保存的完整随机化范围。
+-续训时已有 `set_training_iteration()` 会恢复对应课程阶段后 reset，采用恢复点强度。
+-旧课程不含此目标时沿用 `env_cfg["domain_rand"]["strength"]`，缺省为 1；
+-jump 也可在自己的阶段 `targets` 中使用相同字段，其默认域随机化仍关闭。
+-评估不重跑课程，`--domain-rand` 使用环境配置中的强度（默认 1）。
+-
+-`env.domain_rand.diagnostics(env_idx)` 的 `domain_rand_strength` 是下次 reset 的目标，
+-`domain_rand_episode_strength` 是该环境当前回合实际使用的强度。
+-
+-## 采样与交接规则
+-
+-- 外力推扰：每环境独立计时，每次从 `targets` 中均匀选一个位置，分别从
+-  `force_x_range`、`force_y_range`、`force_z_range` 独立均匀采样三个有符号分量，
+-  在整个脉冲内保持不变。施力点为目标 link 的质心，力使用世界坐标，
+-  Z 正值向上、负值向下。轮子受到的力会通过接触和连杆传递到机身。
+-  范围是各轴分力的边界，不是合力大小的边界；`[value, value]` 固定该轴，
+-  `[0, 0]` 关闭该轴。例如只需要水平推扰时设置 `force_z_range=[0, 0]`。
+-  原 `force_xy_norm_range` 已移除；旧的推扰配置需删掉该字段并显式填写三轴范围，
+-  新的分量独立采样方式与旧的“水平幅值+角度”分布不同，不进行隐式转换。
+-  `base` 按 `base_link_name` 定位，左右轮按 `wheel_link_names` 的左右顺序定位，
+-  solver 接口使用解析后的全局 link 索引。
+-  只推轮子可设 `targets=["left_wheel", "right_wheel"]`，只推左轮可设 `["left_wheel"]`。
+-  同一环境的同次事件只选一个位置，不会同时给三个位置各施加一份力。
+-  `interval_s_range` 是两次脉冲起点的间隔，最小值必须不小于 `duration_s`。
+-  时间向上量化为控制步数；当前 dt=0.02 s，0.02 s 脉冲持续一拍，0.1 s 持续五拍。
+-  reset 后先等待一个采样间隔；每个待施力控制步调用一次外力接口，Genesis 在这个
+-  控制步的全部物理子步完成后自动清除外力，多拍脉冲需逐拍重新提交同一个力。
+-  冲量约为力乘以实际持续时间。完整强度下默认各轴 ±30 N、3–8 s；这些范围尚未验证训练效果。
+-  物理 reset 清除该环境的脉冲状态并重采样计时；PPO 时钟、jump 阶段切换不影响计时。
+-  jump 开启后预热和跳跃阶段均可能触发，不按腾空/接触状态过滤。
+-- 摩擦：每个环境采样一个倍率，应用于机器人和全部地形实体（包括箱体楼梯和
+-  jump 评估台阶）。Genesis 取接触双方摩擦系数的最大值，因此两侧同步缩放。
+-  极低系数仍受 Genesis 接触摩擦最小值约束。
+-- 基座质量：每环境采样一个质量增量，使用 Genesis 的 `set_mass_shift`。
+-  根据 `base_link_name` 查找 link，通过 entity 接口换算 solver 索引，不写死编号。
+-  标称基座质量加最小增量必须大于零。重复 reset 设置新的增量，不累加。
+-- 质心：每环境、每轴独立采样位移，使用 `set_COM_shift`，仅影响基座。
+-  质量和质心均使用 Genesis 的 shift 机制，不额外随机化惯量张量。
+-- 增益：每个环境、每个电机独立采样。腿部 Kp、腿部 Kd、轮子 Kd 可分别开关。
+-- 电机强度：每环境一个倍率，所有受控电机共享；同时乘到 PD 增益和力矩上限，
+-  等价于 `strength * clip(PD, -nominal_limit, nominal_limit)`。
+-  增益随机化和强度随机化同时启用时，倍率相乘；不缩放动作幅度，也不缩放气弹簧力。
+-  保留 Genesis 每个物理子步的闭环控制。增益或强度随机化开启时，
+-  场景使用 `batch_dofs_info=True`。
+-- 被动关节：自动选择未在腿电机、轮电机和气弹簧施力名单中的 revolute 关节。
+-  当前模型是左右侧 `front2_joint`、`front3_joint`、`front4_joint`、`rear2_joint`、
+-  `spring1_joint`，共 10 个铰链。XML 的 `class="motor"` 是默认参数类，
+-  不代表这些关节有电机驱动。默认模型参数均为 frictionloss=0.01、damping=0.01。
+-  `frictionloss` 是关节库仑摩擦力矩，`damping` 是被动黏性阻尼（力矩为 `-damping * qdot`），
+-  分别调用 `set_dofs_frictionloss` 和 `set_dofs_damping`；与接触摩擦、电机 Kd 分开。
+-  每环境、每关节、每项独立采样绝对值，因此标称为零的参数也可改为非零。
+-  组开启时启用 `batch_dofs_info=True`。设置范围 `[value, value]` 可固定参数，
+-  `[0, 0]` 可取消该摩擦/阻尼；范围必须非负。组关闭则保留模型参数。
+-  `overrides` 的名称必须属于上述被动关节，拼错或填入主动关节会报错。
+-- 电机零点：腿部每电机独立采样 rad 偏移，在延迟后的动作转成位置目标之后加上，
+-  然后经过原有几何限位。正偏移表示增大位置目标。轮子采用速度控制，角度零点
+-  不影响其速度目标；不会把 rad 偏移加到 rad/s 上。初始关节姿态和真实观测不修改。
+-- 气弹簧：每环境、每根弹簧、每项参数独立采样，顺序与 `spring_names` 一致。
+-  三个范围均为相对于 `gas_spring_preload_force`、`gas_spring_stiffness`、
+-  `gas_spring_damping` 标称值的倍率。实际施力使用
+-  `F = F0 + k * clamp(max_compression - position, 0, max_compression) - c * velocity`。
+-  默认标称值 420 N、1400 N/m、50 N·s/m 对应采样范围 378–462 N、1260–1540 N/m、
+-  45–55 N·s/m。可将某一倍率范围设为 `[1.0, 1.0]` 固定该参数，或用组内
+-  `enabled=False` 关闭整组。`gas_spring_max_compression` 是机械行程，保持原值。
+-  原有施力时机不变：每个控制步读取弹簧状态、更新施力，物理子步内保持该施力。
+-- reset：仅改变被选中的环境；动力学参数倍率在整个物理回合内保持不变，外力事件独立计时。
+-- jump 交接：先保存 locomotion 的原始标称参数；切换时计算
+-  `当前模式标称参数 × 当前环境增益倍率 × 电机强度倍率`，不会覆盖倍率或累乘。
+-  `begin_jump_rollout()` 保留回合随机化强度、质量、质心、摩擦、控制偏移、气弹簧、被动关节参数、推扰计时及已有动作历史。
+-- 观测与奖励：保持原有维度和真值路径。新增参数不自动进入 actor/critic。
+-
+-`env.domain_rand.diagnostics(env_idx)` 返回摩擦倍率、质量增量、质心位移、
+-电机强度、零点偏移、各电机增益倍率，以及气弹簧的实际参数和倍率；
+-被动关节随机化开启时还返回 `passive_joint_names`、`passive_joint_damping`、
+-`passive_joint_frictionloss`，张量顺序与关节名一致。
+-`push_target` 和 `push_force_world_N` 表示最近一个控制步的目标与外力；
+-无施力时分别为 `None` 和零向量。`push_steps_remaining` 是当前脉冲还需施力的拍数，
+-`push_steps_until_next` 是下次脉冲的倒计时。
+-`env.get_pd_diagnostics(env_idx)` 返回该环境实际使用的增益。
+-`env.joint_kp` 等运行时电机参数现在统一为 `[num_envs, num_motors]`。
+-`env.gas_spring_preload_force/stiffness/damping` 为 `[num_envs, num_springs]`，
+-与 manager 的实际参数共用 buffer；任务配置中的标称值保持不变。
+-
+-后续动力学参数可扩展 manager 的 `bind/reset`。传感器误差统一由
+-`randomization.sensors` 配置，IMU 的执行仍交给 Genesis，避免重复加噪。
+-
+-
+-覆盖关闭兼容、随机种子、范围校验、局部 reset 隔离、接触双方摩擦更新、
+-电机模式切换及重复 reset 不累乘等行为。可选仿真测试检查 solver 中的
+-实际增益、质量和质心偏移、限幅前后电机力矩、位置目标偏移、气弹簧实际施力、
+-被动关节参数写入及主动关节隔离、轮子外力施加和自动清除、步进后观测有限性、
+-旧配置兼容，以及 jump 交接前后随机参数和动作历史连续性。
+-课程测试覆盖零强度、各类参数的插值、局部 reset 延迟生效及按迭代数恢复强度。
+diff --git a/experiments/genesis/wheel_leg_infantry/core/terrain.py b/experiments/genesis/wheel_leg_infantry/core/terrain.py
+index d6aeac3..1a59849 100644
+--- a/experiments/genesis/wheel_leg_infantry/core/terrain.py
++++ b/experiments/genesis/wheel_leg_infantry/core/terrain.py
+@@ -1,6 +1,6 @@
+ """Genesis 地形配置、生成与高度查询。
+ 
+-地形是任务 MDP 的公共基础设施：任务配置只选择 preset 和难度，环境通过
++地形是任务 MDP 的公共基础设施：任务配置直接选择 preset 和几何参数，环境通过
+ ``TerrainManager`` 创建实体、分配出生 patch，并查询机器人脚下的地面高度。
+ """
+ 
+@@ -11,87 +11,74 @@ from copy import deepcopy
+ 
+ import torch
+ 
++from .loose_spheres import LooseSpheres
++from .trapezoidal_wave import TrapezoidalWave
++
+ TERRAIN_PRESETS = (
+     "plane",
+-    "flat",
+-    "slope",
+-    "rough",
+-    "waves",
+-    "obstacles",
+     "stairs",
+-    "mixed",
++    "loose_spheres",
++    "platform_ridge",
++    "trapezoidal_wave",
+ )
+ 
+ _PRESET_TYPES = {
+-    "flat": [["flat_terrain"]],
+-    "slope": [["sloped_terrain"]],
+-    "rough": [["random_uniform_terrain"]],
+-    "waves": [["wave_terrain"]],
+-    "obstacles": [["discrete_obstacles_terrain"]],
+-    # 单独的 stairs preset 使用箱体生成真实的水平踏面和垂直立面。
+-    # mixed 继续使用 Genesis 高度场楼梯，以便和其他 patch 合并为一张地形。
+     "stairs": [["box_stairs"]],
+-    # 从左上到右下大致按难度增加。课程只改变允许出生的 patch，
+-    # 不在训练中重建静态地形。
+-    "mixed": [
+-        ["flat_terrain", "sloped_terrain", "pyramid_sloped_terrain", "random_uniform_terrain"],
+-        ["wave_terrain", "discrete_obstacles_terrain", "stairs_terrain", "pyramid_stairs_terrain"],
+-    ],
++    "platform_ridge": [["platform_ridge"]],
++    "trapezoidal_wave": [["trapezoidal_wave"]],
++    "loose_spheres": [["loose_spheres"]],
+ }
+ 
+-_TYPE_DIFFICULTY = {
+-    "flat_terrain": 0,
+-    "sloped_terrain": 1,
+-    "pyramid_sloped_terrain": 1,
+-    "random_uniform_terrain": 1,
+-    "wave_terrain": 2,
+-    "discrete_obstacles_terrain": 2,
+-    "stairs_terrain": 3,
+-    "pyramid_stairs_terrain": 3,
+-    "box_stairs": 3,
+-    "stepping_stones_terrain": 3,
+-    "fractal_terrain": 3,
+-}
+ 
+ 
+ def default_terrain_cfg(preset: str = "plane") -> dict:
+     """返回适合当前 0.06 m 轮子的保守地形参数。"""
+     return {
+         "preset": preset,
++        "bounded": preset == "flat",  # 兼容旧 flat；plane 默认不启用边界复位
+         "tile_size": [24.0, 8.0],
+         "horizontal_scale": 0.10,
+         "vertical_scale": 0.005,
+         "randomize": True,
+         "assignment": "random",
+-        "max_difficulty": 3,
+         # 机器人接近 patch 接缝时按 timeout 重置，避免把接缝当成任务障碍。
+         "boundary_margin": 0.75,
+         "subterrain_parameters": {
+-            "sloped_terrain": {"slope": 0.08},
+-            "pyramid_sloped_terrain": {"slope": -0.08},
+-            "random_uniform_terrain": {
+-                "min_height": -0.025,
+-                "max_height": 0.025,
+-                "step": 0.005,
+-                "downsampled_scale": 0.30,
+-            },
+-            "wave_terrain": {"num_waves": 4.0, "amplitude": 0.035},
+-            "discrete_obstacles_terrain": {
+-                "max_height": 0.035,
+-                "min_size": 0.35,
+-                "max_size": 1.0,
+-                "num_rects": 30,
++            "trapezoidal_wave": {
++                "height": 0.20,
++                "platform_length": 1.50,  # 高、低平台各自的水平长度
++                "slope_angle_deg": 23.0,
++                "base_thickness": 0.10,
+             },
+-            "stairs_terrain": {"step_width": 0.50, "step_height": 0.025},
+-            "pyramid_stairs_terrain": {"step_width": 0.50, "step_height": -0.025},
+             "box_stairs": {
+-                "step_depth": 0.80,
++                "step_depth": 2.00,
+                 "step_height": 0.20,
+                 "num_steps": 4,
+                 # 机器人出生在 tile 中心的高平台；第一处下台阶位于其前方 1 m。
+                 "approach_length": 1.0,
+                 "base_thickness": 0.10,
+             },
++            "platform_ridge": {
++                # 高度均相对地面；长度/宽度均沿前进方向 +x。
++                "first_height": 0.20,
++                "first_length": 0.80,
++                "ridge_height": 0.35,
++                "ridge_width": 0.15,
++                "second_height": 0.30,
++                "second_length": 0.80,  # 也可设为 None 延伸到 tile 边界
++                "approach_length": 1.0,  # tile 中心到一级平台前沿的距离
++                "base_thickness": 0.10,
++            },
++            "loose_spheres": {
++                "diameter": 0.017,  # m，17 mm 为直径
++                "count": 256,
++                "scatter_size": [4.0, 2.0],  # m，以出生 patch 中心为中心
++                "spawn_clearance": 0.5,  # 中央无球正方形的半边长，避免出生穿插
++                "mass": 0.0032,  # kg，单球 3.2 g；由质量和直径推导密度
++                "shore_a": 90.0,  # 材料信息；当前刚体模型不据此改变接触刚度或摩擦
++                "friction": 0.3,
++                "ground_friction": 0.8,
++            },
+         },
+     }
+ 
+@@ -102,7 +89,15 @@ def resolve_terrain_cfg(config: dict | None) -> dict:
+     if not isinstance(raw, dict):
+         raise TypeError("env_cfg['terrain'] must be a dictionary")
+ 
++    # 兼容旧实验；难度编号不再参与地形选择。
++    raw.pop("max_difficulty", None)
+     preset = raw.get("preset", "plane")
++    if preset == "flat":
++        # 旧 flat 的表面也是 z=0，迁移到 Plane 并保留边界 timeout。
++        preset = raw["preset"] = "plane"
++        raw.setdefault("bounded", True)
++    if preset in {"slope", "mixed"}:
++        raise ValueError(f"terrain preset {preset!r} was removed; select a supported terrain with --terrain: {TERRAIN_PRESETS}")
+     if preset not in TERRAIN_PRESETS:
+         raise ValueError(f"unsupported terrain preset {preset!r}; choose from {TERRAIN_PRESETS}")
+ 
+@@ -110,6 +105,9 @@ def resolve_terrain_cfg(config: dict | None) -> dict:
+     custom_parameters = raw.pop("subterrain_parameters", {})
+     resolved.update(raw)
+     for terrain_type, parameters in custom_parameters.items():
++        # 旧实验可能携带已移除类型的参数，仅合并当前支持的地形。
++        if terrain_type not in resolved["subterrain_parameters"]:
++            continue
+         resolved["subterrain_parameters"].setdefault(terrain_type, {}).update(parameters)
+     tile_size = tuple(float(value) for value in resolved["tile_size"])
+     if len(tile_size) != 2 or not all(math.isfinite(value) and value > 0.0 for value in tile_size):
+@@ -126,12 +124,12 @@ def resolve_terrain_cfg(config: dict | None) -> dict:
+         if not math.isclose(cells, round(cells), rel_tol=0.0, abs_tol=1e-6):
+             raise ValueError("each terrain.tile_size value must be divisible by horizontal_scale")
+ 
++    if not isinstance(resolved["bounded"], bool):
++        raise TypeError("terrain.bounded must be a boolean")
++
+     assignment = resolved["assignment"]
+     if assignment not in {"random", "cyclic"}:
+         raise ValueError("terrain.assignment must be 'random' or 'cyclic'")
+-    resolved["max_difficulty"] = int(resolved["max_difficulty"])
+-    if resolved["max_difficulty"] < 0:
+-        raise ValueError("terrain.max_difficulty cannot be negative")
+ 
+     boundary_margin = resolved.get("boundary_margin")
+     if boundary_margin is not None:
+@@ -178,13 +176,14 @@ def bilinear_height_at(
+ 
+ 
+ class TerrainManager:
+-    """管理静态地形、并行环境出生 patch 和地面高度查询。"""
++    """管理静态/动态地形、并行环境出生 patch 和地面高度查询。"""
+ 
+     def __init__(self, config: dict | None):
+         self.config = resolve_terrain_cfg(config)
+         self.preset = self.config["preset"]
+         self.is_plane = self.preset == "plane"
+         self.is_box_stairs = self.preset == "stairs"
++        self.is_platform_ridge = self.preset == "platform_ridge"
+         self.tile_types = [["flat_terrain"]] if self.is_plane else deepcopy(_PRESET_TYPES[self.preset])
+         self.n_subterrains = (len(self.tile_types), len(self.tile_types[0]))
+         self.tile_size = tuple(self.config["tile_size"])
+@@ -193,12 +192,19 @@ class TerrainManager:
+             self.n_subterrains[1] * self.tile_size[1],
+         )
+         self.origin = (-0.5 * self.total_size[0], -0.5 * self.total_size[1], 0.0)
+-        self.max_difficulty = self.config["max_difficulty"]
+         self.height_field: torch.Tensor | None = None
+         self._dtype = None
++        self.loose_spheres = (
++            LooseSpheres(self.config["subterrain_parameters"]["loose_spheres"], self.tile_size) if self.preset == "loose_spheres" else None
++        )
++        self.max_collision_pairs = 20 if self.loose_spheres is None else 20 + 8 * self.loose_spheres.count
+ 
+         self.flat_tile_types = tuple(value for row in self.tile_types for value in row)
+-        self.tile_difficulties = tuple(_TYPE_DIFFICULTY[value] for value in self.flat_tile_types)
++
++        self.trapezoidal_wave = (
++            TrapezoidalWave(self.config["subterrain_parameters"]["trapezoidal_wave"], self.tile_size) if self.preset == "trapezoidal_wave" else None
++        )
++        self.platform_boxes = self._configure_platform_ridge() if self.is_platform_ridge else ()
+ 
+         self.stair_step_depth = None
+         self.stair_step_height = None
+@@ -208,6 +214,44 @@ class TerrainManager:
+         if self.is_box_stairs:
+             self._configure_box_stairs()
+ 
++    def _configure_platform_ridge(self):
++        """三个连续、无重叠的固定箱体，避免高度场把 15 cm 窄凸台插值成斜坡。"""
++        parameters = self.config["subterrain_parameters"]["platform_ridge"]
++        values = {}
++        for name in ("first_height", "first_length", "ridge_height", "ridge_width", "second_height", "base_thickness"):
++            value = float(parameters[name])
++            if not math.isfinite(value) or value <= 0:
++                raise ValueError(f"platform_ridge.{name} must be positive and finite")
++            values[name] = value
++        approach = float(parameters["approach_length"])
++        if not math.isfinite(approach) or approach < 0:
++            raise ValueError("platform_ridge.approach_length must be nonnegative and finite")
++        if values["ridge_height"] <= max(values["first_height"], values["second_height"]):
++            raise ValueError("platform_ridge.ridge_height must exceed both platform heights")
++        min_x, min_y, base_z = self.origin
++        max_x, max_y = min_x + self.tile_size[0], min_y + self.tile_size[1]
++        start_x = min_x + self.tile_size[0] / 2 + approach
++        ridge_x = start_x + values["first_length"]
++        second_x = ridge_x + values["ridge_width"]
++        margin = self.config["boundary_margin"] or 0.0
++        if second_x >= max_x - margin:
++            raise ValueError("platform_ridge must leave a second platform inside tile_size and boundary_margin")
++        second_length = parameters["second_length"]
++        end_x = max_x
++        if second_length is not None:
++            second_length = float(second_length)
++            if not math.isfinite(second_length) or second_length <= 0:
++                raise ValueError("platform_ridge.second_length must be positive and finite or None")
++            end_x = second_x + second_length
++            if end_x > max_x:
++                raise ValueError("platform_ridge.second_length extends beyond terrain.tile_size")
++        return (
++            ((min_x, min_y, base_z - values["base_thickness"]), (max_x, max_y, base_z)),
++            ((start_x, min_y, base_z), (ridge_x, max_y, base_z + values["first_height"])),
++            ((ridge_x, min_y, base_z), (second_x, max_y, base_z + values["ridge_height"])),
++            ((second_x, min_y, base_z), (end_x, max_y, base_z + values["second_height"])),
++        )
++
+     def _configure_box_stairs(self) -> None:
+         parameters = self.config["subterrain_parameters"]["box_stairs"]
+         self.stair_step_depth = float(parameters["step_depth"])
+@@ -235,8 +279,10 @@ class TerrainManager:
+ 
+         if self.is_plane:
+             return gs.morphs.Plane()
+-        if self.is_box_stairs:
+-            raise RuntimeError("box stairs contain multiple morphs; use add_to_scene()")
++        if self.loose_spheres is not None:
++            raise RuntimeError("loose spheres contain multiple morphs; use add_to_scene()")
++        if self.is_box_stairs or self.is_platform_ridge or self.trapezoidal_wave is not None:
++            raise RuntimeError("segmented terrain contains multiple morphs; use add_to_scene()")
+         return gs.morphs.Terrain(
+             pos=self.origin,
+             randomize=bool(self.config["randomize"]),
+@@ -270,50 +316,38 @@ class TerrainManager:
+         return tuple(boxes)
+ 
+     def add_to_scene(self, scene):
+-        """向场景添加地形；真实楼梯由多个固定箱体组成。"""
+-        if not self.is_box_stairs:
++        """添加高度场、固定楼梯箱体或可滚动的散落球。"""
++        if self.trapezoidal_wave is not None:
++            return self.trapezoidal_wave.add_to_scene(scene)
++        if self.loose_spheres is not None:
++            return self.loose_spheres.add_to_scene(scene)
++        if not (self.is_box_stairs or self.is_platform_ridge):
+             return scene.add_entity(self.create_morph())
+ 
+         import genesis as gs
+ 
+         return tuple(
+             scene.add_entity(gs.morphs.Box(lower=lower, upper=upper, fixed=True, batch_fixed_verts=False))
+-            for lower, upper in self.stair_box_bounds()
++            for lower, upper in (self.platform_boxes if self.is_platform_ridge else self.stair_box_bounds())
+         )
+ 
+     def bind_entity(self, entity, *, device, dtype) -> None:
+         """保留 Genesis 生成的高度场，供 reset 和每步奖励查询。"""
+         self._dtype = dtype
+-        if self.is_plane or self.is_box_stairs:
++        if self.is_plane or self.is_box_stairs or self.is_platform_ridge or self.loose_spheres is not None or self.trapezoidal_wave is not None:
+             self.height_field = None
+             return
+         self.height_field = torch.as_tensor(entity.terrain_hf, dtype=dtype, device=device)
+ 
+-    def apply_curriculum(self, values: dict) -> None:
+-        """限制 reset 可选的最高难度；静态地形本身不重新生成。"""
+-        unknown = set(values).difference({"max_difficulty"})
+-        if unknown:
+-            raise KeyError(f"Unsupported terrain curriculum keys: {sorted(unknown)}")
+-        max_difficulty = int(values.get("max_difficulty", self.max_difficulty))
+-        if max_difficulty < 0:
+-            raise ValueError("terrain max_difficulty cannot be negative")
+-        self.max_difficulty = max_difficulty
+-        self.config["max_difficulty"] = max_difficulty
++    def reset(self, env_ids: torch.Tensor) -> None:
++        """仅重置选中环境的动态地形；静态地形无需处理。"""
++        if self.loose_spheres is not None:
++            self.loose_spheres.reset(env_ids, dtype=self._dtype or torch.float32)
+ 
+     def sample_spawn_tiles(self, env_ids: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+         """返回每个环境的 patch 中心 ``[N,2]`` 与扁平 patch 索引 ``[N]``。"""
+-        eligible = [
+-            index for index, difficulty in enumerate(self.tile_difficulties) if difficulty <= self.max_difficulty
+-        ]
+-        if not eligible:
+-            minimum = min(self.tile_difficulties)
+-            eligible = [index for index, difficulty in enumerate(self.tile_difficulties) if difficulty == minimum]
+-        eligible_tensor = torch.tensor(eligible, dtype=torch.long, device=env_ids.device)
+-        if self.config["assignment"] == "cyclic":
+-            choice = env_ids.to(dtype=torch.long) % len(eligible)
+-        else:
+-            choice = torch.randint(len(eligible), (env_ids.numel(),), device=env_ids.device)
+-        tile_indices = eligible_tensor[choice]
++        # 当前预设各自只有一个 patch，直接使用所选地形，不再按难度筛选。
++        tile_indices = torch.zeros_like(env_ids, dtype=torch.long)
+ 
+         columns = self.n_subterrains[1]
+         rows = torch.div(tile_indices, columns, rounding_mode="floor")
+@@ -331,8 +365,17 @@ class TerrainManager:
+ 
+     def height_at(self, world_xy: torch.Tensor) -> torch.Tensor:
+         """查询世界坐标处地面 z；Plane 始终返回 0。"""
+-        if self.is_plane:
++        # 散落球是可移动物体；奖励和出生高度以承托球体的平地为基准。
++        if self.is_plane or self.loose_spheres is not None:
+             return torch.zeros((world_xy.shape[0],), dtype=world_xy.dtype, device=world_xy.device)
++        if self.trapezoidal_wave is not None:
++            return self.trapezoidal_wave.height_at(world_xy)
++        if self.is_platform_ridge:
++            height = torch.zeros_like(world_xy[:, 0])
++            for lower, upper in self.platform_boxes[1:]:
++                inside = (world_xy[:, 0] >= lower[0]) & (world_xy[:, 0] < upper[0]) & (world_xy[:, 1] >= lower[1]) & (world_xy[:, 1] < upper[1])
++                height = torch.where(inside, upper[2], height)
++            return height
+         if self.is_box_stairs:
+             normalized_x = (world_xy[:, 0] - self.stair_start_x) / self.stair_step_depth
+             step_index = torch.floor(normalized_x + 1e-6)
+@@ -354,7 +397,7 @@ class TerrainManager:
+     def out_of_bounds(self, world_xy: torch.Tensor, spawn_centers: torch.Tensor) -> torch.Tensor:
+         """检查机器人是否接近所属 patch 的接缝。"""
+         margin = self.config["boundary_margin"]
+-        if self.is_plane or margin is None:
++        if (self.is_plane and not self.config["bounded"]) or margin is None:
+             return torch.zeros((world_xy.shape[0],), dtype=torch.bool, device=world_xy.device)
+         half_extent = torch.tensor(
+             [0.5 * self.tile_size[0] - margin, 0.5 * self.tile_size[1] - margin],
+diff --git a/experiments/genesis/wheel_leg_infantry/tasks/jump/README.md b/experiments/genesis/wheel_leg_infantry/tasks/jump/README.md
+index 59292e7..980290b 100644
+--- a/experiments/genesis/wheel_leg_infantry/tasks/jump/README.md
++++ b/experiments/genesis/wheel_leg_infantry/tasks/jump/README.md
+@@ -88,7 +88,8 @@ base 到轮底的距离轨迹集中在 `base_to_wheel_bottom_trajectories`，按
+ 
+ 共用 jump 的姿态、跳高和动作平滑奖励，并增加目标落地与成功奖励。
+ 台阶成功要求发生过起跳、双轮在目标台面内部接触、姿态和竖直速度稳定持续 0.16 s。
+-平地额外要求达到跳高目标。撞立面、落回台阶下方、悬在台面上方都不算成功。
++平地额外要求达到跳高目标；`flat` 模式还要求跳跃过程中双轮轮底曾同时严格高于起跳地面 0.32 m
++（记录两侧较低轮底高度的回合峰值，等于 0.32 m 不算达标）。撞立面、落回台阶下方、悬在台面上方都不算成功。
+ 正常任务失败允许提前终止 PPO 样本；solver error 仍中止训练。
+ 日志分别记录 `success_flat`、`success_step_20cm`、`success_step_40cm`。
+ 
+diff --git a/experiments/genesis/wheel_leg_infantry/tasks/jump/config.py b/experiments/genesis/wheel_leg_infantry/tasks/jump/config.py
+index eda87ee..361efbe 100644
+--- a/experiments/genesis/wheel_leg_infantry/tasks/jump/config.py
++++ b/experiments/genesis/wheel_leg_infantry/tasks/jump/config.py
+@@ -62,8 +62,8 @@ def get_cfgs(locomotion_cfgs: Sequence[Mapping] | None = None):
+             # 离地确认与终止：高台面可能提前触地，短暂离地仍需连续确认。
+             "takeoff_min_airborne_time_s": 0.06,
+             "jump_max_tilt_deg": 10.0,
+-            "termination_if_roll_greater_than": 10.0,
+-            "termination_if_pitch_greater_than": 10.0,
++            "termination_if_roll_greater_than": 30.0,
++            "termination_if_pitch_greater_than": 30.0,
+             "tilt_termination_duration_s": episode_length_s,
+             "base_contact_termination_duration_s": episode_length_s,
+             # 初始状态
+@@ -101,13 +101,13 @@ def _get_warmup_cfg():
+             "base_height_range": [0.22, 0.22],
+         },
+         "min_steps": 1,
+-        "max_steps": 500,
++        "max_steps": 200,
+         "stable_steps": 10,
+-        "stable_fraction": 0.95,  # 避免整批环境被最慢的少数环境拖住。
++        "stable_fraction": 0.8,  # 避免整批环境被最慢的少数环境拖住。
+         "forward_velocity_tolerance": 0.2,
+-        "yaw_rate_tolerance": 0.03,
+-        "base_height_tolerance": 0.012,
+-        "vertical_velocity_tolerance": 0.01,
++        "yaw_rate_tolerance": 0.05,
++        "base_height_tolerance": 0.03,
++        "vertical_velocity_tolerance": 0.03,
+         "tilt_tolerance_deg": 5.0,
+         "require_both_wheels_contact": True,
+     }
+@@ -145,15 +145,15 @@ def _get_jump_modes_cfg(episode_length_s: float):
+         "platform_enabled": [True, True, True],  # 课程可移走台阶，任务编码与跳高目标不变。
+         "assignment": "random",  # cyclic 用于逐模式验证。
+         # base 原点相对起跳面的峰值目标，与 base 到轮底的距离参考独立。
+-        "clearance_targets_m": [0.50, 0.50, 0.65],
+-        "min_forward_speeds_m_s": [0.0, 0.8, 1.2],
++        "clearance_targets_m": [0.50, 0.50, 0.70],
++        "min_forward_speeds_m_s": [0.0, 0.8, 1.5],
+         "flat_stationary_probability": 0.1,
+         # 每个模式的 [前向速度 m/s, 起跳距离 m]，节点间线性插值。
+         # 这些是待训练/标定的初值，不是已验证的最优起跳位置。
+         "distance_tables": [
+-            [[0.0, 0.0], [2.0, 0.0]],
+-            [[0.0, 0.35], [0.8, 0.35], [1.0, 0.40], [2.0, 0.60]],
+-            [[0.0, 0.50], [1.2, 0.50], [2.0, 0.6]],
++            [[0.0, 0.0], [4.0, 0.0]],
++            [[0.0, 0.35], [0.8, 0.35], [1.0, 0.40], [2.0, 0.60], [3.0, 0.65]],
++            [[0.0, 0.65], [1.5, 0.65], [2.0, 0.8], [3.0, 0.9]],
+         ],
+         "distance_jitter_m": 0.01,
+         "height_references": [base_to_wheel_bottom_trajectories[name] for name in MODE_NAMES],
+@@ -163,7 +163,7 @@ def _get_jump_modes_cfg(episode_length_s: float):
+         "lane_spacing_m": 4.0,
+         "warmup_distance_m": 30.0,
+         # 落台成功判定
+-        "landing_margin_m": 0.08,
++        "landing_margin_m": 0.02,
+         "landing_height_tolerance_m": 0.025,
+         "landing_stable_time_s": 0.16,
+         "landing_max_vertical_speed_m_s": 0.35,
+@@ -207,9 +207,9 @@ def _get_reward_cfg():
+         "zero_yaw_rate_sigma": 0.25,
+         "reward_scales": {
+             # 复用 locomotion 的无门控奖励，在起跳、腾空和落地全程生效。
+-            "base_balance": -2.0,
+-            "leg_symmetry": -2.0,
+-            "leg_symmetry_bonus": 2.0,
++            "base_balance": -5.0,
++            "leg_symmetry": -50.0,
++            "leg_symmetry_bonus": 5.0,
+             # 全程追踪切换时的前向速度，同时保持 yaw 角速度为零。
+             "tracking_lin_vel": 2.0,
+             "tracking_ang_vel": 2.0,
+@@ -220,6 +220,7 @@ def _get_reward_cfg():
+             "death": -100.0,
+             "jump_invalid": -200.0,
+             # 起跳与峰值高度
++            "flight_leg_vertical": 0.0,
+             "takeoff_event": 200.0,
+             "flight_height_shortfall": -2000.0,
+             "flight_peak_height": 5000.0,
+@@ -230,7 +231,7 @@ def _get_reward_cfg():
+             "flight_balance": 5.0,
+             "flight_height_progress": 80.0,
+             "flight_height_tracking": 0.0,  # 关闭目标附近变平、超高后下降的跟踪项，使用线性高度进度。
+-            "flight_wheel_clearance": 200.0,
++            "flight_wheel_clearance": 2000.0,
+             # 落地
+             "soft_landing": 1.0,
+             "landing_stability": 1.0,
+@@ -238,7 +239,7 @@ def _get_reward_cfg():
+             "target_landing": 30.0,
+             "base_to_wheel_bottom_distance_tracking": 20.0,
+             # 任务结果
+-            "task_success": 500.0,  # 事件奖励沿用框架的 dt 缩放。
++            "task_success": 5000.0,  # 事件奖励沿用框架的 dt 缩放。
+             "task_failure": -500.0,
+         },
+         # 这些 locomotion 项会直接压制离地、伸腿或腾空，jump 中明确不注册。
+@@ -261,7 +262,7 @@ def _get_curriculum_cfg():
+         "enabled": True,
+         "stages": [
+             {
+-                "name": "flat_static",
++                "name": "flat_jump_high",
+                 "start_iteration": 0,
+                 "targets": {
+                     "terrain": {
+@@ -269,88 +270,50 @@ def _get_curriculum_cfg():
+                         "platform_enabled": [True, True, False],
+                     },
+                     "command_ranges": {
+-                        "lin_vel_range": [1.2, 1.2],
++                        "lin_vel_range": [1.5, 2.0],
++                    },
++                },
++            },
++            {
++                "name": "step_40cm",
++                "start_iteration": 200,
++                "targets": {
++                    "terrain": {"platform_enabled": [True, True, True]},
++                },
++            },
++            {
++                "name": "mixed_jump",
++                "start_iteration": 400,
++                "targets": {
++                    "terrain": {
++                        "mode_probabilities": [1 / 5, 1 / 5, 3 / 5],
++                        "platform_enabled": [True, True, True],
++                    },
++                    "command_ranges": {"lin_vel_range": [1.0, 2.5]},
++                    "reward_scales": {
++                        "base_balance": -30.0,
++                        "leg_symmetry": -20.0,
++                        "leg_symmetry_bonus": 10.0,
++                        "tracking_lin_vel": 10.0,
++                        "tracking_ang_vel": 10.0,
++                        # 落地
++                        "soft_landing": 50.0,
++                        "landing_stability": 50.0,
++                        "action_rate": -0.02,
++                        "base_contact": -300.0,
++                        # 按 [平地, 20 cm, 40 cm] 指定权重，仅提高 40 cm 任务。
++                        "flight_peak_height": [5000.0, 3000.0, 1000.0],
++                        "takeoff_vertical_velocity": [3000.0, 3000.0, 1000.0],
++                        "takeoff_upward_velocity": [1000.0, 1000.0, 200.0],
++                        "flight_height_progress": [10.0, 10.0, 80.0],
++                        "flight_height_tracking": [40.0, 40.0, 0.0],
++                        "flight_height_shortfall": -100.0,
++                        "leg_extension_at_limit": -300.0,
++                        "flight_wheel_clearance": 1000.0,
++                        "flight_balance": 50.0,
+                     },
+                 },
+             },
+-            # {
+-            #     "name": "flat_medium",
+-            #     "start_iteration": 500,
+-            #     "targets": {
+-            #         "terrain": {"mode_probabilities": [1.0, 0, 0]},
+-            #         "command_ranges": {"lin_vel_range": [0.0, 1.0]},
+-            #         "reward_scales": {
+-            #             "base_balance": -20.0,
+-            #             "leg_symmetry": -20.0,
+-            #             "leg_symmetry_bonus": 20.0,
+-            #             "tracking_lin_vel": 20.0,
+-            #             "tracking_ang_vel": 20.0,
+-            #             "flight_balance": 20.0,
+-            #             "flight_airtime": 15.0,
+-            #             "flight_leg_vertical": 20.0,
+-            #         },
+-            #     },
+-            # },
+-            # {
+-            #     "name": "flat&20cm_medium",
+-            #     "start_iteration": 1000,
+-            #     "targets": {
+-            #         "terrain": {"mode_probabilities": [1 / 3, 2 / 3, 0]},
+-            #         "command_ranges": {"lin_vel_range": [0.0, 2.0]},
+-            #         "reward_scales": {
+-            #             "base_balance": -30.0,
+-            #             "leg_symmetry": -30.0,
+-            #             "leg_symmetry_bonus": 30.0,
+-            #             "tracking_lin_vel": 30.0,
+-            #             "tracking_ang_vel": 30.0,
+-            #             # 腾空
+-            #             "flight_balance": 30.0,
+-            #             "flight_leg_vertical": 30.0,
+-            #             # 落地
+-            #             "soft_landing": 50.0,
+-            #             "landing_stability": 50.0,
+-            #             "action_rate": -0.02,
+-            #             "base_contact": -300.0,
+-            #         },
+-            #     },
+-            # },
+-            # {
+-            #     "name": "flat_high_jump",
+-            #     "start_iteration": 1300,
+-            #     "targets": {
+-            #         "terrain": {
+-            #             "mode_probabilities": [1 / 6, 1 / 6, 2 / 3],
+-            #             "platform_enabled": [True, True, False],  # 001 在平地练习 base 原点离起跳地面达到 50 cm。
+-            #         },
+-            #         "command_ranges": {"lin_vel_range": [1.2, 2.0]},
+-            #         "reward_scales": {
+-            #             "base_balance": [-30.0, -30.0, -2.0],
+-            #             "leg_symmetry": [-30.0, -30.0, -2.0],
+-            #             "leg_symmetry_bonus": [30.0, 30.0, 2.0],
+-            #             "tracking_lin_vel": [30.0, 30.0, 2.0],
+-            #             "tracking_ang_vel": [30.0, 30.0, 2.0],
+-            #             # 落地
+-            #             "soft_landing": [50.0, 50.0, 2.0],
+-            #             "landing_stability": [50.0, 50.0, 2.0],
+-            #             "action_rate": [-0.05, -0.05, -0.001],
+-            #             "base_contact": [-300.0, -300.0, -2.0],
+-            #             # 按 [平地, 20 cm, 40 cm] 指定权重，仅提高 40 cm 任务。
+-            #             "flight_peak_height": [5000.0, 5000.0, 10000.0],
+-            #             "takeoff_vertical_velocity": [3000.0, 3000.0, 5000.0],
+-            #             "flight_height_progress": [80.0, 80.0, 200.0],
+-            #             "flight_height_tracking": [80.0, 80.0, 200.0],
+-            #             "task_success": [500.0, 500.0, 2000.0],
+-            #         },
+-            #     },
+-            # },
+-            # {
+-            #     "name": "step_40cm",
+-            #     "start_iteration": 2500,
+-            #     "targets": {
+-            #         # 保留 001 编码、采样比例、速度及奖励，只放回 40 cm 台阶。
+-            #         "terrain": {"platform_enabled": [True, True, True]},
+-            #     },
+-            # },
+         ],
+     }
+ 
+diff --git a/experiments/genesis/wheel_leg_infantry/tasks/jump/env.py b/experiments/genesis/wheel_leg_infantry/tasks/jump/env.py
+index 4a53e32..6381ad7 100644
+--- a/experiments/genesis/wheel_leg_infantry/tasks/jump/env.py
++++ b/experiments/genesis/wheel_leg_infantry/tasks/jump/env.py
+@@ -433,6 +433,8 @@ class JumpEnv(JumpRewards, LocomotionEnv):
+         self.stable_landing_steps.copy_(torch.where(stable, self.stable_landing_steps + 1, 0))
+         height_ok = ((self.landing_surface_height > 0)
+                      | (self.jump_reward_state.peak_clearance >= self.base_height_target))
++        # flat 还要求双轮轮底曾同时严格高于 32 cm；落地时使用回合内较低轮底的峰值。
++        height_ok &= ((self.jump_mode != MODE_NAMES.index("flat")) | (self.max_wheel_clearance > 0.32))
+         self.task_success.copy_((self.stable_landing_steps >= self.required_stable_steps) & height_ok)
+         self.task_success_event.copy_(self.task_success & ~self.success_seen)
+         self.success_seen.logical_or_(self.task_success)
+diff --git a/experiments/genesis/wheel_leg_infantry/tasks/jump/train.py b/experiments/genesis/wheel_leg_infantry/tasks/jump/train.py
+index d054137..dfc5bc2 100644
+--- a/experiments/genesis/wheel_leg_infantry/tasks/jump/train.py
++++ b/experiments/genesis/wheel_leg_infantry/tasks/jump/train.py
+@@ -30,7 +30,7 @@ def _parse_args(argv=None):
+     parser.add_argument("-v", "--vis", action="store_true")
+     parser.add_argument("-e", "--exp-name", default="jump_v2")
+     parser.add_argument("-B", "--num-envs", type=int, default=8192)
+-    parser.add_argument("--max-iterations", type=int, default=3001)
++    parser.add_argument("--max-iterations", type=int, default=1001)
+     parser.add_argument("--seed", type=int, default=1)
+     parser.add_argument("--log-root", default="logs")
+     parser.add_argument("--locomotion-log-root", default=None)
+diff --git a/experiments/genesis/wheel_leg_infantry/tasks/locomotion/README.md b/experiments/genesis/wheel_leg_infantry/tasks/locomotion/README.md
+index f04f57f..4cb92a5 100644
+--- a/experiments/genesis/wheel_leg_infantry/tasks/locomotion/README.md
++++ b/experiments/genesis/wheel_leg_infantry/tasks/locomotion/README.md
+@@ -6,6 +6,17 @@
+ 
+ 单向斜坡 `slope` / `sloped_terrain` 及由它和平地组成的 `mixed` 已移除。旧配置若选用了 `slope` 或 `mixed`，需通过 `--terrain plane` 或 `--terrain trapezoidal_wave` 等选项显式选择替代地形，避免恢复训练时悄悄改变任务。旧配置中多余的斜坡参数会被忽略。
+ 
++## 直接选择地形
++
++训练、评估和模型检查均使用 `--terrain` 直接选择地形；不指定时沿用配置中的 `terrain.preset`（默认 `plane`，恢复实验时使用保存的配置）。例如：
++
++```bash
++.venv/bin/python -m experiments.genesis.wheel_leg_infantry.tasks.locomotion.train \
++  --terrain trapezoidal_wave -e locomotion_trapezoidal_wave -B 64
++```
++
++已移除 `max_difficulty`、难度编号和出生区域的难度筛选。整个运行使用选定地形，课程不会切换地形或修改其坡角、台阶高度。旧实验中的 `terrain.max_difficulty` 会被丢弃，旧课程中同名字段会被忽略；跳跃任务的模式比例与台阶启用课程仍有效。
++
+ ## 散落刚性球地形
+ 
+ `loose_spheres` 是平地上的独立动态刚体球，直径 **17 mm**（半径 8.5 mm），单球质量 **3.2 g**，材料邵氏硬度 **90A**。球与地面、机器人及其他球参与碰撞，可滚动、可被车轮推动。每个并行环境独立采样；每次物理 reset 重新散布并清零球体线速度和角速度，仅影响被重置的环境。
+@@ -26,7 +37,6 @@
+   --log-root log_shared -e locomotion_v2 --terrain loose_spheres
+ ```
+ 
+-在所选 `config.py` 或 `config_2real.py` 的 `env_cfg` 中可调整：
+ 
+ ```python
+ "terrain": {
+diff --git a/experiments/genesis/wheel_leg_infantry/tasks/locomotion/config.py b/experiments/genesis/wheel_leg_infantry/tasks/locomotion/config.py
+index 1f43f1d..4f82519 100644
+--- a/experiments/genesis/wheel_leg_infantry/tasks/locomotion/config.py
++++ b/experiments/genesis/wheel_leg_infantry/tasks/locomotion/config.py
+@@ -161,7 +161,7 @@ def _command_cfg() -> dict:
+         "ang_vel_range": [0.0, 0.0],
+         "base_height_range": [0.22, 0.22],
+         # |vx| <= 1 m/s 使用课程角速度范围；更快时收紧到 ±1 rad/s。
+-        "high_speed_ang_vel": {"lin_vel_threshold": 1.0, "max_abs_ang_vel": 1.0},
++        "high_speed_ang_vel": {"lin_vel_threshold": 1.5, "max_abs_ang_vel": 2.0},
+         # 静止站立采样；课程可通过 command_ranges.standing_probability 覆盖。
+         "standing_probability": 0.25,
+     }
+@@ -178,7 +178,6 @@ def _curriculum_cfg() -> dict:
+                 "targets": {
+                     "domain_rand": {"strength": 0.0},
+                     "sensor_noise": {"strength": 0.0},
+-                    "terrain": {"max_difficulty": 0},
+                     "reset_ranges": {
+                         "base_init_pos_range": [[0.0, 0.0], [0.0, 0.0], [0.22, 0.22]],
+                         "base_init_rpy_offset_range_deg": [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]],
+@@ -206,7 +205,6 @@ def _curriculum_cfg() -> dict:
+                     "standing_reward": {"tracking_sigma": 0.10},
+                     "domain_rand": {"strength": 0.0},
+                     "sensor_noise": {"strength": 0.0},
+-                    "terrain": {"max_difficulty": 0},
+                     "reset_ranges": {
+                         "base_init_pos_range": [[0.0, 0.0], [0.0, 0.0], [0.22, 0.22]],
+                         "base_init_rpy_offset_range_deg": [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]],
+@@ -242,7 +240,6 @@ def _curriculum_cfg() -> dict:
+                     "standing_reward": {"tracking_sigma": 0.05},
+                     "domain_rand": {"strength": 0.0},
+                     "sensor_noise": {"strength": 0.0},
+-                    "terrain": {"max_difficulty": 0},
+                     "reset_ranges": {
+                         "base_init_pos_range": [[0.0, 0.0], [0.0, 0.0], [0.22, 0.22]],
+                         "base_init_rpy_offset_range_deg": [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]],
+@@ -280,7 +277,6 @@ def _curriculum_cfg() -> dict:
+                     "standing_reward": {"tracking_sigma": 0.02},
+                     "domain_rand": {"strength": 0.4},
+                     "sensor_noise": {"strength": 0.4},
+-                    "terrain": {"max_difficulty": 0},
+                     "reset_ranges": {
+                         "base_init_pos_range": [[0.0, 0.0], [0.0, 0.0], [0.22, 0.24]],
+                         "base_init_rpy_offset_range_deg": [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]],
+@@ -312,9 +308,8 @@ def _curriculum_cfg() -> dict:
+                 "name": "full_range",
+                 "start_iteration": 7000,
+                 "targets": {
+-                    "domain_rand": {"strength": 0.6},
+-                    "sensor_noise": {"strength": 0.6},
+-                    "terrain": {"max_difficulty": 0},
++                    "domain_rand": {"strength": 1.0},
++                    "sensor_noise": {"strength": 1.0},
+                     "reset_ranges": {
+                         "base_init_pos_range": [[0.0, 0.0], [0.0, 0.0], [0.22, 0.24]],
+                         "base_init_rpy_offset_range_deg": [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]],
+@@ -323,7 +318,7 @@ def _curriculum_cfg() -> dict:
+                     },
+                     "command_ranges": {
+                         "standing_probability": 0.25,
+-                        "lin_vel_range": [-4.0, 4.0],
++                        "lin_vel_range": [-3.7, 3.7],
+                         "ang_vel_range": [-6.0, 6.0],
+                         "base_height_range": [0.20, 0.36],
+                     },
+diff --git a/experiments/genesis/wheel_leg_infantry/tasks/locomotion/config_rand.py b/experiments/genesis/wheel_leg_infantry/tasks/locomotion/config_rand.py
+deleted file mode 100644
+index 2584806..0000000
+--- a/experiments/genesis/wheel_leg_infantry/tasks/locomotion/config_rand.py
++++ /dev/null
+@@ -1,322 +0,0 @@
+-"""步兵轮腿车 locomotion 的训练配置。
+-
+-配置按物理、观测、奖励、命令和课程拆开。locomotion 训练先学习原地站立，
+-再逐步扩大速度、转向、高度命令和 reset 难度。
+-"""
+-
+-import math
+-from copy import deepcopy
+-
+-from ...core.terrain import default_terrain_cfg
+-from ...core.randomization import default_randomization_cfg
+-
+-
+-def get_cfgs():
+-    """返回 locomotion 环境需要的五组配置。"""
+-    env_cfg = _env_cfg()
+-    obs_cfg = _obs_cfg()
+-    reward_cfg = _reward_cfg()
+-    command_cfg = _command_cfg()
+-    curriculum_cfg = _curriculum_cfg()
+-    return env_cfg, obs_cfg, reward_cfg, command_cfg, curriculum_cfg
+-
+-
+-def _env_cfg() -> dict:
+-    return {
+-        "num_actions": 6,
+-        "num_joints": 4,
+-        "num_wheels": 2,
+-        "robot_mjcf": "assets/robot/wheelbipeV14_2/mjcf/wheelbipeV14_2.xml",
+-        # 地形由所选配置决定；多地形训练可在此使用 "mixed"。
+-        "terrain": default_terrain_cfg("plane"),
+-        "randomization": default_randomization_cfg(dynamics_enabled=True, sensors_enabled=True),
+-        "default_joint_pos": {
+-            "left_front1_joint": 0.0,
+-            "left_rear1_joint": 0.0,
+-            "right_front1_joint": 0.0,
+-            "right_rear1_joint": 0.0,
+-        },
+-        # 动作顺序也是 actor 输出顺序，修改后旧 checkpoint 不再兼容。
+-        "joint_names": [
+-            "left_front1_joint",
+-            "right_front1_joint",
+-            "left_rear1_joint",
+-            "right_rear1_joint",
+-        ],
+-        "leg_front_joint_names": ["left_front1_joint", "right_front1_joint"],
+-        "leg_rear_joint_names": ["left_rear1_joint", "right_rear1_joint"],
+-        "wheel_names": ["left_wheel_joint", "right_wheel_joint"],
+-        "wheel_link_names": ["left_wheel_link", "right_wheel_link"],
+-        "spring_names": ["left_spring2_joint", "right_spring2_joint"],
+-        "base_link_name": "base_link",
+-        # 虚拟腿仅作为观测和诊断；站立目标使用平地上的实际 base z。
+-        "leg_upper_link_length": 0.21,
+-        "leg_lower_link_length": 0.25,
+-        # 同时用于目标摆角限幅与实际摆角越界惩罚，单位 rad。
+-        "leg_angle_limit_range": [-0.25 * math.pi, 0.25 * math.pi],
+-        "min_upper_link_angle": 0.5 * math.pi,
+-        # 气弹簧：F = F0 + k * compression - c * velocity。
+-        "gas_spring_preload_force": 420.0,
+-        "gas_spring_stiffness": 1400.0,
+-        "gas_spring_damping": 50.0,
+-        "gas_spring_max_compression": 0.06,
+-        "wheel_contact_force_threshold": 1.0,
+-        "base_contact_force_threshold": 5.0,
+-        "landing_penalty_duration_s": 0.30,
+-        "joint_kp": 60.0,
+-        "joint_kd": 3.0,
+-        "wheel_kd": 0.25,
+-        "joint_force_limit": 40.0,
+-        "wheel_force_limit": 5.0,
+-        "joint_pos_scale": 2.0,
+-        "wheel_vel_scale": 70.0,
+-        "clip_joint_action": 1.0,
+-        "clip_wheel_action": 1.0,
+-        # 固定一拍动作延迟；不属于 domain_rand，本轮仍保持原有动作路径。
+-        "simulate_action_latency": True,
+-        # 只有连续超限一段时间才终止，给策略留下可学习的恢复窗口。
+-        "termination_if_roll_greater_than": 20.0,
+-        "termination_if_pitch_greater_than": 20.0,
+-        "tilt_termination_duration_s": 0.30,
+-        "base_contact_termination_duration_s": 0.25,
+-        # 从 0.22 m 起步只保留很小的落地行程，避免策略还没输出就先自由落体。
+-        "base_init_pos_range": [[0.0, 0.0], [0.0, 0.0], [0.22, 0.22]],
+-        "base_init_rpy_offset_range_deg": [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]],
+-        "base_init_lin_vel_range": [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]],
+-        "base_init_ang_vel_range": [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]],
+-        "episode_length_s": 100.0,
+-        "resampling_time_s": 10.0,
+-    }
+-
+-
+-def _obs_cfg() -> dict:
+-    return {
+-        # actor 使用 IMU、轮速等真机观测；融合速度估计仅用于诊断，不占用输入维度。
+-        "imu": {
+-            "link_name": "base_link",
+-            "pos_offset": [0.0, 0.0, 0.0],
+-        },
+-        "velocity_estimator": {
+-            "wheel_radius": 0.06,
+-            "wheel_velocity_sign": 1.0,
+-            "gravity_magnitude": 9.81,
+-            "wheel_correction_time_constant_s": 0.5,
+-            "max_abs_velocity": 4.2,
+-        },
+-        "obs_scales": {
+-            "lin_vel": 1.0 / 4.2,
+-            "lin_acc": 1.0 / 9.81,
+-            "ang_vel": 0.5,
+-            "joint_pos": 1.0,
+-            "joint_vel": 0.1,
+-            "wheel_vel": 1.0 / 70.0,
+-            "base_height": 1.0 / 0.35,
+-            "leg_length": 1.0 / 0.35,
+-            "leg_angle": 1.0,
+-        },
+-    }
+-
+-
+-def _reward_cfg() -> dict:
+-    return {
+-        "tracking_sigma": 0.25,
+-        # 初学站立保留运动跟踪容差；课程通过 standing_reward 逐步收紧。
+-        "standing_tracking_sigma": 0.25,
+-        "standing_lin_vel_threshold": 0.02,  # m/s，命令判定阈值
+-        "standing_ang_vel_threshold": 0.02,  # rad/s，命令判定阈值
+-        "standing_drift_deadband": 0.02,  # m/s，每个水平轴允许的平衡微动
+-        "landing_base_ang_vel_weight": 0.25,
+-        "tracking_gate": {
+-            "height_full_error": 0.03,
+-            "height_zero_error": 0.10,
+-            "attitude_full_angle_deg": 5.0,
+-            "attitude_zero_angle_deg": 15.0,
+-            "floor": 0.30,
+-        },
+-        "reward_scales": {
+-            "tracking_lin_vel": -0.5,
+-            "tracking_ang_vel": -0.5,
+-            "standing_drift": 0.0,  # 先学平衡，后续课程再逐步启用漂移惩罚。
+-            "gated_tracking_lin_vel": 5.0,
+-            "gated_tracking_ang_vel": 5.0,
+-            "base_balance": -5.0,
+-            "leg_symmetry": -5.0,
+-            "leg_angle_limits": -5.0,
+-            "leg_symmetry_bonus": 2.0,
+-            "base_height": -10.0,
+-            "height_gate": 5.0,
+-            "joint_vel": -0.005,
+-            "landing_base_oscillation": 0.0,
+-            "landing_joint_vel": 0.0,
+-            # 每个离地轮子持续扣分；接触由 wheel_contact_force_threshold 判定。
+-            "wheel_airborne": -5.0,
+-            "base_contact": -10.0,
+-            "alive": 5.0,
+-            "death": -100.0,
+-        },
+-    }
+-
+-
+-def _command_cfg() -> dict:
+-    return {
+-        "num_commands": 3,
+-        "lin_vel_range": [0.0, 0.0],
+-        "ang_vel_range": [0.0, 0.0],
+-        "base_height_range": [0.22, 0.22],
+-        # |vx| <= 1 m/s 使用课程角速度范围；更快时收紧到 ±1 rad/s。
+-        # 设为 None 可恢复线速度与角速度独立采样。
+-        "high_speed_ang_vel": {"lin_vel_threshold": 1.0, "max_abs_ang_vel": 1.0},
+-        # 默认 25% 概率令 vx=wz=0；高度仍按当前课程采样，概率可由课程覆盖。
+-        "standing_probability": 0.25,
+-    }
+-
+-
+-def _curriculum_cfg() -> dict:
+-    # 阶段采用累计覆盖：这里只写相对上一阶段发生变化的字段。
+-    return {
+-        "enabled": True,
+-        "stages": [
+-            {
+-                "name": "low",
+-                "start_iteration": 0,
+-                "targets": {
+-                    "standing_reward": {"tracking_sigma": 0.04},
+-                    "domain_rand": {"strength": 0.6},
+-                    "sensor_noise": {"strength": 0.6},
+-                    "terrain": {"max_difficulty": 1},
+-                    "reset_ranges": {
+-                        "base_init_pos_range": [[0.0, 0.0], [0.0, 0.0], [0.22, 0.24]],
+-                        "base_init_rpy_offset_range_deg": [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]],
+-                        "base_init_lin_vel_range": [[-0.5, 0.5], [0.0, 0.0], [0.0, 0.0]],
+-                        "base_init_ang_vel_range": [[0.0, 0.0], [0.0, 0.0], [1.0, 1.0]],
+-                    },
+-                    "command_ranges": {
+-                        "standing_probability": 0.25,
+-                        "lin_vel_range": [-2.5, 2.5],
+-                        "ang_vel_range": [-4.0, 4.0],
+-                        "base_height_range": [0.20, 0.34],
+-                    },
+-                    "tracking_gate": {
+-                        "height_full_error": 0.015,
+-                        "height_zero_error": 0.05,
+-                        "attitude_full_angle_deg": 2.0,
+-                        "attitude_zero_angle_deg": 8.0,
+-                        "floor": 0.05,
+-                    },
+-                    "termination_limits": {
+-                        "termination_if_roll_greater_than": 25.0,
+-                        "termination_if_pitch_greater_than": 25.0,
+-                        "tilt_termination_duration_s": 0.50,
+-                        "base_contact_termination_duration_s": 0.5,
+-                    },
+-                    "reward_scales": {
+-                        "standing_drift": -1.0,
+-                        "gated_tracking_lin_vel": 20.0,
+-                        "gated_tracking_ang_vel": 20.0,
+-                        "base_balance": -20.0,
+-                        "base_contact": -50.0,
+-                        "base_height": -15.0,
+-                        "height_gate": 15.0,
+-                        "landing_base_oscillation": -0.3,
+-                        "landing_joint_vel": -0.01,
+-                        "joint_vel": -0.01,
+-                    },
+-                },
+-            },
+-            {
+-                "name": "middle",
+-                "start_iteration": 4000,
+-                "targets": {
+-                    "standing_reward": {"tracking_sigma": 0.02},
+-                    "domain_rand": {"strength": 0.8},
+-                    "sensor_noise": {"strength": 0.8},
+-                    "terrain": {"max_difficulty": 1},
+-                    "reset_ranges": {
+-                        "base_init_pos_range": [[0.0, 0.0], [0.0, 0.0], [0.22, 0.24]],
+-                        "base_init_rpy_offset_range_deg": [[-3.0, 3.0], [-3.0, 3.0], [-5.0, 5.0]],
+-                        "base_init_lin_vel_range": [[-1.5, 1.5], [-0.05, 0.05], [-0.1, 0.1]],
+-                        "base_init_ang_vel_range": [[-0.1, 0.1], [-0.1, 0.1], [-3.0, 3.0]],
+-                    },
+-                    "command_ranges": {
+-                        "standing_probability": 0.25,
+-                        "lin_vel_range": [-3.2, 3.2],
+-                        "ang_vel_range": [-4.0, 4.0],
+-                        "base_height_range": [0.20, 0.38],
+-                    },
+-                    "tracking_gate": {
+-                        "height_full_error": 0.015,
+-                        "height_zero_error": 0.025,
+-                        "attitude_full_angle_deg": 1.5,
+-                        "attitude_zero_angle_deg": 5.0,
+-                        "floor": 0.05,
+-                    },
+-                    "reward_scales": {
+-                        "standing_drift": -2.0,
+-                        "gated_tracking_lin_vel": 30.0,
+-                        "gated_tracking_ang_vel": 30.0,
+-                        "base_contact": -40.0,
+-                        "leg_symmetry": -15.0,
+-                        "base_height": -15.0,
+-                        "height_gate": 15.0,
+-                        "landing_base_oscillation": -0.5,
+-                        "landing_joint_vel": -0.03,
+-                        "joint_vel": -0.02,
+-                    },
+-                },
+-            },
+-            {
+-                "name": "full_range",
+-                "start_iteration": 8000,
+-                "targets": {
+-                    "standing_reward": {"tracking_sigma": 0.01},
+-                    "domain_rand": {"strength": 1.0},
+-                    "sensor_noise": {"strength": 1.0},
+-                    "terrain": {"max_difficulty": 1},
+-                    "reset_ranges": {
+-                        "base_init_pos_range": [[0.0, 0.0], [0.0, 0.0], [0.22, 0.24]],
+-                        "base_init_rpy_offset_range_deg": [[-3.0, 3.0], [-3.0, 3.0], [-5.0, 5.0]],
+-                        "base_init_lin_vel_range": [[-2.5, 2.5], [-0.05, 0.05], [-0.1, 0.1]],
+-                        "base_init_ang_vel_range": [[-0.1, 0.1], [-0.1, 0.1], [-5.1, 5.1]],
+-                    },
+-                    "command_ranges": {
+-                        "standing_probability": 0.25,
+-                        "lin_vel_range": [-3.8, 3.8],
+-                        "ang_vel_range": [-4.0, 4.0],
+-                        "base_height_range": [0.20, 0.38],
+-                    },
+-                    "tracking_gate": {
+-                        "height_full_error": 0.01,
+-                        "height_zero_error": 0.025,
+-                        "attitude_full_angle_deg": 1.5,
+-                        "attitude_zero_angle_deg": 3.0,
+-                        "floor": 0.05,
+-                    },
+-                    "reward_scales": {
+-                        "standing_drift": -3.0,
+-                        "gated_tracking_lin_vel": 30.0,
+-                        "gated_tracking_ang_vel": 30.0,
+-                        "base_contact": -40.0,
+-                        "leg_symmetry": -15.0,
+-                        "base_height": -15.0,
+-                        "height_gate": 15.0,
+-                        "landing_base_oscillation": -0.7,
+-                        "landing_joint_vel": -0.05,
+-                        "joint_vel": -0.03,
+-                    },
+-                },
+-            },
+-        ],
+-    }
+-
+-
+-def get_final_command_cfg(command_cfg: dict, curriculum_cfg: dict) -> dict:
+-    """返回 eval 使用的命令配置（含静止采样率），累计应用到课程最终阶段。"""
+-    resolved = deepcopy(command_cfg)
+-    if not curriculum_cfg.get("enabled", False):
+-        return resolved
+-
+-    for stage in curriculum_cfg.get("stages", []):
+-        command_ranges = stage.get("targets", {}).get("command_ranges", {})
+-        for name, value in command_ranges.items():
+-            resolved[name] = deepcopy(value)
+-    return resolved
+diff --git a/experiments/genesis/wheel_leg_infantry/tasks/locomotion/env.py b/experiments/genesis/wheel_leg_infantry/tasks/locomotion/env.py
+index 99d537a..34b009d 100644
+--- a/experiments/genesis/wheel_leg_infantry/tasks/locomotion/env.py
++++ b/experiments/genesis/wheel_leg_infantry/tasks/locomotion/env.py
+@@ -1293,9 +1293,13 @@ class LocomotionEnv(LocomotionRewards):
+             self.env_cfg[name] = [list(axis_limits) for axis_limits in limits]
+ 
+     def _apply_terrain_curriculum(self, values):
+-        """更新允许出生的地形难度，不改变 actor/critic 接口。"""
+-        self.terrain.apply_curriculum(values)
+-        self.env_cfg["terrain"]["max_difficulty"] = self.terrain.max_difficulty
++        """兼容旧实验的难度课程；地形始终由 preset 决定。
++
++        保留此钩子供 JumpEnv 扩展模式比例和台阶启用课程。
++        """
++        unknown = set(values).difference({"max_difficulty"})
++        if unknown:
++            raise KeyError(f"Unsupported terrain curriculum keys: {sorted(unknown)}")
+ 
+     # ============ 诊断与可视化：查询状态或调整相机，不推进训练时钟 ============
+     def get_observation_components(self, env_idx=0):
+diff --git a/experiments/genesis/wheel_leg_infantry/tasks/locomotion/train.py b/experiments/genesis/wheel_leg_infantry/tasks/locomotion/train.py
+index aee241b..809d127 100644
+--- a/experiments/genesis/wheel_leg_infantry/tasks/locomotion/train.py
++++ b/experiments/genesis/wheel_leg_infantry/tasks/locomotion/train.py
+@@ -20,7 +20,7 @@ from ...tools.run_utils import (
+     save_run_artifacts,
+ )
+ from .config import get_cfgs as get_default_cfgs
+-from .config_2real import get_cfgs as get_rand_cfgs
++from .config_terrain import get_cfgs as get_rand_cfgs
+ from .env import LocomotionEnv
+ 
+ 
+@@ -35,9 +35,9 @@ def main():
+     parser.add_argument("--log-root", type=str, default="logs")
+     parser.add_argument(
+         "--config",
+-        choices=("config", "config_2real"),
++        choices=("config", "config_terrain"),
+         default="config",
+-        help="select config.py or config_2real.py (default: config); when resuming, requires --resume-config current to take effect",
++        help="select config.py or config_terrain.py (default: config); when resuming, requires --resume-config current to take effect",
+     )
+     parser.add_argument(
+         "--load-weights",
+@@ -68,7 +68,7 @@ def main():
+     OnPolicyRunner = load_runner_class()
+     resume_plan = None
+     if args.resume is None or args.resume_config == "current":
+-        get_cfgs = {"config": get_default_cfgs, "config_2real": get_rand_cfgs}[args.config]
++        get_cfgs = {"config": get_default_cfgs, "config_terrain": get_rand_cfgs}[args.config]
+         env_cfg, obs_cfg, reward_cfg, command_cfg, curriculum_cfg = get_cfgs()
+         train_cfg = get_train_cfg(args.exp_name)
+         print(f"[train] config: {args.config}.py")

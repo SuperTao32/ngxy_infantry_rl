@@ -20,7 +20,7 @@ from ...tools.run_utils import (
     save_run_artifacts,
 )
 from .config import get_cfgs as get_default_cfgs
-from .config_2real import get_cfgs as get_rand_cfgs
+from .config_terrain import get_cfgs as get_rand_cfgs
 from .env import LocomotionEnv
 
 
@@ -35,9 +35,9 @@ def main():
     parser.add_argument("--log-root", type=str, default="logs")
     parser.add_argument(
         "--config",
-        choices=("config", "config_2real"),
+        choices=("config", "config_terrain"),
         default="config",
-        help="select config.py or config_2real.py (default: config); when resuming, requires --resume-config current to take effect",
+        help="select config.py or config_terrain.py (default: config); when resuming, requires --resume-config current to take effect",
     )
     parser.add_argument(
         "--load-weights",
@@ -68,7 +68,7 @@ def main():
     OnPolicyRunner = load_runner_class()
     resume_plan = None
     if args.resume is None or args.resume_config == "current":
-        get_cfgs = {"config": get_default_cfgs, "config_2real": get_rand_cfgs}[args.config]
+        get_cfgs = {"config": get_default_cfgs, "config_terrain": get_rand_cfgs}[args.config]
         env_cfg, obs_cfg, reward_cfg, command_cfg, curriculum_cfg = get_cfgs()
         train_cfg = get_train_cfg(args.exp_name)
         print(f"[train] config: {args.config}.py")

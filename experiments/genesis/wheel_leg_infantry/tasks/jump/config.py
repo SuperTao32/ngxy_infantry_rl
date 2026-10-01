@@ -52,20 +52,17 @@ def get_cfgs(locomotion_cfgs: Sequence[Mapping] | None = None):
             "jump_motor_params": {
                 "joint_kp": 100.0,
                 "joint_kd": 2.0,
-                "wheel_kd": 0.25,
+                "wheel_kd": 0.3,
                 "joint_force_limit": None,  # N·m，覆盖值必须 > 0
                 "wheel_force_limit": None,  # N·m，覆盖值必须 > 0
             },
             # 001 模式全程覆盖关节 kd，包括无台阶高跳和 40 cm 台阶；None 关闭覆盖。
             # 标量或按 joint_names 排序的列表；其他模式使用上面的 joint_kd。
             "jump_step_40cm_joint_kd": 0.1,
-            # 离地确认与终止：高台面可能提前触地，短暂离地仍需连续确认。
+            # 离地确认：高台面可能提前触地，短暂离地仍需连续确认。
             "takeoff_min_airborne_time_s": 0.06,
-            "jump_max_tilt_deg": 10.0,
-            "termination_if_roll_greater_than": 10.0,
-            "termination_if_pitch_greater_than": 10.0,
-            "tilt_termination_duration_s": episode_length_s,
-            "base_contact_termination_duration_s": episode_length_s,
+            # 终止参数统一在下方 _get_termination_cfg 中调整。
+            **_get_termination_cfg(episode_length_s),
             # 初始状态
             "base_init_pos_range": [[0.0, 0.0], [0.0, 0.0], [0.22, 0.22]],
             "base_init_rpy_offset_range_deg": [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]],
@@ -91,6 +88,27 @@ def get_cfgs(locomotion_cfgs: Sequence[Mapping] | None = None):
     return env_cfg, obs_cfg, reward_cfg, command_cfg, curriculum_cfg
 
 
+def _get_termination_cfg(episode_length_s: float):
+    """终止条件唯一调参入口；二次腾空和机身触地只惩罚，回合超时由阶段总时长决定。"""
+    return {
+        # jump 任务失败阈值：任意一拍机身倾角超过此值即锁存无效。
+        # 这是相对竖直方向的合成倾角；不同于下方分别判断 roll / pitch。
+        "jump_max_tilt_deg": 10.0,
+        "jump_termination": {
+            # 过倾、撞台阶立面、错误落台中的任一项，立即提前终止。
+            "on_invalid": True,
+        },
+        # 上述开关仅控制提前终止；关闭后仍记录失败、给予惩罚，不能恢复成功。
+        # 父环境的独立终止条件（也用于 teacher 预热），不受上述开关控制。
+        # 默认 jump 的 10° 过倾会先通过 on_invalid 立即终止。
+        "termination_if_roll_greater_than": 30.0,  # deg，绝对值严格超过
+        "termination_if_pitch_greater_than": 30.0,  # deg，绝对值严格超过
+        "tilt_termination_duration_s": 0.5,  # 连续超限持续时间，> 0
+        "base_contact_termination_duration_s": None,  # 机身触地只惩罚，关闭父环境接触终止
+        # solver error 始终终止并中止训练；episode 超时始终截断，不作为可关闭开关。
+    }
+
+
 def _get_warmup_cfg():
     """跳跃前 locomotion teacher 的指令与站稳条件。"""
     return {
@@ -101,13 +119,13 @@ def _get_warmup_cfg():
             "base_height_range": [0.22, 0.22],
         },
         "min_steps": 1,
-        "max_steps": 500,
+        "max_steps": 200,
         "stable_steps": 10,
-        "stable_fraction": 0.95,  # 避免整批环境被最慢的少数环境拖住。
+        "stable_fraction": 0.8,  # 避免整批环境被最慢的少数环境拖住。
         "forward_velocity_tolerance": 0.2,
-        "yaw_rate_tolerance": 0.03,
-        "base_height_tolerance": 0.012,
-        "vertical_velocity_tolerance": 0.01,
+        "yaw_rate_tolerance": 0.05,
+        "base_height_tolerance": 0.03,
+        "vertical_velocity_tolerance": 0.03,
         "tilt_tolerance_deg": 5.0,
         "require_both_wheels_contact": True,
     }
@@ -145,15 +163,15 @@ def _get_jump_modes_cfg(episode_length_s: float):
         "platform_enabled": [True, True, True],  # 课程可移走台阶，任务编码与跳高目标不变。
         "assignment": "random",  # cyclic 用于逐模式验证。
         # base 原点相对起跳面的峰值目标，与 base 到轮底的距离参考独立。
-        "clearance_targets_m": [0.50, 0.50, 0.65],
-        "min_forward_speeds_m_s": [0.0, 0.8, 1.2],
+        "clearance_targets_m": [0.50, 0.50, 0.70],
+        "min_forward_speeds_m_s": [0.0, 0.8, 1.5],
         "flat_stationary_probability": 0.1,
         # 每个模式的 [前向速度 m/s, 起跳距离 m]，节点间线性插值。
         # 这些是待训练/标定的初值，不是已验证的最优起跳位置。
         "distance_tables": [
-            [[0.0, 0.0], [2.0, 0.0]],
-            [[0.0, 0.35], [0.8, 0.35], [1.0, 0.40], [2.0, 0.60]],
-            [[0.0, 0.50], [1.2, 0.50], [2.0, 0.6]],
+            [[0.0, 0.0], [4.0, 0.0]],
+            [[0.0, 0.35], [0.8, 0.35], [1.0, 0.40], [2.0, 0.60], [3.0, 0.65]],
+            [[0.0, 0.65], [1.5, 0.65], [2.0, 0.8], [3.0, 0.9]],
         ],
         "distance_jitter_m": 0.01,
         "height_references": [base_to_wheel_bottom_trajectories[name] for name in MODE_NAMES],
@@ -161,9 +179,14 @@ def _get_jump_modes_cfg(episode_length_s: float):
         "platform_length_m": 2.0,
         "platform_width_m": 1.0,
         "lane_spacing_m": 4.0,
-        "warmup_distance_m": 30.0,
+        "warmup_distance_m": 50.0,
+        # 无台阶时的成功高度，按 flat / step_20cm / step_40cm 排序，单位 m。
+        # 轮底取双轮较低侧的回合峰值；base_link 取首次腾空峰值，均须严格大于阈值。
+        # 独立于 clearance_targets_m（奖励目标）；有台阶时仍使用落台成功条件。
+        "ground_success_wheel_clearance_m": [0.32, 0.25, 0.40],
+        "ground_success_base_height_m": [0.50, 0.50, 0.68],
         # 落台成功判定
-        "landing_margin_m": 0.08,
+        "landing_margin_m": 0.02,
         "landing_height_tolerance_m": 0.025,
         "landing_stable_time_s": 0.16,
         "landing_max_vertical_speed_m_s": 0.35,
@@ -196,30 +219,31 @@ def _get_reward_cfg():
         # 落地 base 到轮底距离跟踪：容差单位 m，指数分母 sigma 单位 m²。
         "height_reference_tolerance_m": 0.02,
         "height_reference_sigma": 0.0025,
-        "short_leg_length_target": 0.14,
+        "short_leg_length_target": 0.15,
         "leg_length_sigma": 0.01,
         "flight_height_sigma": 0.04,
         "flight_balance_sigma": 0.04,
-        "landing_velocity_sigma": 0.25,
+        "landing_velocity_sigma": 0.05,
         "landing_tilt_sigma": 0.04,
-        "landing_ang_vel_sigma": 1.0,
+        "landing_ang_vel_sigma": 0.02,
         "reference_forward_velocity_sigma": 0.25,
-        "zero_yaw_rate_sigma": 0.25,
+        "zero_yaw_rate_sigma": 0.02,
         "reward_scales": {
             # 复用 locomotion 的无门控奖励，在起跳、腾空和落地全程生效。
-            "base_balance": -2.0,
-            "leg_symmetry": -2.0,
-            "leg_symmetry_bonus": 2.0,
+            "base_balance": -5.0,
+            "leg_symmetry": -50.0,
+            "leg_symmetry_bonus": 10.0,
             # 全程追踪切换时的前向速度，同时保持 yaw 角速度为零。
-            "tracking_lin_vel": 2.0,
-            "tracking_ang_vel": 2.0,
+            "tracking_lin_vel": 5.0,
+            "tracking_ang_vel": 10.0,
             "action_rate": -0.001,
             # 实测腿长达到 min_upper_link_angle 对应限位后，惩罚继续伸腿的目标角差平方。
             "leg_extension_at_limit": -100.0,
-            "base_contact": -5.0,
+            "base_contact": -1.0,  # 碰撞期间逐步惩罚，仍乘 dt，不直接判失败。
             "death": -100.0,
             "jump_invalid": -200.0,
             # 起跳与峰值高度
+            "flight_leg_vertical": 5.0,
             "takeoff_event": 200.0,
             "flight_height_shortfall": -2000.0,
             "flight_peak_height": 5000.0,
@@ -229,16 +253,17 @@ def _get_reward_cfg():
             "flight_airtime": 10.0,
             "flight_balance": 5.0,
             "flight_height_progress": 80.0,
-            "flight_height_tracking": 0.0,  # 关闭目标附近变平、超高后下降的跟踪项，使用线性高度进度。
-            "flight_wheel_clearance": 200.0,
+            "flight_height_tracking": 0.0,
+            "flight_wheel_clearance": 1500.0,
             # 落地
+            "landing_vertical_velocity": -1.0,
             "soft_landing": 1.0,
             "landing_stability": 1.0,
-            "landing_airborne": -100.0,
+            "landing_airborne": -1.0,  # 首次触地后双轮离地期间逐步惩罚。
             "target_landing": 30.0,
             "base_to_wheel_bottom_distance_tracking": 20.0,
             # 任务结果
-            "task_success": 500.0,  # 事件奖励沿用框架的 dt 缩放。
+            "task_success": 5000.0,  # 事件奖励沿用框架的 dt 缩放。
             "task_failure": -500.0,
         },
         # 这些 locomotion 项会直接压制离地、伸腿或腾空，jump 中明确不注册。
@@ -261,7 +286,7 @@ def _get_curriculum_cfg():
         "enabled": True,
         "stages": [
             {
-                "name": "flat_static",
+                "name": "flat_jump_high",
                 "start_iteration": 0,
                 "targets": {
                     "terrain": {
@@ -269,88 +294,64 @@ def _get_curriculum_cfg():
                         "platform_enabled": [True, True, False],
                     },
                     "command_ranges": {
-                        "lin_vel_range": [1.2, 1.2],
+                        "lin_vel_range": [1.5, 2.0],
                     },
                 },
             },
-            # {
-            #     "name": "flat_medium",
-            #     "start_iteration": 500,
-            #     "targets": {
-            #         "terrain": {"mode_probabilities": [1.0, 0, 0]},
-            #         "command_ranges": {"lin_vel_range": [0.0, 1.0]},
-            #         "reward_scales": {
-            #             "base_balance": -20.0,
-            #             "leg_symmetry": -20.0,
-            #             "leg_symmetry_bonus": 20.0,
-            #             "tracking_lin_vel": 20.0,
-            #             "tracking_ang_vel": 20.0,
-            #             "flight_balance": 20.0,
-            #             "flight_airtime": 15.0,
-            #             "flight_leg_vertical": 20.0,
-            #         },
-            #     },
-            # },
-            # {
-            #     "name": "flat&20cm_medium",
-            #     "start_iteration": 1000,
-            #     "targets": {
-            #         "terrain": {"mode_probabilities": [1 / 3, 2 / 3, 0]},
-            #         "command_ranges": {"lin_vel_range": [0.0, 2.0]},
-            #         "reward_scales": {
-            #             "base_balance": -30.0,
-            #             "leg_symmetry": -30.0,
-            #             "leg_symmetry_bonus": 30.0,
-            #             "tracking_lin_vel": 30.0,
-            #             "tracking_ang_vel": 30.0,
-            #             # 腾空
-            #             "flight_balance": 30.0,
-            #             "flight_leg_vertical": 30.0,
-            #             # 落地
-            #             "soft_landing": 50.0,
-            #             "landing_stability": 50.0,
-            #             "action_rate": -0.02,
-            #             "base_contact": -300.0,
-            #         },
-            #     },
-            # },
-            # {
-            #     "name": "flat_high_jump",
-            #     "start_iteration": 1300,
-            #     "targets": {
-            #         "terrain": {
-            #             "mode_probabilities": [1 / 6, 1 / 6, 2 / 3],
-            #             "platform_enabled": [True, True, False],  # 001 在平地练习 base 原点离起跳地面达到 50 cm。
-            #         },
-            #         "command_ranges": {"lin_vel_range": [1.2, 2.0]},
-            #         "reward_scales": {
-            #             "base_balance": [-30.0, -30.0, -2.0],
-            #             "leg_symmetry": [-30.0, -30.0, -2.0],
-            #             "leg_symmetry_bonus": [30.0, 30.0, 2.0],
-            #             "tracking_lin_vel": [30.0, 30.0, 2.0],
-            #             "tracking_ang_vel": [30.0, 30.0, 2.0],
-            #             # 落地
-            #             "soft_landing": [50.0, 50.0, 2.0],
-            #             "landing_stability": [50.0, 50.0, 2.0],
-            #             "action_rate": [-0.05, -0.05, -0.001],
-            #             "base_contact": [-300.0, -300.0, -2.0],
-            #             # 按 [平地, 20 cm, 40 cm] 指定权重，仅提高 40 cm 任务。
-            #             "flight_peak_height": [5000.0, 5000.0, 10000.0],
-            #             "takeoff_vertical_velocity": [3000.0, 3000.0, 5000.0],
-            #             "flight_height_progress": [80.0, 80.0, 200.0],
-            #             "flight_height_tracking": [80.0, 80.0, 200.0],
-            #             "task_success": [500.0, 500.0, 2000.0],
-            #         },
-            #     },
-            # },
-            # {
-            #     "name": "step_40cm",
-            #     "start_iteration": 2500,
-            #     "targets": {
-            #         # 保留 001 编码、采样比例、速度及奖励，只放回 40 cm 台阶。
-            #         "terrain": {"platform_enabled": [True, True, True]},
-            #     },
-            # },
+            {
+                "name": "step_40cm",
+                "start_iteration": 200,
+                "targets": {
+                    "terrain": {"platform_enabled": [True, True, True]},
+                    "reward_scales": {
+                        "base_contact": -200.0, 
+                        "landing_airborne": -200.0,
+                        "base_balance": -30.0,
+                        "leg_symmetry": -20.0,
+                        "leg_symmetry_bonus": 10.0,
+                        "tracking_lin_vel": 10.0,
+                        "tracking_ang_vel": 30.0,
+                        # 落地
+                        "soft_landing": 1000.0,
+                        "landing_stability": 1000.0,
+                        "leg_extension_at_limit": -200.0,
+                        "flight_wheel_clearance": 500.0,
+                        "landing_vertical_velocity": -100.0,
+                    },
+                },
+            },
+            {
+                "name": "mixed_jump",
+                "start_iteration": 500,
+                "targets": {
+                    "terrain": {
+                        "mode_probabilities": [1 / 5, 1 / 5, 3 / 5],
+                        "platform_enabled": [True, True, True],
+                    },
+                    "command_ranges": {"lin_vel_range": [1.0, 2.5]},
+                    "reward_scales": {
+                        "base_balance": -30.0,
+                        "leg_symmetry": -20.0,
+                        "leg_symmetry_bonus": 10.0,
+                        "tracking_lin_vel": 10.0,
+                        "tracking_ang_vel": 20.0,
+                        # 落地
+                        "soft_landing": 1000.0,
+                        "landing_stability": 1000.0,
+                        "action_rate": -0.05,
+                        # 按 [平地, 20 cm, 40 cm] 指定权重，仅提高 40 cm 任务。
+                        "flight_peak_height": 100.0,
+                        "takeoff_vertical_velocity": 500.0,
+                        "takeoff_upward_velocity": 200.0,
+                        "flight_height_progress": 0.0,
+                        "flight_height_tracking": [100.0, 100.0, 0.0],
+                        "flight_height_shortfall": -100.0,
+                        "leg_extension_at_limit": -300.0,
+                        "flight_wheel_clearance": 100.0,
+                        "flight_balance": 50.0,
+                    },
+                },
+            },
         ],
     }
 
@@ -369,6 +370,15 @@ def validate_mode_probabilities(values):
 
 
 def validate_configs(env_cfg, obs_cfg, curriculum_cfg=None):
+    termination = env_cfg.get("jump_termination", {})
+    if not isinstance(termination, Mapping):
+        raise ValueError("jump_termination must be a mapping")
+    # 兼容旧存档的 on_rebound 字段：仍校验类型，但不再用于终止。
+    if set(termination) - {"on_rebound", "on_invalid"}:
+        raise ValueError("jump_termination only supports on_rebound and on_invalid")
+    for key, value in termination.items():
+        if type(value) is not bool:
+            raise ValueError(f"jump_termination.{key} must be a boolean")
     cfg = env_cfg["jump_modes"]
     if tuple(cfg["mode_names"]) != MODE_NAMES or tuple(cfg["step_heights_m"]) != MODE_HEIGHTS:
         raise ValueError("jump_modes mode order must be flat, step_20cm, step_40cm")
@@ -380,7 +390,12 @@ def validate_configs(env_cfg, obs_cfg, curriculum_cfg=None):
             validate_platform_enabled(terrain["platform_enabled"])
         if "mode_probabilities" in terrain:
             validate_mode_probabilities(terrain["mode_probabilities"])
-    for key in ("clearance_targets_m", "min_forward_speeds_m_s"):
+    for key in (
+        "clearance_targets_m",
+        "min_forward_speeds_m_s",
+        "ground_success_wheel_clearance_m",
+        "ground_success_base_height_m",
+    ):
         values = cfg[key]
         if len(values) != 3 or any(not math.isfinite(v) or v < 0 for v in values):
             raise ValueError(f"jump_modes.{key} must contain three finite non-negative values")

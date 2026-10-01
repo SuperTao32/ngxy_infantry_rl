@@ -78,19 +78,49 @@ base 到轮底的距离轨迹集中在 `base_to_wheel_bottom_trajectories`，按
 - `flight_peak_height` 按新增峰值除以目标高度给分，`flight_height_progress` 按当前高度除以目标高度给分，
   两者均无上界；失稳时峰值奖励全额撤回，包括超过目标的部分。缺高惩罚仍只在未达标时生效。
   默认关闭 `flight_height_tracking`，避免高斯跟踪在接近目标时变平、超过目标后反向扣减收益。
-  目标高度继续用于归一化和成功判定，但不再是高度奖励上限；策略可能学到超过目标的跳高。
+  目标高度用于奖励归一化，成功判定使用独立阈值；目标不再是高度奖励上限，策略可能学到超过目标的跳高。
 - `flight_wheel_clearance` 在 `flight_gate` 内奖励较低轮底相对起跳面的高度（米），
   到 `jump_base_height - 0.18 m` 后饱和；轮底高度及饱和上限均不低于零。
   这是相对机身的收腿上限，随实际机身高度上升，不限制整体跳高收益。
   默认权重为 `10.0`，用于鼓励双腿收起，不再奖励超过该上限的收腿动作。
+- `landing_vertical_velocity`：首次起跳后的首次任意轮/机身触地时，按触地前最后腾空拍的
+  base_link 世界竖直速度平方惩罚，向上/向下均计入；失稳、错误落台也不免除。
+  每回合仅结算一次，后续支撑或二次弹跳不重复结算。默认权重 `-100.0`，在 `reward_scales` 中调整；
+  实际奖励为 `权重 × dt × vz²`，不依赖跳高 target，也不受落地有效支撑门控影响。
 - `min_forward_speeds_m_s`：台阶默认至少 0.6 m/s；平地包含静止跳和移动跳。
 - 速度与任务采样比例均由课程阶段控制；被采样的台阶模式，其最小速度不能高于该阶段速度上限。
 
 共用 jump 的姿态、跳高和动作平滑奖励，并增加目标落地与成功奖励。
 台阶成功要求发生过起跳、双轮在目标台面内部接触、姿态和竖直速度稳定持续 0.16 s。
-平地额外要求达到跳高目标。撞立面、落回台阶下方、悬在台面上方都不算成功。
+无台阶的平地跳跃使用 `jump_modes.ground_success_wheel_clearance_m` 和
+`jump_modes.ground_success_base_height_m`，按 `flat`、`step_20cm`、`step_40cm` 排序，独立于奖励 target。
+默认 `flat` 要求轮底 > 0.32 m、base_link > 0.50 m；`step_40cm` 移走台阶时要求轮底 > 0.40 m、base_link > 0.55 m。
+轮底使用首次触地前两侧较低轮底的峰值，base_link 使用首次腾空峰值；高度相对 z=0 起跳地面，等于阈值不算达标。
+撞立面、落回台阶下方、悬在台面上方都不算成功。
+二次腾空和 base_link 碰撞不直接判失败、不提前终止；`landing_airborne` 和 `base_contact` 默认权重均为 `-1000.0`，
+发生期间逐步扣分并乘 dt（dt=0.02 s 时每项每步扣 20 分）。课程继承这两个权重。
+恢复无机身接触的双轮稳定支撑后仍可成功；首次触地后冻结高度成绩，二次弹跳不能补足高度或重复领取起跳奖励。
+到回合结束仍未满足成功条件，照常判任务失败。
 正常任务失败允许提前终止 PPO 样本；solver error 仍中止训练。
 日志分别记录 `success_flat`、`success_step_20cm`、`success_step_40cm`。
+
+## 终止配置
+
+统一修改 `config.py` 的 `_get_termination_cfg(episode_length_s)`：
+
+| 配置 | 默认值 | 含义 |
+| --- | --- | --- |
+| `jump_max_tilt_deg` | `10.0` | 合成倾角超过阈值即锁存任务无效 |
+| `jump_termination.on_invalid` | `True` | 过倾、撞沿或错误落台后立即提前终止 |
+| `termination_if_roll_greater_than` | `30.0` | 父环境 roll 绝对值阈值（度） |
+| `termination_if_pitch_greater_than` | `30.0` | 父环境 pitch 绝对值阈值（度） |
+| `tilt_termination_duration_s` | `0.5` | 父环境 roll 或 pitch 连续超限多久终止 |
+| `base_contact_termination_duration_s` | `None` | 关闭父环境机身触地终止，仅保留碰撞惩罚 |
+
+`on_invalid` 控制无效任务是否提前结束；关闭后仍锁存过倾、撞沿或错误落台的失败。
+旧配置中的 `on_rebound` 不再生效。父环境倾角终止条件独立生效，也适用于 teacher 预热。
+默认 jump 的 10° 过倾会经 `on_invalid` 立即终止，不会等到父环境的持续时间门槛。
+回合超时由 `phase_durations_s` 的总时长决定；solver error 始终终止并中止训练。
 
 ## 使用
 

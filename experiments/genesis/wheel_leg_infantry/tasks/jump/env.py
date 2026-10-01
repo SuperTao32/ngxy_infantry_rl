@@ -192,8 +192,8 @@ class JumpEnv(JumpRewards, LocomotionEnv):
         self.task_success_event = torch.zeros_like(self.base_height_target)  # 本回合第一次满足成功条件。
         self.task_failure_event = torch.zeros_like(self.base_height_target)  # 本回合第一次失败。
 
-        # 失败历史：float 0/1 锁存，兼容奖励与日志；恢复姿态/接触不能抹掉记录。
-        self.jump_invalid = torch.zeros_like(self.base_height_target)  # 过倾、机身触地、撞沿或错误落台。
+        # 历史：无效任务不能恢复；二次腾空只记录日志和惩罚，不作为失败。
+        self.jump_invalid = torch.zeros_like(self.base_height_target)  # 过倾、撞沿或错误落台。
         self.rebound_seen = torch.zeros_like(self.base_height_target)  # 曾在落地后再次双轮离地。
 
         # 成功判定与事件去重：task_success 是当前状态，会随失稳变 False；seen 保留回合历史。
@@ -415,7 +415,9 @@ class JumpEnv(JumpRewards, LocomotionEnv):
         top_contact = target_wheel_support(
             self.wheel_center_pos, self.wheel_contact, self.jump_mode, cfg, self.wheel_radius, margin=0.0,
         ).any(dim=1)
-        bad_landing = (self.landing_surface_height > 0) & (self.jump_landing_event > 0.5) & ~top_contact
+        # 机身先触地不算错误落台；只有实际轮接触落在目标面之外才判错。
+        bad_landing = ((self.landing_surface_height > 0) & self.has_taken_off
+                       & (self.wheel_contact > 0.5).any(dim=1) & ~top_contact)
         # 起跳前轮子低于台面并到达立面，属于撞沿，不能通过贴墙爬升刷跳跃奖励。
         wheel_x = self.wheel_center_pos[:, :, 0]
         wheel_bottom = self.wheel_center_pos[:, :, 2] - self.wheel_radius
@@ -426,13 +428,19 @@ class JumpEnv(JumpRewards, LocomotionEnv):
                                  & (self.wheel_contact > 0.5), dim=1))
         self.jump_invalid.copy_(torch.maximum(self.jump_invalid, (bad_landing | riser_hit).to(gs.tc_float)))
         self.jump_landing_gate.mul_(target_support)
-        valid = (self.jump_invalid < 0.5) & (self.rebound_seen < 0.5)
+        valid = self.jump_invalid < 0.5
         tilt_ok = -self.projected_gravity[:, 2] >= math.cos(math.radians(cfg["landing_max_tilt_deg"]))
-        stable = (self.has_taken_off & target_support & valid & tilt_ok
+        stable = (self.has_taken_off & target_support & valid & tilt_ok & (self.base_contact < 0.5)
                   & (self.world_vertical_velocity.abs() <= cfg["landing_max_vertical_speed_m_s"]))
         self.stable_landing_steps.copy_(torch.where(stable, self.stable_landing_steps + 1, 0))
-        height_ok = ((self.landing_surface_height > 0)
-                     | (self.jump_reward_state.peak_clearance >= self.base_height_target))
+        # 无台阶模式的成功高度独立于奖励 target；有台阶时以实际落稳为准。
+        height_ok = self.landing_surface_height > 0
+        for mode, (wheel_min, base_min) in enumerate(zip(
+            cfg["ground_success_wheel_clearance_m"], cfg["ground_success_base_height_m"],
+        )):
+            height_ok |= ((self.jump_mode == mode)
+                          & (self.max_wheel_clearance > wheel_min)
+                          & (self.jump_reward_state.peak_clearance > base_min))
         self.task_success.copy_((self.stable_landing_steps >= self.required_stable_steps) & height_ok)
         self.task_success_event.copy_(self.task_success & ~self.success_seen)
         self.success_seen.logical_or_(self.task_success)
@@ -485,7 +493,10 @@ class JumpEnv(JumpRewards, LocomotionEnv):
         self.jump_takeoff_event.copy_(takeoff_now.to(dtype=gs.tc_float))
         self.has_taken_off.logical_or_(takeoff_now)
 
-        in_flight_before_update = self.has_taken_off & ~self.has_landed & no_wheels_contact
+        # 机身先触地也必须冻结触地前速度，不能被本拍接触冲量覆盖。
+        in_flight_before_update = (
+            self.has_taken_off & ~self.has_landed & no_wheels_contact & (self.base_contact < 0.5)
+        )
         self.last_airborne_vertical_velocity.copy_(
             torch.where(
                 in_flight_before_update,
@@ -507,12 +518,12 @@ class JumpEnv(JumpRewards, LocomotionEnv):
         )
 
         # 失稳在本回合锁存，恢复姿态也不能重新取得翻转产生的高度成绩。
-        invalid_now = (-self.projected_gravity[:, 2] < self.jump_min_upright_cos) | (self.base_contact > 0.5)
+        invalid_now = -self.projected_gravity[:, 2] < self.jump_min_upright_cos
         self.jump_invalid.copy_(torch.maximum(self.jump_invalid, invalid_now.to(dtype=gs.tc_float)))
         valid_jump = self.jump_invalid < 0.5
         self.takeoff_gate.mul_(valid_jump)
         airborne = self.has_taken_off & ~self.has_landed & no_wheels_contact & (self.base_contact < 0.5) & valid_jump
-        # 首次触地后再次双轮离地，立即判定二次起跳，不设高度容差。
+        # 首次触地后再次双轮离地，只记录并施加逐步惩罚，不判失败。
         rebound = self.has_landed & no_wheels_contact
         self.landing_airborne_gate.copy_(rebound.to(dtype=gs.tc_float))
         self.rebound_seen.copy_(torch.maximum(self.rebound_seen, self.landing_airborne_gate))
@@ -550,7 +561,10 @@ class JumpEnv(JumpRewards, LocomotionEnv):
         )
         # 三种模式均从 z=0 的平地起跳；用较低一侧轮底衡量过障间隙。
         self.wheel_clearance.copy_(torch.min(wheel_bottom_height, dim=1).values)
-        self.max_wheel_clearance.copy_(torch.maximum(self.max_wheel_clearance, self.wheel_clearance))
+        # 首次触地后冻结轮底成绩，二次弹跳不能补足首次跳跃高度。
+        self.max_wheel_clearance.copy_(torch.where(
+            ~self.has_landed, torch.maximum(self.max_wheel_clearance, self.wheel_clearance), self.max_wheel_clearance,
+        ))
 
     def _update_jump_commands(self):
         """第三列为目标 base 到轮底平均竖直距离；参考仅由模式和时间决定。"""
@@ -564,13 +578,15 @@ class JumpEnv(JumpRewards, LocomotionEnv):
 
     def _task_termination(self):
         """返回 jump 特有的终止原因，并区分正常任务失败与 solver 异常。"""
-        rebound = (self.rebound_seen > 0.5) & self.collect_jump_data
-        failed = (self.jump_invalid > 0.5) & self.collect_jump_data
+        # 只控制提前终止；失败历史及奖励仍由 _update_task_state 保留。
+        # 二次腾空仅惩罚；旧存档的 on_rebound 字段不再生效。
+        cfg = self.env_cfg.get("jump_termination", {})
+        failed = (self.jump_invalid > 0.5) & self.collect_jump_data & cfg.get("on_invalid", True)
         # solver error 始终需要 runner 抛错，即使同拍也发生正常任务失败。
         solver_error = self.scene.rigid_solver.get_error_envs_mask().bool()
-        self.extras["jump_rebound_termination"] = rebound & ~solver_error
+        self.extras["jump_rebound_termination"] = torch.zeros_like(failed)
         self.extras["jump_task_termination"] = failed & ~solver_error
-        return rebound | failed
+        return failed
 
     def _update_tracking_gate(self):
         # 跳跃奖励独立门控，不让 locomotion 的姿态/高度门抑制速度保持奖励。

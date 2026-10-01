@@ -1,6 +1,6 @@
 """Genesis 地形配置、生成与高度查询。
 
-地形是任务 MDP 的公共基础设施：任务配置只选择 preset 和难度，环境通过
+地形是任务 MDP 的公共基础设施：任务配置直接选择 preset 和几何参数，环境通过
 ``TerrainManager`` 创建实体、分配出生 patch，并查询机器人脚下的地面高度。
 """
 
@@ -11,46 +11,22 @@ from copy import deepcopy
 
 import torch
 
+from .loose_spheres import LooseSpheres
+from .trapezoidal_wave import TrapezoidalWave
+
 TERRAIN_PRESETS = (
     "plane",
-    "flat",
-    "slope",
-    "rough",
-    "waves",
-    "obstacles",
     "stairs",
-    "mixed",
+    "loose_spheres",
+    "platform_ridge",
+    "trapezoidal_wave",
 )
 
 _PRESET_TYPES = {
-    "flat": [["flat_terrain"]],
-    "slope": [["sloped_terrain"]],
-    "rough": [["random_uniform_terrain"]],
-    "waves": [["wave_terrain"]],
-    "obstacles": [["discrete_obstacles_terrain"]],
-    # 单独的 stairs preset 使用箱体生成真实的水平踏面和垂直立面。
-    # mixed 继续使用 Genesis 高度场楼梯，以便和其他 patch 合并为一张地形。
     "stairs": [["box_stairs"]],
-    # 从左上到右下大致按难度增加。课程只改变允许出生的 patch，
-    # 不在训练中重建静态地形。
-    "mixed": [
-        ["flat_terrain", "sloped_terrain", "pyramid_sloped_terrain", "random_uniform_terrain"],
-        ["wave_terrain", "discrete_obstacles_terrain", "stairs_terrain", "pyramid_stairs_terrain"],
-    ],
-}
-
-_TYPE_DIFFICULTY = {
-    "flat_terrain": 0,
-    "sloped_terrain": 1,
-    "pyramid_sloped_terrain": 1,
-    "random_uniform_terrain": 1,
-    "wave_terrain": 2,
-    "discrete_obstacles_terrain": 2,
-    "stairs_terrain": 3,
-    "pyramid_stairs_terrain": 3,
-    "box_stairs": 3,
-    "stepping_stones_terrain": 3,
-    "fractal_terrain": 3,
+    "platform_ridge": [["platform_ridge"]],
+    "trapezoidal_wave": [["trapezoidal_wave"]],
+    "loose_spheres": [["loose_spheres"]],
 }
 
 
@@ -58,39 +34,49 @@ def default_terrain_cfg(preset: str = "plane") -> dict:
     """返回适合当前 0.06 m 轮子的保守地形参数。"""
     return {
         "preset": preset,
+        "bounded": preset == "flat",  # 兼容旧 flat；plane 默认不启用边界复位
         "tile_size": [24.0, 8.0],
         "horizontal_scale": 0.10,
         "vertical_scale": 0.005,
         "randomize": True,
         "assignment": "random",
-        "max_difficulty": 3,
         # 机器人接近 patch 接缝时按 timeout 重置，避免把接缝当成任务障碍。
         "boundary_margin": 0.75,
         "subterrain_parameters": {
-            "sloped_terrain": {"slope": 0.08},
-            "pyramid_sloped_terrain": {"slope": -0.08},
-            "random_uniform_terrain": {
-                "min_height": -0.025,
-                "max_height": 0.025,
-                "step": 0.005,
-                "downsampled_scale": 0.30,
+            "trapezoidal_wave": {
+                "height": 0.20,
+                "platform_length": 1.50,  # 高、低平台各自的水平长度
+                "slope_angle_deg": 23.0,
+                "base_thickness": 0.10,
             },
-            "wave_terrain": {"num_waves": 4.0, "amplitude": 0.035},
-            "discrete_obstacles_terrain": {
-                "max_height": 0.035,
-                "min_size": 0.35,
-                "max_size": 1.0,
-                "num_rects": 30,
-            },
-            "stairs_terrain": {"step_width": 0.50, "step_height": 0.025},
-            "pyramid_stairs_terrain": {"step_width": 0.50, "step_height": -0.025},
             "box_stairs": {
-                "step_depth": 0.80,
+                "step_depth": 2.00,
                 "step_height": 0.20,
                 "num_steps": 4,
                 # 机器人出生在 tile 中心的高平台；第一处下台阶位于其前方 1 m。
                 "approach_length": 1.0,
                 "base_thickness": 0.10,
+            },
+            "platform_ridge": {
+                # 高度均相对地面；长度/宽度均沿前进方向 +x。
+                "first_height": 0.20,
+                "first_length": 0.80,
+                "ridge_height": 0.35,
+                "ridge_width": 0.15,
+                "second_height": 0.30,
+                "second_length": 0.80,  # 也可设为 None 延伸到 tile 边界
+                "approach_length": 1.0,  # tile 中心到一级平台前沿的距离
+                "base_thickness": 0.10,
+            },
+            "loose_spheres": {
+                "diameter": 0.017,  # m，17 mm 为直径
+                "count": 256,
+                "scatter_size": [4.0, 2.0],  # m，以出生 patch 中心为中心
+                "spawn_clearance": 0.5,  # 中央无球正方形的半边长，避免出生穿插
+                "mass": 0.0032,  # kg，单球 3.2 g；由质量和直径推导密度
+                "shore_a": 90.0,  # 材料信息；当前刚体模型不据此改变接触刚度或摩擦
+                "friction": 0.3,
+                "ground_friction": 0.8,
             },
         },
     }
@@ -102,7 +88,15 @@ def resolve_terrain_cfg(config: dict | None) -> dict:
     if not isinstance(raw, dict):
         raise TypeError("env_cfg['terrain'] must be a dictionary")
 
+    # 兼容旧实验；难度编号不再参与地形选择。
+    raw.pop("max_difficulty", None)
     preset = raw.get("preset", "plane")
+    if preset == "flat":
+        # 旧 flat 的表面也是 z=0，迁移到 Plane 并保留边界 timeout。
+        preset = raw["preset"] = "plane"
+        raw.setdefault("bounded", True)
+    if preset in {"slope", "mixed"}:
+        raise ValueError(f"terrain preset {preset!r} was removed; select a supported terrain with --terrain: {TERRAIN_PRESETS}")
     if preset not in TERRAIN_PRESETS:
         raise ValueError(f"unsupported terrain preset {preset!r}; choose from {TERRAIN_PRESETS}")
 
@@ -110,6 +104,9 @@ def resolve_terrain_cfg(config: dict | None) -> dict:
     custom_parameters = raw.pop("subterrain_parameters", {})
     resolved.update(raw)
     for terrain_type, parameters in custom_parameters.items():
+        # 旧实验可能携带已移除类型的参数，仅合并当前支持的地形。
+        if terrain_type not in resolved["subterrain_parameters"]:
+            continue
         resolved["subterrain_parameters"].setdefault(terrain_type, {}).update(parameters)
     tile_size = tuple(float(value) for value in resolved["tile_size"])
     if len(tile_size) != 2 or not all(math.isfinite(value) and value > 0.0 for value in tile_size):
@@ -126,12 +123,12 @@ def resolve_terrain_cfg(config: dict | None) -> dict:
         if not math.isclose(cells, round(cells), rel_tol=0.0, abs_tol=1e-6):
             raise ValueError("each terrain.tile_size value must be divisible by horizontal_scale")
 
+    if not isinstance(resolved["bounded"], bool):
+        raise TypeError("terrain.bounded must be a boolean")
+
     assignment = resolved["assignment"]
     if assignment not in {"random", "cyclic"}:
         raise ValueError("terrain.assignment must be 'random' or 'cyclic'")
-    resolved["max_difficulty"] = int(resolved["max_difficulty"])
-    if resolved["max_difficulty"] < 0:
-        raise ValueError("terrain.max_difficulty cannot be negative")
 
     boundary_margin = resolved.get("boundary_margin")
     if boundary_margin is not None:
@@ -178,13 +175,14 @@ def bilinear_height_at(
 
 
 class TerrainManager:
-    """管理静态地形、并行环境出生 patch 和地面高度查询。"""
+    """管理静态/动态地形、并行环境出生 patch 和地面高度查询。"""
 
     def __init__(self, config: dict | None):
         self.config = resolve_terrain_cfg(config)
         self.preset = self.config["preset"]
         self.is_plane = self.preset == "plane"
         self.is_box_stairs = self.preset == "stairs"
+        self.is_platform_ridge = self.preset == "platform_ridge"
         self.tile_types = [["flat_terrain"]] if self.is_plane else deepcopy(_PRESET_TYPES[self.preset])
         self.n_subterrains = (len(self.tile_types), len(self.tile_types[0]))
         self.tile_size = tuple(self.config["tile_size"])
@@ -193,12 +191,19 @@ class TerrainManager:
             self.n_subterrains[1] * self.tile_size[1],
         )
         self.origin = (-0.5 * self.total_size[0], -0.5 * self.total_size[1], 0.0)
-        self.max_difficulty = self.config["max_difficulty"]
         self.height_field: torch.Tensor | None = None
         self._dtype = None
+        self.loose_spheres = (
+            LooseSpheres(self.config["subterrain_parameters"]["loose_spheres"], self.tile_size) if self.preset == "loose_spheres" else None
+        )
+        self.max_collision_pairs = 20 if self.loose_spheres is None else 20 + 8 * self.loose_spheres.count
 
         self.flat_tile_types = tuple(value for row in self.tile_types for value in row)
-        self.tile_difficulties = tuple(_TYPE_DIFFICULTY[value] for value in self.flat_tile_types)
+
+        self.trapezoidal_wave = (
+            TrapezoidalWave(self.config["subterrain_parameters"]["trapezoidal_wave"], self.tile_size) if self.preset == "trapezoidal_wave" else None
+        )
+        self.platform_boxes = self._configure_platform_ridge() if self.is_platform_ridge else ()
 
         self.stair_step_depth = None
         self.stair_step_height = None
@@ -207,6 +212,44 @@ class TerrainManager:
         self.stair_base_thickness = None
         if self.is_box_stairs:
             self._configure_box_stairs()
+
+    def _configure_platform_ridge(self):
+        """三个连续、无重叠的固定箱体，避免高度场把 15 cm 窄凸台插值成斜坡。"""
+        parameters = self.config["subterrain_parameters"]["platform_ridge"]
+        values = {}
+        for name in ("first_height", "first_length", "ridge_height", "ridge_width", "second_height", "base_thickness"):
+            value = float(parameters[name])
+            if not math.isfinite(value) or value <= 0:
+                raise ValueError(f"platform_ridge.{name} must be positive and finite")
+            values[name] = value
+        approach = float(parameters["approach_length"])
+        if not math.isfinite(approach) or approach < 0:
+            raise ValueError("platform_ridge.approach_length must be nonnegative and finite")
+        if values["ridge_height"] <= max(values["first_height"], values["second_height"]):
+            raise ValueError("platform_ridge.ridge_height must exceed both platform heights")
+        min_x, min_y, base_z = self.origin
+        max_x, max_y = min_x + self.tile_size[0], min_y + self.tile_size[1]
+        start_x = min_x + self.tile_size[0] / 2 + approach
+        ridge_x = start_x + values["first_length"]
+        second_x = ridge_x + values["ridge_width"]
+        margin = self.config["boundary_margin"] or 0.0
+        if second_x >= max_x - margin:
+            raise ValueError("platform_ridge must leave a second platform inside tile_size and boundary_margin")
+        second_length = parameters["second_length"]
+        end_x = max_x
+        if second_length is not None:
+            second_length = float(second_length)
+            if not math.isfinite(second_length) or second_length <= 0:
+                raise ValueError("platform_ridge.second_length must be positive and finite or None")
+            end_x = second_x + second_length
+            if end_x > max_x:
+                raise ValueError("platform_ridge.second_length extends beyond terrain.tile_size")
+        return (
+            ((min_x, min_y, base_z - values["base_thickness"]), (max_x, max_y, base_z)),
+            ((start_x, min_y, base_z), (ridge_x, max_y, base_z + values["first_height"])),
+            ((ridge_x, min_y, base_z), (second_x, max_y, base_z + values["ridge_height"])),
+            ((second_x, min_y, base_z), (end_x, max_y, base_z + values["second_height"])),
+        )
 
     def _configure_box_stairs(self) -> None:
         parameters = self.config["subterrain_parameters"]["box_stairs"]
@@ -235,8 +278,10 @@ class TerrainManager:
 
         if self.is_plane:
             return gs.morphs.Plane()
-        if self.is_box_stairs:
-            raise RuntimeError("box stairs contain multiple morphs; use add_to_scene()")
+        if self.loose_spheres is not None:
+            raise RuntimeError("loose spheres contain multiple morphs; use add_to_scene()")
+        if self.is_box_stairs or self.is_platform_ridge or self.trapezoidal_wave is not None:
+            raise RuntimeError("segmented terrain contains multiple morphs; use add_to_scene()")
         return gs.morphs.Terrain(
             pos=self.origin,
             randomize=bool(self.config["randomize"]),
@@ -270,50 +315,38 @@ class TerrainManager:
         return tuple(boxes)
 
     def add_to_scene(self, scene):
-        """向场景添加地形；真实楼梯由多个固定箱体组成。"""
-        if not self.is_box_stairs:
+        """添加高度场、固定楼梯箱体或可滚动的散落球。"""
+        if self.trapezoidal_wave is not None:
+            return self.trapezoidal_wave.add_to_scene(scene)
+        if self.loose_spheres is not None:
+            return self.loose_spheres.add_to_scene(scene)
+        if not (self.is_box_stairs or self.is_platform_ridge):
             return scene.add_entity(self.create_morph())
 
         import genesis as gs
 
         return tuple(
             scene.add_entity(gs.morphs.Box(lower=lower, upper=upper, fixed=True, batch_fixed_verts=False))
-            for lower, upper in self.stair_box_bounds()
+            for lower, upper in (self.platform_boxes if self.is_platform_ridge else self.stair_box_bounds())
         )
 
     def bind_entity(self, entity, *, device, dtype) -> None:
         """保留 Genesis 生成的高度场，供 reset 和每步奖励查询。"""
         self._dtype = dtype
-        if self.is_plane or self.is_box_stairs:
+        if self.is_plane or self.is_box_stairs or self.is_platform_ridge or self.loose_spheres is not None or self.trapezoidal_wave is not None:
             self.height_field = None
             return
         self.height_field = torch.as_tensor(entity.terrain_hf, dtype=dtype, device=device)
 
-    def apply_curriculum(self, values: dict) -> None:
-        """限制 reset 可选的最高难度；静态地形本身不重新生成。"""
-        unknown = set(values).difference({"max_difficulty"})
-        if unknown:
-            raise KeyError(f"Unsupported terrain curriculum keys: {sorted(unknown)}")
-        max_difficulty = int(values.get("max_difficulty", self.max_difficulty))
-        if max_difficulty < 0:
-            raise ValueError("terrain max_difficulty cannot be negative")
-        self.max_difficulty = max_difficulty
-        self.config["max_difficulty"] = max_difficulty
+    def reset(self, env_ids: torch.Tensor) -> None:
+        """仅重置选中环境的动态地形；静态地形无需处理。"""
+        if self.loose_spheres is not None:
+            self.loose_spheres.reset(env_ids, dtype=self._dtype or torch.float32)
 
     def sample_spawn_tiles(self, env_ids: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """返回每个环境的 patch 中心 ``[N,2]`` 与扁平 patch 索引 ``[N]``。"""
-        eligible = [
-            index for index, difficulty in enumerate(self.tile_difficulties) if difficulty <= self.max_difficulty
-        ]
-        if not eligible:
-            minimum = min(self.tile_difficulties)
-            eligible = [index for index, difficulty in enumerate(self.tile_difficulties) if difficulty == minimum]
-        eligible_tensor = torch.tensor(eligible, dtype=torch.long, device=env_ids.device)
-        if self.config["assignment"] == "cyclic":
-            choice = env_ids.to(dtype=torch.long) % len(eligible)
-        else:
-            choice = torch.randint(len(eligible), (env_ids.numel(),), device=env_ids.device)
-        tile_indices = eligible_tensor[choice]
+        # 当前预设各自只有一个 patch，直接使用所选地形，不再按难度筛选。
+        tile_indices = torch.zeros_like(env_ids, dtype=torch.long)
 
         columns = self.n_subterrains[1]
         rows = torch.div(tile_indices, columns, rounding_mode="floor")
@@ -331,8 +364,17 @@ class TerrainManager:
 
     def height_at(self, world_xy: torch.Tensor) -> torch.Tensor:
         """查询世界坐标处地面 z；Plane 始终返回 0。"""
-        if self.is_plane:
+        # 散落球是可移动物体；奖励和出生高度以承托球体的平地为基准。
+        if self.is_plane or self.loose_spheres is not None:
             return torch.zeros((world_xy.shape[0],), dtype=world_xy.dtype, device=world_xy.device)
+        if self.trapezoidal_wave is not None:
+            return self.trapezoidal_wave.height_at(world_xy)
+        if self.is_platform_ridge:
+            height = torch.zeros_like(world_xy[:, 0])
+            for lower, upper in self.platform_boxes[1:]:
+                inside = (world_xy[:, 0] >= lower[0]) & (world_xy[:, 0] < upper[0]) & (world_xy[:, 1] >= lower[1]) & (world_xy[:, 1] < upper[1])
+                height = torch.where(inside, upper[2], height)
+            return height
         if self.is_box_stairs:
             normalized_x = (world_xy[:, 0] - self.stair_start_x) / self.stair_step_depth
             step_index = torch.floor(normalized_x + 1e-6)
@@ -354,7 +396,7 @@ class TerrainManager:
     def out_of_bounds(self, world_xy: torch.Tensor, spawn_centers: torch.Tensor) -> torch.Tensor:
         """检查机器人是否接近所属 patch 的接缝。"""
         margin = self.config["boundary_margin"]
-        if self.is_plane or margin is None:
+        if (self.is_plane and not self.config["bounded"]) or margin is None:
             return torch.zeros((world_xy.shape[0],), dtype=torch.bool, device=world_xy.device)
         half_extent = torch.tensor(
             [0.5 * self.tile_size[0] - margin, 0.5 * self.tile_size[1] - margin],
