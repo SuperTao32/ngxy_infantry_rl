@@ -531,7 +531,7 @@ class LocomotionEnv(LocomotionRewards):
             raise ValueError("joint_force_limit and wheel_force_limit must be positive")
 
     def _joint_dof_indices(self, names):
-        """实体控制接口需要局部索引；地形动态球会占用前面的场景自由度。"""
+        """将场景自由度索引转换为实体控制接口需要的局部索引。"""
         return torch.tensor(
             [self.robot.get_joint(name).dof_start - self.robot.dof_start for name in names],
             dtype=gs.tc_int,

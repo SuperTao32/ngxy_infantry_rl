@@ -29,7 +29,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("-v", "--vis", action="store_true", default=False)
     parser.add_argument("-e", "--exp_name", type=str, default="locomotion_v2")
-    parser.add_argument("-B", "--num_envs", type=int, default=None, help="parallel environments (default: 4 for loose_spheres, otherwise 8192)")
+    parser.add_argument("-B", "--num_envs", type=int, default=8192, help="parallel environments (default: 8192)")
     parser.add_argument("--max_iterations", type=int, default=10001)
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--terrain", choices=TERRAIN_PRESETS, default=None, help="override terrain preset in base config and every curriculum stage, including saved runs")
@@ -92,9 +92,7 @@ def main():
             terrain_target = stage.get("targets", {}).get("terrain")
             if terrain_target is not None:
                 terrain_target["preset"] = args.terrain
-    course_configs = terrain_course_configs(env_cfg.get("terrain"), curriculum_cfg)
-    if args.num_envs is None:
-        args.num_envs = 4 if any(config["preset"] == "loose_spheres" for config in course_configs) else 8192
+    terrain_course_configs(env_cfg.get("terrain"), curriculum_cfg)
     apply_randomization_arguments(env_cfg, obs_cfg, args)
     remaining_iterations = args.max_iterations
 

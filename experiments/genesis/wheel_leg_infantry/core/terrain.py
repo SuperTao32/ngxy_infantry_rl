@@ -11,13 +11,11 @@ from copy import deepcopy
 
 import torch
 
-from .loose_spheres import LooseSpheres
 from .trapezoidal_wave import TrapezoidalWave
 
 TERRAIN_PRESETS = (
     "plane",
     "stairs",
-    "loose_spheres",
     "platform_ridge",
     "trapezoidal_wave",
 )
@@ -26,7 +24,6 @@ _PRESET_TYPES = {
     "stairs": [["box_stairs"]],
     "platform_ridge": [["platform_ridge"]],
     "trapezoidal_wave": [["trapezoidal_wave"]],
-    "loose_spheres": [["loose_spheres"]],
 }
 
 
@@ -67,16 +64,6 @@ def default_terrain_cfg(preset: str = "plane") -> dict:
                 "second_length": None,
                 "approach_length": 2.0,  # tile 中心到一级平台前沿的距离
                 "base_thickness": 0.10,
-            },
-            "loose_spheres": {
-                "diameter": 0.017,  # m，17 mm 为直径
-                "count": 256,
-                "scatter_size": [4.0, 2.0],  # m，以出生 patch 中心为中心
-                "spawn_clearance": 0.5,  # 中央无球正方形的半边长，避免出生穿插
-                "mass": 0.0032,  # kg，单球 3.2 g；由质量和直径推导密度
-                "shore_a": 90.0,  # 材料信息；当前刚体模型不据此改变接触刚度或摩擦
-                "friction": 0.3,
-                "ground_friction": 0.8,
             },
         },
     }
@@ -175,7 +162,7 @@ def bilinear_height_at(
 
 
 class TerrainManager:
-    """管理静态/动态地形、并行环境出生 patch 和地面高度查询。"""
+    """管理静态地形、并行环境出生 patch 和地面高度查询。"""
 
     def __init__(self, config: dict | None):
         self.config = resolve_terrain_cfg(config)
@@ -193,10 +180,7 @@ class TerrainManager:
         self.origin = (-0.5 * self.total_size[0], -0.5 * self.total_size[1], 0.0)
         self.height_field: torch.Tensor | None = None
         self._dtype = None
-        self.loose_spheres = (
-            LooseSpheres(self.config["subterrain_parameters"]["loose_spheres"], self.tile_size) if self.preset == "loose_spheres" else None
-        )
-        self.max_collision_pairs = 20 if self.loose_spheres is None else 20 + 8 * self.loose_spheres.count
+        self.max_collision_pairs = 20
 
         self.flat_tile_types = tuple(value for row in self.tile_types for value in row)
 
@@ -278,8 +262,6 @@ class TerrainManager:
 
         if self.is_plane:
             return gs.morphs.Plane()
-        if self.loose_spheres is not None:
-            raise RuntimeError("loose spheres contain multiple morphs; use add_to_scene()")
         if self.is_box_stairs or self.is_platform_ridge or self.trapezoidal_wave is not None:
             raise RuntimeError("segmented terrain contains multiple morphs; use add_to_scene()")
         return gs.morphs.Terrain(
@@ -315,11 +297,9 @@ class TerrainManager:
         return tuple(boxes)
 
     def add_to_scene(self, scene):
-        """添加高度场、固定楼梯箱体或可滚动的散落球。"""
+        """添加平面、高度场或固定分段地形实体。"""
         if self.trapezoidal_wave is not None:
             return self.trapezoidal_wave.add_to_scene(scene)
-        if self.loose_spheres is not None:
-            return self.loose_spheres.add_to_scene(scene)
         if not (self.is_box_stairs or self.is_platform_ridge):
             return scene.add_entity(self.create_morph())
 
@@ -333,15 +313,13 @@ class TerrainManager:
     def bind_entity(self, entity, *, device, dtype) -> None:
         """保留 Genesis 生成的高度场，供 reset 和每步奖励查询。"""
         self._dtype = dtype
-        if self.is_plane or self.is_box_stairs or self.is_platform_ridge or self.loose_spheres is not None or self.trapezoidal_wave is not None:
+        if self.is_plane or self.is_box_stairs or self.is_platform_ridge or self.trapezoidal_wave is not None:
             self.height_field = None
             return
         self.height_field = torch.as_tensor(entity.terrain_hf, dtype=dtype, device=device)
 
     def reset(self, env_ids: torch.Tensor) -> None:
-        """仅重置选中环境的动态地形；静态地形无需处理。"""
-        if self.loose_spheres is not None:
-            self.loose_spheres.reset(env_ids, dtype=self._dtype or torch.float32)
+        """保留环境统一复位接口；当前静态地形无需处理。"""
 
     def sample_spawn_tiles(self, env_ids: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """返回每个环境的 patch 中心 ``[N,2]`` 与扁平 patch 索引 ``[N]``。"""
@@ -364,8 +342,7 @@ class TerrainManager:
 
     def height_at(self, world_xy: torch.Tensor) -> torch.Tensor:
         """查询世界坐标处地面 z；Plane 始终返回 0。"""
-        # 散落球是可移动物体；奖励和出生高度以承托球体的平地为基准。
-        if self.is_plane or self.loose_spheres is not None:
+        if self.is_plane:
             return torch.zeros((world_xy.shape[0],), dtype=world_xy.dtype, device=world_xy.device)
         if self.trapezoidal_wave is not None:
             return self.trapezoidal_wave.height_at(world_xy)

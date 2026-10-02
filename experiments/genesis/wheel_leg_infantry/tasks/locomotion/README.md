@@ -1,6 +1,6 @@
 # 行走地形
 
-当前可选预设为 `plane`、`stairs`、`loose_spheres`、`platform_ridge`、`trapezoidal_wave`。`stairs` 使用固定箱体楼梯。
+当前可选预设为 `plane`、`stairs`、`platform_ridge`、`trapezoidal_wave`。`stairs` 使用固定箱体楼梯。
 
 平地统一使用 `plane`（z=0 解析平面），移除重复的 `flat` 预设。`plane` 默认没有边界复位；设置 `terrain["bounded"] = True` 可按 `tile_size` 与 `boundary_margin` 开启边界 timeout。旧配置中的 `preset="flat"` 自动迁移到 `plane`，默认保留其边界复位行为；其余地形继续按原规则检查边界。
 
@@ -41,7 +41,7 @@
 ]
 ```
 
-`platform_ridge` 的高度、长度、凸台宽度、接近距离、底板厚度均可调整，`second_length=None` 仍表示延伸到 tile 边界。`ridge_height` 必须高于两侧平台，所有几何必须能放进 `tile_size`。同样可以切换 `trapezoidal_wave`、`loose_spheres`，并配置相应参数。
+`platform_ridge` 的高度、长度、凸台宽度、接近距离、底板厚度均可调整，`second_length=None` 仍表示延伸到 tile 边界。`ridge_height` 必须高于两侧平台，所有几何必须能放进 `tile_size`。同样可以切换 `trapezoidal_wave`，并配置相应参数。
 
 `config_downstairs.py` 提供平地 → 低平台 → 标准平台 → 楼梯 → 梯形波的完整示例，可直接修改阶段迭代数和参数：
 
@@ -52,62 +52,12 @@
 
 指定训练 `--terrain` 时，基础配置和各课程阶段的 preset 都被覆盖为该类型，阶段中的几何参数仍然生效。若需要课程切换不同类型，不传 `--terrain`。
 
-所有不同的课程地形在启动时预构建，阶段切换会在当前控制步完成动作和奖励后结束所有回合，再按新地形复位；runner 收到截断标志和新观测。恢复 checkpoint 时按恢复迭代数选中对应地形。多地形课程中的平地使用有限地面，各阶段都启用 tile 边界复位。预构建的实体增加场景内存与碰撞开销，含散落球的课程在未指定 `-B` 时默认只用 4 个环境。
+所有不同的课程地形在启动时预构建，阶段切换会在当前控制步完成动作和奖励后结束所有回合，再按新地形复位；runner 收到截断标志和新观测。恢复 checkpoint 时按恢复迭代数选中对应地形。多地形课程中的平地使用有限地面，各阶段都启用 tile 边界复位。预构建的实体增加场景内存与碰撞开销；未指定 `-B` 时默认使用 8192 个并行环境。
 
 ## eval 地形默认值
 
 评估保留日志中的地形类型（或 `--terrain` 指定的类型），但几何参数和 `tile_size` 每次重新读取当前 `default_terrain_cfg(preset)`，不沿用日志内的旧几何，也不再自动缩成 12 × 6 m。`--terrain-size LENGTH WIDTH` 可显式覆盖尺寸。eval 不运行训练课程；要查看某阶段地形，用 `--terrain` 选择类型，并在 `default_terrain_cfg` 中设置所需参数。
 
-
-## 散落刚性球地形
-
-`loose_spheres` 是平地上的独立动态刚体球，直径 **17 mm**（半径 8.5 mm），单球质量 **3.2 g**，材料邵氏硬度 **90A**。球与地面、机器人及其他球参与碰撞，可滚动、可被车轮推动。每个并行环境独立采样；每次物理 reset 重新散布并清零球体线速度和角速度，仅影响被重置的环境。
-
-默认在以出生点为中心的 **4 × 2 m** 区域内散布 **256** 个球，中央 **1 × 1 m** 留空供机器人出生。随机选择互不重复的网格并在格内抖动，避免球体初始重叠。散布范围外仍是平地，球可以被推出散布区；地形 patch 边界继续使用原有 timeout 机制。所有高度奖励和机器人出生高度均以承托球体的平地为基准。
-
-启用训练（先用少量并行环境验证速度和显存，再逐步增加）：
-
-```bash
-.venv/bin/python -m experiments.genesis.wheel_leg_infantry.tasks.locomotion.train \
-  --terrain loose_spheres -e locomotion_spheres -B 4
-```
-
-也可结合原有 `--load-weights CHECKPOINT_PATH` 从已有策略开始新训练。`--terrain` 在读取配置后生效，包括恢复训练时；不指定则保留原配置。评估已有策略：
-
-```bash
-.venv/bin/python -m experiments.genesis.wheel_leg_infantry.tasks.locomotion.eval \
-  --log-root log_shared -e locomotion_v2 --terrain loose_spheres
-```
-
-
-```python
-"terrain": {
-    "preset": "loose_spheres",
-    "subterrain_parameters": {
-        "loose_spheres": {
-            "diameter": 0.017,       # m
-            "count": 256,
-            "scatter_size": [4.0, 2.0],  # m，须落在 tile_size 内
-            "spawn_clearance": 0.5, # 中央无球正方形的半边长，m
-            "mass": 0.0032,         # kg，单球 3.2 g
-            "shore_a": 90.0,        # 材料硬度记录，当前刚体模型不模拟球体变形
-            "friction": 0.3,        # 球体材质摩擦系数
-            "ground_friction": 0.8,
-        },
-    },
-},
-```
-
-密度由质量和球体积计算：`ρ = mass / (4πr³/3)`，默认约 **1243.95 kg/m³**；Genesis 用球体解析体积和该密度计算质量及转动惯量。调整单球重量请设置 `mass`，旧的 `density` 配置项不再接受。`shore_a` 只记录材料信息，当前刚体模型未模拟 90A 材料的压缩变形，也未将硬度用于设置接触刚度、恢复系数或摩擦系数；摩擦参数仍需标定。启用已有摩擦随机化时，球和地面同样参与。球数在场景构造时确定，reset 只改变位置。`--seed` 控制采样复现；课程可通过预构建不同阶段地形来改变球数或质量。
-
-动态球显著增加自由度和接触求解开销。不指定 `-B` 时，散落球地形默认使用 4 个并行环境，其他地形保持 8192；显式 `-B` 优先。首次构建可能需要数分钟编译。环境保留 20 个物理子步，并按球数提高碰撞对预算。本改动提供后续抗打滑训练场景，未增加专用抗打滑奖励，也未执行完整策略训练。
-
-本地验证：
-
-```bash
-.venv/bin/python -m unittest tests.genesis.test_loose_spheres -v
-NGXY_SPHERES_SMOKE=1 .venv/bin/python -m unittest tests.genesis.test_loose_spheres.LooseSpheresSmokeTests -v
-```
 
 ## 平台—窄凸台—平台地形
 
