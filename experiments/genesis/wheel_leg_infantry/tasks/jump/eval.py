@@ -1,4 +1,4 @@
-"""自动重复评估三个模式；距离由 env 设置，支持指定模式/速度。"""
+"""自动重复评估三个模式；all 按批次轮换可视化模式，支持指定模式/速度。"""
 
 import argparse
 from copy import deepcopy
@@ -34,7 +34,8 @@ def _parse_args(argv=None):
     parser.add_argument("--locomotion-log-root", default=None)
     parser.add_argument("--version", default=None)
     parser.add_argument("--ckpt", type=int, default=None)
-    parser.add_argument("--mode", choices=("all", *MODE_NAMES), default="all")
+    parser.add_argument("--mode", choices=("all", *MODE_NAMES), default="all",
+                        help="all 每批轮换 flat → step_20cm → step_40cm，画面显示环境 0")
     parser.add_argument("--speed", type=float, default=None, help="固定前向速度 m/s；默认按保存的配置采样")
     parser.add_argument("-B", "--num-envs", type=int, default=3)
     parser.add_argument("--episodes", type=int, default=10, help="批次，每批 num-envs 次跳跃")
@@ -44,8 +45,6 @@ def _parse_args(argv=None):
     args = parser.parse_args(argv)
     if args.num_envs <= 0 or args.episodes <= 0:
         parser.error("num-envs and episodes must be positive")
-    if args.mode == "all" and args.num_envs < 3:
-        parser.error("--mode all requires at least 3 environments")
     if args.speed is not None and (not math.isfinite(args.speed) or args.speed < 0):
         parser.error("--speed must be finite and non-negative")
     return args
@@ -99,9 +98,14 @@ def main():
         print(f"[jump eval] checkpoint={checkpoint}")
         with torch.inference_mode():
             for episode in range(args.episodes):
+                if args.mode == "all":
+                    env.terrain.cyclic_mode_offset = episode % len(MODE_NAMES)
                 stabilize_with_locomotion(env, teacher, env_cfg["locomotion_warmup"])
                 obs = env.begin_jump_rollout()
                 modes = env.jump_mode.clone()
+                if not args.headless:
+                    env.focus_viewer()
+                print(f"[jump eval] batch={episode + 1}: env[0]={MODE_NAMES[int(modes[0])]}", flush=True)
                 for _ in range(env.max_episode_length):
                     obs, _, _, _ = env.step(policy(obs))
                     if env.scene.rigid_solver.get_error_envs_mask().any():

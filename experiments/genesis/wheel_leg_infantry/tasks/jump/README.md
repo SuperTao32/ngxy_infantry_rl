@@ -148,7 +148,10 @@ uv run --locked python -m experiments.genesis.wheel_leg_infantry.tasks.jump.trai
 恢复默认使用保存的配置；要使用当前 `config.py`，追加 `--resume-config current`。
 模式含义和输入顺序必须保持一致。
 
-自动评估三个模式（默认可视化，追加 `--headless` 可关闭）：
+自动评估三个模式（默认可视化，追加 `--headless` 可关闭）。`all` 每批轮换模式分配，
+画面中的环境 0 按 `flat → step_20cm → step_40cm → flat` 循环，切换时镜头重新对准机器人。
+`-B 3` 每批仍覆盖三个模式；`-B 1` 也支持轮播，至少运行 `--episodes 3` 才能看完三个模式。
+`--episodes` 表示总批数，每批每个环境执行一次跳跃，控制台打印环境 0 的当前模式及累计成功率。
 
 ```bash
 uv run --locked python -m experiments.genesis.wheel_leg_infantry.tasks.jump.eval \

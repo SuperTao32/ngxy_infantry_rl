@@ -12,6 +12,7 @@ class JumpTerrain(TerrainManager):
         super().__init__({"preset": "plane"})
         self.task_cfg = task_cfg
         self.platform_entities = {}
+        self.cyclic_mode_offset = 0
 
     def add_to_scene(self, scene):
         import genesis as gs
@@ -51,7 +52,8 @@ class JumpTerrain(TerrainManager):
     def sample_spawn_tiles(self, env_ids):
         cfg = self.task_cfg
         if cfg["assignment"] == "cyclic":
-            modes = env_ids.to(torch.long) % 3
+            # eval 在批次边界轮换；同一批预热中的局部 reset 保持模式不变。
+            modes = (env_ids.to(torch.long) + self.cyclic_mode_offset) % len(cfg["mode_names"])
         else:
             probabilities = torch.tensor(cfg["mode_probabilities"], dtype=self._dtype or torch.float32, device=env_ids.device)
             modes = torch.multinomial(probabilities, env_ids.numel(), replacement=True)
