@@ -139,13 +139,13 @@ def _get_jump_modes_cfg(episode_length_s: float):
     base_to_wheel_bottom_trajectories = {
         "flat": [
             [0.00, 0.22],
-            [0.20, 0.50],
+            [0.20, 0.60],
             [0.30, 0.20],
             [episode_length_s, 0.22],
         ],
         "step_20cm": [
             [0.00, 0.22],
-            [0.20, 0.50],
+            [0.20, 0.40],
             [0.30, 0.20],
             [episode_length_s, 0.22],
         ],
@@ -163,15 +163,15 @@ def _get_jump_modes_cfg(episode_length_s: float):
         "platform_enabled": [True, True, True],  # 课程可移走台阶，任务编码与跳高目标不变。
         "assignment": "random",  # cyclic 用于逐模式验证。
         # base 原点相对起跳面的峰值目标，与 base 到轮底的距离参考独立。
-        "clearance_targets_m": [0.50, 0.50, 0.70],
+        "clearance_targets_m": [0.55, 0.45, 0.70],
         "min_forward_speeds_m_s": [0.0, 0.8, 1.5],
         "flat_stationary_probability": 0.1,
         # 每个模式的 [前向速度 m/s, 起跳距离 m]，节点间线性插值。
         # 这些是待训练/标定的初值，不是已验证的最优起跳位置。
         "distance_tables": [
-            [[0.0, 0.0], [4.0, 0.0]],
-            [[0.0, 0.35], [0.8, 0.35], [1.0, 0.40], [2.0, 0.60], [3.0, 0.65]],
-            [[0.0, 0.65], [1.5, 0.65], [2.0, 0.8], [3.0, 0.9]],
+            [[0.0, 0.0], [3.0, 0.0]],
+            [[0.0, 0.35], [0.8, 0.35], [1.0, 0.40], [2.0, 0.60], [3.0, 0.75]],
+            [[0.0, 0.65], [1.5, 0.65], [2.0, 0.8], [3.0, 0.95]],
         ],
         "distance_jitter_m": 0.01,
         "height_references": [base_to_wheel_bottom_trajectories[name] for name in MODE_NAMES],
@@ -184,7 +184,7 @@ def _get_jump_modes_cfg(episode_length_s: float):
         # 轮底取双轮较低侧的回合峰值；base_link 取首次腾空峰值，均须严格大于阈值。
         # 独立于 clearance_targets_m（奖励目标）；有台阶时仍使用落台成功条件。
         "ground_success_wheel_clearance_m": [0.32, 0.25, 0.40],
-        "ground_success_base_height_m": [0.50, 0.50, 0.68],
+        "ground_success_base_height_m": [0.55, 0.45, 0.68],
         # 落台成功判定
         "landing_margin_m": 0.02,
         "landing_height_tolerance_m": 0.025,
@@ -300,7 +300,7 @@ def _get_curriculum_cfg():
             },
             {
                 "name": "step_40cm",
-                "start_iteration": 200,
+                "start_iteration": 300,
                 "targets": {
                     "terrain": {"platform_enabled": [True, True, True]},
                     "reward_scales": {
@@ -322,13 +322,13 @@ def _get_curriculum_cfg():
             },
             {
                 "name": "mixed_jump",
-                "start_iteration": 500,
+                "start_iteration": 600,
                 "targets": {
                     "terrain": {
                         "mode_probabilities": [1 / 5, 1 / 5, 3 / 5],
                         "platform_enabled": [True, True, True],
                     },
-                    "command_ranges": {"lin_vel_range": [1.0, 2.5]},
+                    "command_ranges": {"lin_vel_range": [1.0, 3.0]},
                     "reward_scales": {
                         "base_balance": -30.0,
                         "leg_symmetry": -20.0,
@@ -336,19 +336,21 @@ def _get_curriculum_cfg():
                         "tracking_lin_vel": 10.0,
                         "tracking_ang_vel": 20.0,
                         # 落地
-                        "soft_landing": 1000.0,
-                        "landing_stability": 1000.0,
-                        "action_rate": -0.05,
+                        "soft_landing": 2000.0,
+                        "landing_stability": 2000.0,
+                        "action_rate": -0.07,
                         # 按 [平地, 20 cm, 40 cm] 指定权重，仅提高 40 cm 任务。
-                        "flight_peak_height": 100.0,
-                        "takeoff_vertical_velocity": 500.0,
-                        "takeoff_upward_velocity": 200.0,
-                        "flight_height_progress": 0.0,
-                        "flight_height_tracking": [100.0, 100.0, 0.0],
+                        "flight_airtime": [20.0, 5.0, 20.0],
+                        "flight_peak_height": [100.0, 0.0, 2000.0],
+                        "takeoff_vertical_velocity": [200.0, 200.0, 2000.0],
+                        "takeoff_upward_velocity": [0.0, 0.0, 1000.0],
+                        "flight_height_progress": [0.0, 0.0, 100.0],
+                        "flight_height_tracking": [1000.0, 500.0, 0.0],
                         "flight_height_shortfall": -100.0,
                         "leg_extension_at_limit": -300.0,
                         "flight_wheel_clearance": 100.0,
-                        "flight_balance": 50.0,
+                        "flight_balance": 100.0,
+                        "task_failure": -5000.0,
                     },
                 },
             },

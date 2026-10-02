@@ -1,0 +1,770 @@
+{
+  "schema_version": 2,
+  "env_cfg": {
+    "num_actions": 6,
+    "num_joints": 4,
+    "num_wheels": 2,
+    "robot_mjcf": "assets/robot/wheelbipeV14_2/mjcf/wheelbipeV14_2.xml",
+    "terrain": {
+      "preset": "plane"
+    },
+    "randomization": {
+      "dynamics": {
+        "enabled": false,
+        "strength": 1.0,
+        "push": {
+          "enabled": true,
+          "targets": [
+            "base",
+            "left_wheel",
+            "right_wheel"
+          ],
+          "interval_s_range": [
+            3.0,
+            8.0
+          ],
+          "duration_s": 0.02,
+          "force_x_range": [
+            -30.0,
+            30.0
+          ],
+          "force_y_range": [
+            -30.0,
+            30.0
+          ],
+          "force_z_range": [
+            -30.0,
+            30.0
+          ]
+        },
+        "friction": {
+          "enabled": true,
+          "ratio_range": [
+            0.6,
+            1.4
+          ]
+        },
+        "base_mass": {
+          "enabled": true,
+          "added_mass_range": [
+            -1.0,
+            2.0
+          ]
+        },
+        "com_displacement": {
+          "enabled": true,
+          "displacement_range": [
+            -0.01,
+            0.01
+          ]
+        },
+        "motor_strength": {
+          "enabled": true,
+          "ratio_range": [
+            0.9,
+            1.1
+          ]
+        },
+        "motor_offset": {
+          "enabled": true,
+          "offset_range": [
+            -0.02,
+            0.02
+          ]
+        },
+        "passive_joints": {
+          "enabled": true,
+          "frictionloss_range": [
+            0.005,
+            0.015
+          ],
+          "damping_range": [
+            0.005,
+            0.015
+          ],
+          "overrides": {}
+        },
+        "gas_spring": {
+          "enabled": true,
+          "preload_force_range": [
+            0.95,
+            1.05
+          ],
+          "stiffness_range": [
+            1.0,
+            1.0
+          ],
+          "damping_range": [
+            1.0,
+            1.0
+          ]
+        },
+        "motor_gains": {
+          "enabled": true,
+          "joint_kp_enabled": true,
+          "joint_kd_enabled": true,
+          "wheel_kd_enabled": true,
+          "joint_kp_range": [
+            0.9,
+            1.1
+          ],
+          "joint_kd_range": [
+            0.9,
+            1.1
+          ],
+          "wheel_kd_range": [
+            0.9,
+            1.1
+          ]
+        }
+      },
+      "sensors": {
+        "enabled": true,
+        "strength": 1.0,
+        "imu": {
+          "acc_noise": 0.05,
+          "acc_bias": 0.0,
+          "acc_random_walk": 0.0001,
+          "gyro_noise": 0.003,
+          "gyro_bias": 0.0,
+          "gyro_random_walk": 1e-05,
+          "delay": 0.0,
+          "jitter": 0.0
+        },
+        "joint_pos": {
+          "enabled": false,
+          "std": 0.0,
+          "bias_range": [
+            0.0,
+            0.0
+          ]
+        },
+        "joint_vel": {
+          "enabled": true,
+          "std": 0.1,
+          "bias_range": [
+            0.0,
+            0.0
+          ]
+        },
+        "wheel_vel": {
+          "enabled": true,
+          "std": 0.2,
+          "bias_range": [
+            0.0,
+            0.0
+          ]
+        }
+      }
+    },
+    "default_joint_pos": {
+      "left_front1_joint": 0.0,
+      "left_rear1_joint": 0.0,
+      "right_front1_joint": 0.0,
+      "right_rear1_joint": 0.0
+    },
+    "joint_names": [
+      "left_front1_joint",
+      "right_front1_joint",
+      "left_rear1_joint",
+      "right_rear1_joint"
+    ],
+    "leg_front_joint_names": [
+      "left_front1_joint",
+      "right_front1_joint"
+    ],
+    "leg_rear_joint_names": [
+      "left_rear1_joint",
+      "right_rear1_joint"
+    ],
+    "wheel_names": [
+      "left_wheel_joint",
+      "right_wheel_joint"
+    ],
+    "wheel_link_names": [
+      "left_wheel_link",
+      "right_wheel_link"
+    ],
+    "spring_names": [
+      "left_spring2_joint",
+      "right_spring2_joint"
+    ],
+    "base_link_name": "base_link",
+    "leg_upper_link_length": 0.21,
+    "leg_lower_link_length": 0.25,
+    "leg_angle_limit_range": [
+      -0.5235987755982988,
+      0.5235987755982988
+    ],
+    "min_upper_link_angle": 1.5707963267948966,
+    "gas_spring_preload_force": 420.0,
+    "gas_spring_stiffness": 0.0,
+    "gas_spring_damping": 0.0,
+    "gas_spring_max_compression": 0.06,
+    "wheel_contact_force_threshold": 1.0,
+    "base_contact_force_threshold": 5.0,
+    "joint_kp": 60.0,
+    "joint_kd": 3.0,
+    "wheel_kd": 0.3,
+    "joint_force_limit": 40.0,
+    "wheel_force_limit": 5.0,
+    "joint_pos_scale": 1.2,
+    "wheel_vel_scale": 70.0,
+    "clip_joint_action": 1.0,
+    "clip_wheel_action": 1.0,
+    "simulate_action_latency": true,
+    "termination_if_roll_greater_than": 30.0,
+    "termination_if_pitch_greater_than": 30.0,
+    "tilt_termination_duration_s": 0.5,
+    "base_contact_termination_duration_s": null,
+    "base_init_pos_range": [
+      [
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0
+      ],
+      [
+        0.22,
+        0.22
+      ]
+    ],
+    "base_init_rpy_offset_range_deg": [
+      [
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0
+      ]
+    ],
+    "base_init_lin_vel_range": [
+      [
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0
+      ]
+    ],
+    "base_init_ang_vel_range": [
+      [
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0
+      ]
+    ],
+    "episode_length_s": 1.1,
+    "resampling_time_s": 1.1,
+    "jump_phase_durations_s": {
+      "takeoff": 0.2,
+      "flight": 0.4,
+      "landing": 0.5
+    },
+    "handoff_on_landing": false,
+    "jump_motor_params": {
+      "joint_kp": 100.0,
+      "joint_kd": 2.0,
+      "wheel_kd": 0.3,
+      "joint_force_limit": null,
+      "wheel_force_limit": null
+    },
+    "jump_step_40cm_joint_kd": 0.1,
+    "takeoff_min_airborne_time_s": 0.06,
+    "jump_max_tilt_deg": 10.0,
+    "jump_termination": {
+      "on_invalid": true
+    },
+    "locomotion_warmup": {
+      "command_ranges": {
+        "lin_vel_range": [
+          0.0,
+          1.0
+        ],
+        "ang_vel_range": [
+          0.0,
+          0.0
+        ],
+        "base_height_range": [
+          0.22,
+          0.22
+        ]
+      },
+      "min_steps": 1,
+      "max_steps": 200,
+      "stable_steps": 10,
+      "stable_fraction": 0.8,
+      "forward_velocity_tolerance": 0.2,
+      "yaw_rate_tolerance": 0.05,
+      "base_height_tolerance": 0.03,
+      "vertical_velocity_tolerance": 0.03,
+      "tilt_tolerance_deg": 5.0,
+      "require_both_wheels_contact": true
+    },
+    "jump_modes": {
+      "mode_names": [
+        "flat",
+        "step_20cm",
+        "step_40cm"
+      ],
+      "step_heights_m": [
+        0.0,
+        0.2,
+        0.4
+      ],
+      "platform_enabled": [
+        true,
+        true,
+        true
+      ],
+      "assignment": "random",
+      "clearance_targets_m": [
+        0.55,
+        0.45,
+        0.7
+      ],
+      "min_forward_speeds_m_s": [
+        0.0,
+        0.8,
+        1.5
+      ],
+      "flat_stationary_probability": 0.1,
+      "distance_tables": [
+        [
+          [
+            0.0,
+            0.0
+          ],
+          [
+            3.0,
+            0.0
+          ]
+        ],
+        [
+          [
+            0.0,
+            0.35
+          ],
+          [
+            0.8,
+            0.35
+          ],
+          [
+            1.0,
+            0.4
+          ],
+          [
+            2.0,
+            0.6
+          ],
+          [
+            3.0,
+            0.75
+          ]
+        ],
+        [
+          [
+            0.0,
+            0.65
+          ],
+          [
+            1.5,
+            0.65
+          ],
+          [
+            2.0,
+            0.8
+          ],
+          [
+            3.0,
+            0.95
+          ]
+        ]
+      ],
+      "distance_jitter_m": 0.01,
+      "height_references": [
+        [
+          [
+            0.0,
+            0.22
+          ],
+          [
+            0.2,
+            0.6
+          ],
+          [
+            0.3,
+            0.2
+          ],
+          [
+            1.1,
+            0.22
+          ]
+        ],
+        [
+          [
+            0.0,
+            0.22
+          ],
+          [
+            0.2,
+            0.4
+          ],
+          [
+            0.3,
+            0.2
+          ],
+          [
+            1.1,
+            0.22
+          ]
+        ],
+        [
+          [
+            0.0,
+            0.22
+          ],
+          [
+            0.2,
+            0.7
+          ],
+          [
+            0.3,
+            0.2
+          ],
+          [
+            1.1,
+            0.22
+          ]
+        ]
+      ],
+      "platform_length_m": 2.0,
+      "platform_width_m": 1.0,
+      "lane_spacing_m": 4.0,
+      "warmup_distance_m": 50.0,
+      "ground_success_wheel_clearance_m": [
+        0.32,
+        0.25,
+        0.4
+      ],
+      "ground_success_base_height_m": [
+        0.55,
+        0.45,
+        0.68
+      ],
+      "landing_margin_m": 0.02,
+      "landing_height_tolerance_m": 0.025,
+      "landing_stable_time_s": 0.16,
+      "landing_max_vertical_speed_m_s": 0.35,
+      "landing_max_tilt_deg": 10.0,
+      "mode_probabilities": [
+        0.0,
+        0,
+        1.0
+      ]
+    }
+  },
+  "obs_cfg": {
+    "imu": {
+      "link_name": "base_link",
+      "pos_offset": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "obs_scales": {
+      "lin_vel": 0.2857142857142857,
+      "lin_acc": 0.1019367991845056,
+      "ang_vel": 0.25,
+      "joint_pos": 1.2,
+      "joint_vel": 0.05,
+      "wheel_vel": 0.02,
+      "base_height": 2.857142857142857,
+      "leg_length": 2.857142857142857,
+      "leg_angle": 1.0,
+      "jump_base_height": 2.5,
+      "vertical_velocity": 0.5,
+      "vertical_acceleration": 0.1
+    },
+    "locomotion_policy_obs_dim": 32,
+    "num_policy_obs": 47,
+    "num_critic_obs": 66
+  },
+  "reward_cfg": {
+    "height_reference_tolerance_m": 0.02,
+    "height_reference_sigma": 0.0025,
+    "short_leg_length_target": 0.15,
+    "leg_length_sigma": 0.01,
+    "flight_height_sigma": 0.04,
+    "flight_balance_sigma": 0.04,
+    "landing_velocity_sigma": 0.05,
+    "landing_tilt_sigma": 0.04,
+    "landing_ang_vel_sigma": 0.02,
+    "reference_forward_velocity_sigma": 0.25,
+    "zero_yaw_rate_sigma": 0.02,
+    "reward_scales": {
+      "base_balance": -5.0,
+      "leg_symmetry": -50.0,
+      "leg_symmetry_bonus": 10.0,
+      "tracking_lin_vel": 5.0,
+      "tracking_ang_vel": 10.0,
+      "action_rate": -0.001,
+      "leg_extension_at_limit": -100.0,
+      "base_contact": -1.0,
+      "death": -100.0,
+      "jump_invalid": -200.0,
+      "flight_leg_vertical": 5.0,
+      "takeoff_event": 200.0,
+      "flight_height_shortfall": -2000.0,
+      "flight_peak_height": 5000.0,
+      "takeoff_upward_velocity": 2000.0,
+      "takeoff_vertical_velocity": 3000.0,
+      "flight_airtime": 10.0,
+      "flight_balance": 5.0,
+      "flight_height_progress": 80.0,
+      "flight_height_tracking": 0.0,
+      "flight_wheel_clearance": 1500.0,
+      "landing_vertical_velocity": -1.0,
+      "soft_landing": 1.0,
+      "landing_stability": 1.0,
+      "landing_airborne": -1.0,
+      "target_landing": 30.0,
+      "base_to_wheel_bottom_distance_tracking": 20.0,
+      "task_success": 5000.0,
+      "task_failure": -500.0
+    },
+    "disabled_locomotion_rewards": [
+      "gated_tracking_lin_vel",
+      "gated_tracking_ang_vel",
+      "base_height",
+      "height_gate",
+      "joint_vel",
+      "landing_base_oscillation",
+      "landing_joint_vel",
+      "alive"
+    ]
+  },
+  "command_cfg": {
+    "num_commands": 3,
+    "lin_vel_range": [
+      0.0,
+      1.0
+    ],
+    "ang_vel_range": [
+      0.0,
+      0.0
+    ],
+    "base_height_range": [
+      0.22,
+      0.22
+    ],
+    "high_speed_ang_vel": {
+      "lin_vel_threshold": 1.5,
+      "max_abs_ang_vel": 2.0
+    },
+    "standing_probability": 0.25
+  },
+  "curriculum_cfg": {
+    "enabled": true,
+    "stages": [
+      {
+        "name": "flat_jump_high",
+        "start_iteration": 0,
+        "targets": {
+          "terrain": {
+            "mode_probabilities": [
+              0.0,
+              0,
+              1.0
+            ],
+            "platform_enabled": [
+              true,
+              true,
+              false
+            ]
+          },
+          "command_ranges": {
+            "lin_vel_range": [
+              1.5,
+              2.0
+            ]
+          }
+        }
+      },
+      {
+        "name": "step_40cm",
+        "start_iteration": 300,
+        "targets": {
+          "terrain": {
+            "platform_enabled": [
+              true,
+              true,
+              true
+            ]
+          },
+          "reward_scales": {
+            "base_contact": -200.0,
+            "landing_airborne": -200.0,
+            "base_balance": -30.0,
+            "leg_symmetry": -20.0,
+            "leg_symmetry_bonus": 10.0,
+            "tracking_lin_vel": 10.0,
+            "tracking_ang_vel": 30.0,
+            "soft_landing": 1000.0,
+            "landing_stability": 1000.0,
+            "leg_extension_at_limit": -200.0,
+            "flight_wheel_clearance": 500.0,
+            "landing_vertical_velocity": -100.0
+          }
+        }
+      },
+      {
+        "name": "mixed_jump",
+        "start_iteration": 600,
+        "targets": {
+          "terrain": {
+            "mode_probabilities": [
+              0.2,
+              0.2,
+              0.6
+            ],
+            "platform_enabled": [
+              true,
+              true,
+              true
+            ]
+          },
+          "command_ranges": {
+            "lin_vel_range": [
+              1.0,
+              3.0
+            ]
+          },
+          "reward_scales": {
+            "base_balance": -30.0,
+            "leg_symmetry": -20.0,
+            "leg_symmetry_bonus": 10.0,
+            "tracking_lin_vel": 10.0,
+            "tracking_ang_vel": 20.0,
+            "soft_landing": 2000.0,
+            "landing_stability": 2000.0,
+            "action_rate": -0.07,
+            "flight_airtime": [
+              20.0,
+              5.0,
+              20.0
+            ],
+            "flight_peak_height": [
+              100.0,
+              0.0,
+              2000.0
+            ],
+            "takeoff_vertical_velocity": [
+              200.0,
+              200.0,
+              2000.0
+            ],
+            "takeoff_upward_velocity": [
+              0.0,
+              0.0,
+              1000.0
+            ],
+            "flight_height_progress": [
+              0.0,
+              0.0,
+              100.0
+            ],
+            "flight_height_tracking": [
+              1000.0,
+              500.0,
+              0.0
+            ],
+            "flight_height_shortfall": -100.0,
+            "leg_extension_at_limit": -300.0,
+            "flight_wheel_clearance": 100.0,
+            "flight_balance": 100.0,
+            "task_failure": -5000.0
+          }
+        }
+      }
+    ]
+  },
+  "train_cfg": {
+    "algorithm": {
+      "class_name": "PPO",
+      "clip_param": 0.2,
+      "desired_kl": 0.01,
+      "entropy_coef": 0.01,
+      "gamma": 0.99,
+      "lam": 0.95,
+      "learning_rate": 0.0003,
+      "max_grad_norm": 1.0,
+      "num_learning_epochs": 5,
+      "num_mini_batches": 4,
+      "schedule": "adaptive",
+      "use_clipped_value_loss": true,
+      "value_loss_coef": 1.0
+    },
+    "actor": {
+      "class_name": "MLPModel",
+      "hidden_dims": [
+        512,
+        256,
+        128
+      ],
+      "activation": "elu",
+      "distribution_cfg": {
+        "class_name": "BetaDistribution",
+        "action_range": [
+          -1.0,
+          1.0
+        ]
+      }
+    },
+    "critic": {
+      "class_name": "MLPModel",
+      "hidden_dims": [
+        512,
+        256,
+        128
+      ],
+      "activation": "elu"
+    },
+    "obs_groups": {
+      "actor": [
+        "policy"
+      ],
+      "critic": [
+        "critic"
+      ]
+    },
+    "num_steps_per_env": 110,
+    "save_interval": 100,
+    "run_name": "jump_v2/version_0011",
+    "logger": "tensorboard"
+  },
+  "source_locomotion": {
+    "run_dir": "/home/tuyuantao/ngxy_infantry_rl/log_shared/locomotion_v2/version_0011",
+    "checkpoint": "/home/tuyuantao/ngxy_infantry_rl/log_shared/locomotion_v2/version_0011/model_10000.pt"
+  }
+}
