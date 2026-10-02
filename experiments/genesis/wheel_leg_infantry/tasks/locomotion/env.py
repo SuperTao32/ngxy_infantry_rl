@@ -1,4 +1,5 @@
 import math
+from copy import deepcopy
 
 import numpy as np
 import genesis as gs
@@ -22,6 +23,7 @@ from ...core.sensor_noise import SensorNoise
 from ...core.kinematics import compute_leg_angle, compute_leg_length, constrain_leg_targets
 from ...core.tensor_utils import as_gain_tensor, as_range_tensors, sample_uniform
 from ...core.terrain import TerrainManager
+from ...core.terrain_curriculum import TerrainCourse, merge_terrain_config, terrain_course_configs
 from .rewards import LocomotionRewards
 from .tracking_gate import DEFAULT_TRACKING_GATE_CFG, merge_tracking_gate_config, smooth_gate
 from .velocity_estimator import (
@@ -62,6 +64,9 @@ class LocomotionEnv(LocomotionRewards):
         self.terrain = TerrainManager(env_cfg.get("terrain"))
         # 记录 TerrainManager 补齐后的配置，保证课程、日志与运行状态一致。
         self.env_cfg["terrain"] = self.terrain.config
+        self._terrain_base_config = deepcopy(self.terrain.config)
+        self.terrain_course = None
+        self._pending_terrain_index = None
 
         randomization = normalize_randomization_config(env_cfg, obs_cfg)
         self.domain_rand = DomainRandomizationManager(randomization["dynamics"])
@@ -264,6 +269,12 @@ class LocomotionEnv(LocomotionRewards):
         if self.curriculum.update(0, force=True):
             print(f"[curriculum] stage={self.curriculum.current_stage_name} step=0")
 
+        # JumpEnv 有独立地形课程；仅 locomotion 使用这里的地形集合。
+        if type(self)._add_terrain is LocomotionEnv._add_terrain:
+            configs = terrain_course_configs(self._terrain_base_config, self.curriculum_cfg)
+            if len(configs) > 1:
+                self.terrain_course = TerrainCourse(configs)
+
         ############################# 初始化阶段 ###############################
         # 创建 scene
         self.scene = gs.Scene(
@@ -275,7 +286,7 @@ class LocomotionEnv(LocomotionRewards):
                 batch_dofs_info=self.batch_dofs_info,
                 enable_self_collision=False,
                 tolerance=1e-5,
-                max_collision_pairs=self.terrain.max_collision_pairs,
+                max_collision_pairs=(self.terrain_course.max_collision_pairs if self.terrain_course else self.terrain.max_collision_pairs),
             ),
             viewer_options=gs.options.ViewerOptions(
                 camera_pos=(1.8, -2.8, 1.5),
@@ -323,11 +334,11 @@ class LocomotionEnv(LocomotionRewards):
         self.scene.build(n_envs=num_envs)
         self.sensor_noise.bind_imu(self.imu)
         # Genesis 在 build 后才生成 terrain_hf，此时才能绑定高度场供 reset/step 查询。
-        self.terrain.bind_entity(
-            self.terrain_entity,
-            device=self.device,
-            dtype=gs.tc_float,
-        )
+        if self.terrain_course is not None:
+            self.terrain = self.terrain_course.bind(device=self.device, dtype=gs.tc_float, active_config=self.terrain.config)
+            self.terrain_entity = self.terrain_course.entities[self.terrain_course.active_index]
+        else:
+            self.terrain.bind_entity(self.terrain_entity, device=self.device, dtype=gs.tc_float)
 
         ## 创建索引
         self.joints_dof_idx = self._joint_dof_indices(joint_names)
@@ -529,7 +540,10 @@ class LocomotionEnv(LocomotionRewards):
 
     def _add_terrain(self):
         """在 scene.build 前创建配置指定的地形实体。"""
-        self.terrain_entity = self.terrain.add_to_scene(self.scene)
+        self.terrain_entity = (
+            self.terrain_course.add_to_scene(self.scene) if self.terrain_course is not None
+            else self.terrain.add_to_scene(self.scene)
+        )
         self.friction_terrain_entities = (
             self.terrain_entity if isinstance(self.terrain_entity, tuple) else (self.terrain_entity,)
         )
@@ -544,6 +558,7 @@ class LocomotionEnv(LocomotionRewards):
     # ============ 公共环境接口：训练器调用的 reset / step / 观测与恢复入口 ============
     def reset(self):
         """重置全部并行环境并返回重置后的 actor/critic 观测。"""
+        self._activate_pending_terrain()
         self._reset_idx()
         self._update_observations()
         return self.get_observations()
@@ -655,6 +670,11 @@ class LocomotionEnv(LocomotionRewards):
         time_out = self.episode_length_buf > self.max_episode_length
         # patch 接缝不属于任何一种训练地形，接近边界时按 timeout 重置并允许 bootstrap。
         terrain_out = self.terrain.out_of_bounds(self.base_pos[:, :2], self.terrain_spawn_centers)
+        if self.terrain_course is not None:
+            # 课程地面是有限区域，即使 plane/关闭边界也不能驶入停放区。
+            margin = self.terrain.config["boundary_margin"] or min(.75, min(self.terrain.tile_size) / 4)
+            extent = self.base_pos.new_tensor(self.terrain.tile_size) / 2 - margin
+            terrain_out |= ((self.base_pos[:, :2] - self.terrain_spawn_centers).abs() >= extent).any(dim=-1)
         time_out = time_out | terrain_out
         solver_error = self.scene.rigid_solver.get_error_envs_mask().bool()
 
@@ -681,6 +701,12 @@ class LocomotionEnv(LocomotionRewards):
 
         ########### 重采样指令 ###########
         self._resample_commands(self.episode_length_buf % self.resample_step == 0)
+
+        # 先完成旧地形上的动作和奖励，再切换并返回新地形的 reset 观测。
+        # 将切换作为截断交给 runner，避免 GAE 跨越不同地形的回合。
+        if self._activate_pending_terrain():
+            self.reset_buf.fill_(True)
+            time_out |= ~self.terminated_buf
 
         ########### 计算timeout ###########
         self.extras["time_outs"] = time_out.to(dtype=gs.tc_float)
@@ -913,8 +939,8 @@ class LocomotionEnv(LocomotionRewards):
             (num_resets,),
         )
         if self.terrain.is_platform_ridge:
-            # +x 指向二级平台末端的下台阶；不受通用 yaw 随机化影响。
-            rpy_offset_deg[:, 2] = 0.0
+            # 从二级平台朝 -x 面向窄凸台和一级平台；不受通用 yaw 随机化影响。
+            rpy_offset_deg[:, 2] = 180.0
         quat_offset = xyz_to_quat(rpy_offset_deg, rpy=True, degrees=True)
         nominal_quat = self.init_base_quat.expand(num_resets, -1)
         reset_base_quat = transform_quat_by_quat(quat_offset, nominal_quat)
@@ -1293,13 +1319,33 @@ class LocomotionEnv(LocomotionRewards):
             self.env_cfg[name] = [list(axis_limits) for axis_limits in limits]
 
     def _apply_terrain_curriculum(self, values):
-        """兼容旧实验的难度课程；地形始终由 preset 决定。
+        """初始化时应用几何；运行时排队到本控制步结束后切换。"""
+        if not set(values).difference({"max_difficulty"}):
+            return
+        config = merge_terrain_config(self._terrain_base_config, values)
+        if self.terrain_course is None:
+            if hasattr(self, "scene"):
+                if config != self.terrain.config:
+                    raise ValueError("Terrain changes must be declared in curriculum stages before scene construction")
+                return
+            self.terrain = TerrainManager(config)
+            self.env_cfg["terrain"] = self.terrain.config
+            return
+        try:
+            index = self.terrain_course.index(config)
+        except StopIteration as exc:
+            raise ValueError("Terrain changes must be declared in curriculum stages before scene construction") from exc
+        self._pending_terrain_index = index if index != self.terrain_course.active_index else None
 
-        保留此钩子供 JumpEnv 扩展模式比例和台阶启用课程。
-        """
-        unknown = set(values).difference({"max_difficulty"})
-        if unknown:
-            raise KeyError(f"Unsupported terrain curriculum keys: {sorted(unknown)}")
+    def _activate_pending_terrain(self):
+        index = self._pending_terrain_index
+        if index is None:
+            return False
+        self.terrain = self.terrain_course.activate(index)
+        self.terrain_entity = self.terrain_course.entities[index]
+        self.env_cfg["terrain"] = self.terrain.config
+        self._pending_terrain_index = None
+        return True
 
     # ============ 诊断与可视化：查询状态或调整相机，不推进训练时钟 ============
     def get_observation_components(self, env_idx=0):

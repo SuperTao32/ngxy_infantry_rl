@@ -64,8 +64,8 @@ def default_terrain_cfg(preset: str = "plane") -> dict:
                 "ridge_height": 0.35,
                 "ridge_width": 0.15,
                 "second_height": 0.30,
-                "second_length": 0.80,  # 也可设为 None 延伸到 tile 边界
-                "approach_length": 1.0,  # tile 中心到一级平台前沿的距离
+                "second_length": None,
+                "approach_length": 2.0,  # tile 中心到一级平台前沿的距离
                 "base_thickness": 0.10,
             },
             "loose_spheres": {

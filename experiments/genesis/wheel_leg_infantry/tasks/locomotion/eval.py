@@ -19,8 +19,6 @@ from .env import LocomotionEnv
 from .interactive_viewer import KeyboardCommand, format_tensor
 
 
-COMPACT_EVAL_TERRAIN_SIZE = (12.0, 6.0)
-
 
 def _parse_args(argv=None):
     """解析并校验评估命令行参数。"""
@@ -43,7 +41,7 @@ def _parse_args(argv=None):
         nargs=2,
         metavar=("LENGTH", "WIDTH"),
         default=None,
-        help="terrain tile size in meters; with a non-plane --terrain, default: 12 6",
+        help="terrain tile size in meters; default: default_terrain_cfg tile_size",
     )
     parser.add_argument(
         "--print-interval",
@@ -61,17 +59,13 @@ def _parse_args(argv=None):
 
 
 def _apply_terrain_overrides(env_cfg, args):
-    """将命令行地形选项写入评估配置。"""
-    if args.terrain is not None:
-        env_cfg.setdefault("terrain", default_terrain_cfg())
-        env_cfg["terrain"]["preset"] = args.terrain
-
-    terrain_size = args.terrain_size
-    if terrain_size is None and args.terrain not in (None, "plane"):
-        terrain_size = COMPACT_EVAL_TERRAIN_SIZE
-    if terrain_size is not None:
-        env_cfg.setdefault("terrain", default_terrain_cfg())
-        env_cfg["terrain"]["tile_size"] = list(terrain_size)
+    """保留所选 preset，几何使用当前代码默认值，再应用显式 CLI 覆盖。"""
+    preset = args.terrain or env_cfg.get("terrain", {}).get("preset", "plane")
+    if preset == "flat":
+        preset = "plane"
+    env_cfg["terrain"] = default_terrain_cfg(preset)
+    if args.terrain_size is not None:
+        env_cfg["terrain"]["tile_size"] = list(args.terrain_size)
 
 
 def print_evaluation_diagnostics(env, step):

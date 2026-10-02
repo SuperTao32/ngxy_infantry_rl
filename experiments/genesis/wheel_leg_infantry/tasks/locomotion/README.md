@@ -16,6 +16,49 @@
 ```
 
 
+## 按课程调整地形
+
+在阶段的 `targets["terrain"]` 中设置 `preset` 和 `subterrain_parameters`，字段与 `env_cfg["terrain"]` 一致。后续阶段按字段累计覆盖，没有写出的参数继承前一阶段；第一阶段以基础环境配置为起点。
+
+```python
+"stages": [
+    {"name": "flat", "start_iteration": 0,
+     "targets": {"terrain": {"preset": "plane"}}},
+    {"name": "low_steps", "start_iteration": 1000,
+     "targets": {"terrain": {
+         "preset": "platform_ridge",
+         "subterrain_parameters": {"platform_ridge": {
+             "first_height": 0.10, "ridge_height": 0.18,
+             "second_height": 0.15, "second_length": 1.20,
+         }},
+     }}},
+    {"name": "high_steps", "start_iteration": 3000,
+     "targets": {"terrain": {"subterrain_parameters": {"platform_ridge": {
+         "first_height": 0.20, "ridge_height": 0.35, "second_height": 0.30,
+     }}}}},
+    {"name": "stairs", "start_iteration": 5000,
+     "targets": {"terrain": {"preset": "stairs"}}},
+]
+```
+
+`platform_ridge` 的高度、长度、凸台宽度、接近距离、底板厚度均可调整，`second_length=None` 仍表示延伸到 tile 边界。`ridge_height` 必须高于两侧平台，所有几何必须能放进 `tile_size`。同样可以切换 `trapezoidal_wave`、`loose_spheres`，并配置相应参数。
+
+`config_downstairs.py` 提供平地 → 低平台 → 标准平台 → 楼梯 → 梯形波的完整示例，可直接修改阶段迭代数和参数：
+
+```bash
+.venv/bin/python -m experiments.genesis.wheel_leg_infantry.tasks.locomotion.train \
+  --config config_downstairs -e downstairs_course -B 64
+```
+
+指定训练 `--terrain` 时，基础配置和各课程阶段的 preset 都被覆盖为该类型，阶段中的几何参数仍然生效。若需要课程切换不同类型，不传 `--terrain`。
+
+所有不同的课程地形在启动时预构建，阶段切换会在当前控制步完成动作和奖励后结束所有回合，再按新地形复位；runner 收到截断标志和新观测。恢复 checkpoint 时按恢复迭代数选中对应地形。多地形课程中的平地使用有限地面，各阶段都启用 tile 边界复位。预构建的实体增加场景内存与碰撞开销，含散落球的课程在未指定 `-B` 时默认只用 4 个环境。
+
+## eval 地形默认值
+
+评估保留日志中的地形类型（或 `--terrain` 指定的类型），但几何参数和 `tile_size` 每次重新读取当前 `default_terrain_cfg(preset)`，不沿用日志内的旧几何，也不再自动缩成 12 × 6 m。`--terrain-size LENGTH WIDTH` 可显式覆盖尺寸。eval 不运行训练课程；要查看某阶段地形，用 `--terrain` 选择类型，并在 `default_terrain_cfg` 中设置所需参数。
+
+
 ## 散落刚性球地形
 
 `loose_spheres` 是平地上的独立动态刚体球，直径 **17 mm**（半径 8.5 mm），单球质量 **3.2 g**，材料邵氏硬度 **90A**。球与地面、机器人及其他球参与碰撞，可滚动、可被车轮推动。每个并行环境独立采样；每次物理 reset 重新散布并清零球体线速度和角速度，仅影响被重置的环境。
@@ -55,7 +98,7 @@
 },
 ```
 
-密度由质量和球体积计算：`ρ = mass / (4πr³/3)`，默认约 **1243.95 kg/m³**；Genesis 用球体解析体积和该密度计算质量及转动惯量。调整单球重量请设置 `mass`，旧的 `density` 配置项不再接受。`shore_a` 只记录材料信息，当前刚体模型未模拟 90A 材料的压缩变形，也未将硬度用于设置接触刚度、恢复系数或摩擦系数；摩擦参数仍需标定。启用已有摩擦随机化时，球和地面同样参与。球数在场景构造时确定，reset 只改变位置。`--seed` 控制采样复现；当前课程不改变球数或质量。
+密度由质量和球体积计算：`ρ = mass / (4πr³/3)`，默认约 **1243.95 kg/m³**；Genesis 用球体解析体积和该密度计算质量及转动惯量。调整单球重量请设置 `mass`，旧的 `density` 配置项不再接受。`shore_a` 只记录材料信息，当前刚体模型未模拟 90A 材料的压缩变形，也未将硬度用于设置接触刚度、恢复系数或摩擦系数；摩擦参数仍需标定。启用已有摩擦随机化时，球和地面同样参与。球数在场景构造时确定，reset 只改变位置。`--seed` 控制采样复现；课程可通过预构建不同阶段地形来改变球数或质量。
 
 动态球显著增加自由度和接触求解开销。不指定 `-B` 时，散落球地形默认使用 4 个并行环境，其他地形保持 8192；显式 `-B` 优先。首次构建可能需要数分钟编译。环境保留 20 个物理子步，并按球数提高碰撞对预算。本改动提供后续抗打滑训练场景，未增加专用抗打滑奖励，也未执行完整策略训练。
 
@@ -68,15 +111,17 @@ NGXY_SPHERES_SMOKE=1 .venv/bin/python -m unittest tests.genesis.test_loose_spher
 
 ## 平台—窄凸台—平台地形
 
-`platform_ridge` 是沿前进方向 **+x** 连续排列的三个固定刚体箱体。各高度均相对于同一地面 `z=0`，不是逐级累加的高度；长度与窄凸台宽度均沿 x 方向测量。
+`platform_ridge` 是沿 **+x** 连续排列的三个固定刚体箱体。各高度均相对于同一地面 `z=0`，不是逐级累加的高度；长度与窄凸台宽度均沿 x 方向测量。
 
-| 区段 | 高度 | 沿前进方向长度 | 默认 x 范围 |
+下表为 `approach_length=1.0, second_length=0.8` 的截面示例；实际默认值以 `default_terrain_cfg` 为准。
+
+| 区段 | 高度 | 沿 x 方向长度 | 示例 x 范围 |
 | --- | --- | --- | --- |
 | 一级平台 | 20 cm | 80 cm | 1.00–1.80 m |
 | 窄凸台 | 35 cm | 15 cm | 1.80–1.95 m |
 | 二级平台 | 30 cm | 80 cm | 1.95–2.75 m |
 
-三段紧邻，一级平台到凸台再上升 15 cm，凸台到二级平台下降 5 cm，二级平台末端下降 30 cm 回到地面。机器人每次复位在二级平台中央，默认 `(x, y) = (2.35, 0)`，朝向 **+x** 的下台阶方向，距离末端 40 cm。机身 z 为平台高度加配置中的初始离地高度（默认 `0.30 + 0.22 = 0.52 m`）。此地形固定复位 x/y 和 yaw，覆盖通用的 x/y、yaw 随机化；其余复位参数仍按配置采样。`approach_length` 表示 tile 中心到一级平台前沿的距离。横向铺满 `tile_size` 的宽度。使用真实箱体保留垂直立面和 15 cm 窄顶面，不受高度场 10 cm 网格分辨率限制。重置和奖励的地面高度查询使用相同箱体边界。
+三段紧邻，一级平台到凸台再上升 15 cm，凸台到二级平台下降 5 cm，二级平台末端下降 30 cm 回到地面。机器人每次复位在二级平台中央，上述示例中 `(x, y) = (2.35, 0)`，朝向 **-x** 的窄凸台和一级平台方向（yaw 为 180°）。机身 z 为平台高度加配置中的初始离地高度（默认 `0.30 + 0.22 = 0.52 m`）。此地形固定复位 x/y 和 yaw，覆盖通用的 x/y、yaw 随机化；其余复位参数仍按配置采样。`approach_length` 表示 tile 中心到一级平台前沿的距离。横向铺满 `tile_size` 的宽度。使用真实箱体保留垂直立面和 15 cm 窄顶面，不受高度场 10 cm 网格分辨率限制。重置和奖励的地面高度查询使用相同箱体边界。
 
 启动训练或用已有策略评估：
 

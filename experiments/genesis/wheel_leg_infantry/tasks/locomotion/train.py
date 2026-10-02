@@ -9,6 +9,7 @@ import genesis as gs
 # 项目内部模块
 from ...core.train_config import get_train_cfg
 from ...core.terrain import TERRAIN_PRESETS, default_terrain_cfg
+from ...core.terrain_curriculum import terrain_course_configs
 from ...core.randomization import add_randomization_arguments, apply_randomization_arguments
 from ...tools.run_utils import (
     add_resume_arguments,
@@ -20,7 +21,7 @@ from ...tools.run_utils import (
     save_run_artifacts,
 )
 from .config import get_cfgs as get_default_cfgs
-from .config_terrain import get_cfgs as get_rand_cfgs
+from .config_downstairs import get_cfgs as get_rand_cfgs
 from .env import LocomotionEnv
 
 
@@ -31,13 +32,13 @@ def main():
     parser.add_argument("-B", "--num_envs", type=int, default=None, help="parallel environments (default: 4 for loose_spheres, otherwise 8192)")
     parser.add_argument("--max_iterations", type=int, default=10001)
     parser.add_argument("--seed", type=int, default=1)
-    parser.add_argument("--terrain", choices=TERRAIN_PRESETS, default=None, help="override terrain, including saved runs")
+    parser.add_argument("--terrain", choices=TERRAIN_PRESETS, default=None, help="override terrain preset in base config and every curriculum stage, including saved runs")
     parser.add_argument("--log-root", type=str, default="logs")
     parser.add_argument(
         "--config",
-        choices=("config", "config_terrain"),
+        choices=("config", "config_downstairs"),
         default="config",
-        help="select config.py or config_terrain.py (default: config); when resuming, requires --resume-config current to take effect",
+        help="select config.py or config_downstairs.py (default: config); when resuming, requires --resume-config current to take effect",
     )
     parser.add_argument(
         "--load-weights",
@@ -68,7 +69,7 @@ def main():
     OnPolicyRunner = load_runner_class()
     resume_plan = None
     if args.resume is None or args.resume_config == "current":
-        get_cfgs = {"config": get_default_cfgs, "config_terrain": get_rand_cfgs}[args.config]
+        get_cfgs = {"config": get_default_cfgs, "config_downstairs": get_rand_cfgs}[args.config]
         env_cfg, obs_cfg, reward_cfg, command_cfg, curriculum_cfg = get_cfgs()
         train_cfg = get_train_cfg(args.exp_name)
         print(f"[train] config: {args.config}.py")
@@ -87,8 +88,13 @@ def main():
 
     if args.terrain is not None:
         env_cfg.setdefault("terrain", default_terrain_cfg())["preset"] = args.terrain
+        for stage in curriculum_cfg.get("stages", []):
+            terrain_target = stage.get("targets", {}).get("terrain")
+            if terrain_target is not None:
+                terrain_target["preset"] = args.terrain
+    course_configs = terrain_course_configs(env_cfg.get("terrain"), curriculum_cfg)
     if args.num_envs is None:
-        args.num_envs = 4 if env_cfg.get("terrain", {}).get("preset") == "loose_spheres" else 8192
+        args.num_envs = 4 if any(config["preset"] == "loose_spheres" for config in course_configs) else 8192
     apply_randomization_arguments(env_cfg, obs_cfg, args)
     remaining_iterations = args.max_iterations
 
