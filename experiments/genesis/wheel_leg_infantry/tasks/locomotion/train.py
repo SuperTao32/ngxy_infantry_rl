@@ -20,8 +20,9 @@ from ...tools.run_utils import (
     restore_training_state,
     save_run_artifacts,
 )
-from .config import get_cfgs as get_default_cfgs
+from .config_locomotion import get_cfgs as get_default_cfgs
 from .config_downstairs import get_cfgs as get_rand_cfgs
+from .config_stand_up import get_cfgs as get_stand_up_cfgs
 from .env import LocomotionEnv
 
 
@@ -30,15 +31,15 @@ def main():
     parser.add_argument("-v", "--vis", action="store_true", default=False)
     parser.add_argument("-e", "--exp_name", type=str, default="locomotion_v2")
     parser.add_argument("-B", "--num_envs", type=int, default=8192, help="parallel environments (default: 8192)")
-    parser.add_argument("--max_iterations", type=int, default=10001)
+    parser.add_argument("--max-iterations", type=int, default=10001)
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--terrain", choices=TERRAIN_PRESETS, default=None, help="override terrain preset in base config and every curriculum stage, including saved runs")
     parser.add_argument("--log-root", type=str, default="logs")
     parser.add_argument(
         "--config",
-        choices=("config", "config_downstairs"),
-        default="config",
-        help="select config.py or config_downstairs.py (default: config); when resuming, requires --resume-config current to take effect",
+        choices=("config_locomotion", "config_downstairs", "config_stand_up", "config"),
+        default="config_locomotion",
+        help="select locomotion config (default: config_locomotion; config is a legacy alias); when resuming, requires --resume-config current to take effect",
     )
     parser.add_argument(
         "--load-weights",
@@ -50,6 +51,8 @@ def main():
     add_randomization_arguments(parser, evaluation=False)
     add_resume_arguments(parser)
     args = parser.parse_args()
+    if args.config == "config":
+        args.config = "config_locomotion"
 
     if args.load_weights is not None and args.resume is not None:
         parser.error("--load-weights cannot be combined with --resume")
@@ -69,7 +72,11 @@ def main():
     OnPolicyRunner = load_runner_class()
     resume_plan = None
     if args.resume is None or args.resume_config == "current":
-        get_cfgs = {"config": get_default_cfgs, "config_downstairs": get_rand_cfgs}[args.config]
+        get_cfgs = {
+            "config_locomotion": get_default_cfgs,
+            "config_downstairs": get_rand_cfgs,
+            "config_stand_up": get_stand_up_cfgs,
+        }[args.config]
         env_cfg, obs_cfg, reward_cfg, command_cfg, curriculum_cfg = get_cfgs()
         train_cfg = get_train_cfg(args.exp_name)
         print(f"[train] config: {args.config}.py")

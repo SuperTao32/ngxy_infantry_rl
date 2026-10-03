@@ -14,7 +14,7 @@ from ...tools.run_utils import (
     resolve_checkpoint,
     resolve_run_dir,
 )
-from .config import get_final_command_cfg
+from .config_locomotion import get_final_command_cfg
 from .env import LocomotionEnv
 from .interactive_viewer import KeyboardCommand, format_tensor
 

@@ -1,6 +1,6 @@
 """Locomotion 奖励项。
 
-这里只描述“测量什么”，正负号和相对权重全部留在 ``config.py``。拆成
+这里只描述“测量什么”，正负号和相对权重全部留在各 ``config_*.py`` 配置中。拆成
 mixin 后，环境文件可以专注于仿真状态、动作和 reset 数据流。
 """
 
@@ -108,3 +108,27 @@ class LocomotionRewards:
 
     def _reward_death(self):
         return self.terminated_buf.to(dtype=self.reward_buf.dtype)
+
+    def _reward_stand_up_posture(self):
+        """起身姿态误差代价；越接近目标越小，完成后归零，避免拖延起身刷分。"""
+        error = (self.base_height - self.stand_up.config["height"]) / self.reward_cfg["stand_up_height_sigma"]
+        upright = (-self.projected_gravity[:, 2]).clamp(0.0, 1.0)
+        return self.stand_up.was_active * (1.0 - torch.exp(-error.square()) * upright.square())
+
+    def _reward_stand_up_success(self):
+        return self.stand_up.just_completed.to(self.reward_buf.dtype)
+
+    def _reward_stand_up_leg_length(self):
+        """起身时惩罚超出收腿目标的长度；低于目标不再鼓励缩短。"""
+        if self.stand_up is None:
+            return torch.zeros_like(self.reward_buf)
+        excess = (self.leg_length - self.reward_cfg["stand_up_leg_length_target"]).clamp_min(0.0)
+        error = excess / self.reward_cfg["stand_up_leg_length_sigma"]
+        return self.stand_up.was_active * error.square().mean(dim=1)
+
+    def _reward_stand_up_leg_vertical(self):
+        """起身时惩罚左右虚拟腿相对机身向下方向的摆角（rad）。"""
+        if self.stand_up is None:
+            return torch.zeros_like(self.reward_buf)
+        error = self.leg_angle / self.reward_cfg["stand_up_leg_angle_sigma"]
+        return self.stand_up.was_active * error.square().mean(dim=1)

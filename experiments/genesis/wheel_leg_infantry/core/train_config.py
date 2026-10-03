@@ -24,7 +24,7 @@ def get_train_cfg(exp_name: str) -> dict:
             "activation": "elu",
             "distribution_cfg": {
                 "class_name": "BetaDistribution",
-                "action_range": (-1.0, 1.0),
+                "action_range": (-2.0, 2.0),
             },
         },
         "critic": {

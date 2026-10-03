@@ -7,7 +7,7 @@ import numpy as np
 import torch
 
 from ..core.terrain import TERRAIN_PRESETS, TerrainManager
-from ..tasks.locomotion.config import get_cfgs
+from ..tasks.locomotion.config_locomotion import get_cfgs
 
 
 def main():

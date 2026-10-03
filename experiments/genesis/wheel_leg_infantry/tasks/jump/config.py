@@ -8,7 +8,7 @@ from typing import Mapping, Sequence
 
 from ...core.domain_randomization import default_domain_rand_cfg
 from ...core.randomization import normalize_randomization_config
-from ..locomotion.config import get_cfgs as get_locomotion_cfgs
+from ..locomotion.config_locomotion import get_cfgs as get_locomotion_cfgs
 from .height_reference import validate_height_reference
 from .observation import JUMP_POLICY_LAYOUT, LOCOMOTION_POLICY_LAYOUT, layout_dim
 
