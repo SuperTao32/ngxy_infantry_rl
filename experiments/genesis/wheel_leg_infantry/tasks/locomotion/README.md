@@ -7,21 +7,23 @@
   --config config_locomotion -e locomotion_v2
 ```
 
-旧命令 `--config config` 保留为兼容别名。续训默认读取实验保存的配置；要使用当前配置，指定 `--resume-config current --config config_locomotion`。
+locomotion 使用站姿复位和独立的行走课程，不包含起身阶段或起身奖励。standup 使用下方的独立配置，两者分别训练和保存策略。
 
-## 起身 → 行走统一训练
+续训默认读取实验保存的配置；旧的混合训练实验若要改用独立任务配置，需指定 `--resume-config current --config config_locomotion` 或 `--resume-config current --config config_stand_up`。
 
-`config_stand_up.py` 在 `_curriculum_cfg()` 中直接列出各课程阶段，复用 locomotion 环境和策略，先学起身与站稳，再逐步扩大行走速度、转向、高度和随机化范围。无需切换 checkpoint：首次开放行走的迭代数由配置顶部的 `LOCOMOTION_START_ITERATION` 决定，后续阶段分别增加 1500、3500、6500 次迭代。每个阶段的每回合都先起身；只有连续满足 `env_cfg["stand_up"]` 中的高度、倾角、腿角、速度和接触条件达到 `hold_time_s`，才开放该课程阶段的命令。课程按迭代切换，不按成功率自动晋级。
+## 独立起身训练
+
+`config_stand_up.py` 复用 locomotion 环境，单独训练起身与站稳，仅保留 `stand_up` 阶段。每回合连续满足 `env_cfg["stand_up"]` 中的高度、倾角、腿角、速度和接触条件达到 `hold_time_s` 后记录成功，随后继续保持站立，直到回合结束。训练全程使用零速度、零转向和 0.22 m 目标高度，不会自动切入行走课程。行走训练单独使用 `config_locomotion.py`。
 
 ```bash
 .venv/bin/python -m experiments.genesis.wheel_leg_infantry.tasks.locomotion.train \
-  --config config_stand_up -e stand_up_locomotion -B 4096
+  --config config_stand_up -e stand_up -B 4096
 
 .venv/bin/python -m experiments.genesis.wheel_leg_infantry.tasks.locomotion.eval \
-  -e stand_up_locomotion
+  -e stand_up
 ```
 
-直接修改配置顶部的 `LOCOMOTION_START_ITERATION` 调整首次开放行走的迭代数，后续阶段整体平移。第一行走阶段为 ±1 m/s、±2 rad/s、高度 0.20–0.30 m，后续范围直接在 `_curriculum_cfg()` 的各阶段中配置。评估沿用保存的复位姿态，键盘命令同样需等站稳后生效。
+评估沿用保存的复位姿态和静止指令范围，键盘命令需等站稳后生效。
 
 ### 配置复位姿态
 
@@ -37,7 +39,7 @@ RESET_POSE = "default"
 
 JSON 字段与 Genesis Viewer 的 Quaternion 模式一致：`floating_base_x/y/z` 为机身位置（m），`floating_base_qw/qx/qy/qz` 为四元数（wxyz），其余字段为关节名；转动关节为 rad、滑动关节为 m。必须提供机身坐标和四个驱动关节，可包含被动关节及轮子；初始速度为零。四元数归一化后转为内部 RPY（度）范围，快照数值嵌入实验配置，恢复和评估不再读取源 JSON。
 
-显式复位姿态覆盖所有阶段的复位位置、姿态和速度范围，防止课程覆盖快照。地形自身的出生点规则仍生效，z 为相对地面高度。切回 `default` 会清除快照的被动关节复位值。动作零点仍由 `default_joint_pos` 决定，不随复位姿态改变。合并配置的腿动作限幅为 ±2、轮动作限幅为 ±1，保留虚拟腿摆角 ±30° 和上杆夹角约束。
+显式复位姿态覆盖所有阶段的复位位置、姿态和速度范围，防止课程覆盖快照。地形自身的出生点规则仍生效，z 为相对地面高度。切回 `default` 会清除快照的被动关节复位值。动作零点仍由 `default_joint_pos` 决定，不随复位姿态改变。起身配置的腿动作限幅为 ±2、轮动作限幅为 ±2，轮速缩放为 35，保留虚拟腿摆角 ±30° 和上杆夹角约束。
 
 ### 起身辅助奖励
 
@@ -45,15 +47,15 @@ JSON 字段与 Genesis Viewer 的 Quaternion 模式一致：`floating_base_x/y/z
 
 | 配置 | 默认值 | 含义 |
 | --- | --- | --- |
-| `stand_up_leg_length_target` | 0.16 m | 腿长超过该值才惩罚，低于目标不再鼓励收缩 |
+| `stand_up_leg_length_target` | 0.14 m | 腿长超过该值才惩罚，低于目标不再鼓励收缩 |
 | `stand_up_leg_length_sigma` | 0.10 m | 长度误差归一化尺度 |
 | `stand_up_leg_angle_sigma` | 0.5 rad | 腿角误差归一化尺度 |
-| `reward_scales.stand_up_leg_length` | -2.0 | 左右腿超长误差平方均值的权重 |
-| `reward_scales.stand_up_leg_vertical` | -2.0 | 左右腿摆角误差平方均值的权重 |
+| `reward_scales.stand_up_leg_length` | -10.0 | 左右腿超长误差平方均值的权重 |
+| `reward_scales.stand_up_leg_vertical` | -10.0 | 左右腿摆角误差平方均值的权重 |
 
-腿角零点是相对机身向下，机身相对世界竖直由 `base_balance` 约束。连续奖励乘 dt；每回合一次的 `stand_up_success` 奖励默认 500，不乘 dt。进入行走课程时恢复 locomotion 的通用奖励权重，起身辅助项继续仅在每回合起身时生效。
+腿角零点是相对机身向下，机身相对世界竖直由 `base_balance` 约束。连续奖励乘 dt；每回合一次的 `stand_up_success` 奖励默认 500，不乘 dt。成功后起身辅助项归零，其余站立奖励继续计算。
 
-每回合 20 s；机身触地不终止，roll 或 pitch 超过 80° 连续 5 s 才按倾倒终止，求解错误仍终止，超时仍复位。日志记录 `stand_up_success` 和 `stand_up_duration_s`。初始课程关闭动力学随机化和传感器噪声，后续按 locomotion 课程逐步开启。
+回合时长和倾倒终止阈值在 `env_cfg` 中设置；机身触地不终止，求解错误仍终止，超时仍复位。日志记录 `stand_up_success` 和 `stand_up_duration_s`。起身阶段的动力学随机化和传感器噪声强度均为 0。
 
 可用 `--load-weights CHECKPOINT_PATH` 加载已有策略并从第 0 迭代启动新课程。续训默认使用保存的课程和复位姿态；要应用当前配置文件中的修改，使用 `--resume-config current --config config_stand_up`（保留已训练迭代数）。若要重新经历完整起身课程，应使用 `--load-weights`。
 

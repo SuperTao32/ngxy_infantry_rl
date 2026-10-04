@@ -109,12 +109,6 @@ class LocomotionRewards:
     def _reward_death(self):
         return self.terminated_buf.to(dtype=self.reward_buf.dtype)
 
-    def _reward_stand_up_posture(self):
-        """起身姿态误差代价；越接近目标越小，完成后归零，避免拖延起身刷分。"""
-        error = (self.base_height - self.stand_up.config["height"]) / self.reward_cfg["stand_up_height_sigma"]
-        upright = (-self.projected_gravity[:, 2]).clamp(0.0, 1.0)
-        return self.stand_up.was_active * (1.0 - torch.exp(-error.square()) * upright.square())
-
     def _reward_stand_up_success(self):
         return self.stand_up.just_completed.to(self.reward_buf.dtype)
 

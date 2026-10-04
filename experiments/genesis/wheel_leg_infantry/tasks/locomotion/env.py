@@ -734,7 +734,8 @@ class LocomotionEnv(LocomotionRewards):
             time_out |= ~self.terminated_buf
 
         ########### 计算timeout ###########
-        self.extras["time_outs"] = time_out.to(dtype=gs.tc_float)
+        # 失败与截断同拍发生时按失败处理，不对终止状态 bootstrap。
+        self.extras["time_outs"] = (time_out & ~self.terminated_buf).to(dtype=gs.tc_float)
 
         ########### 重置环境（如果需要）###########
         self._reset_idx(self.reset_buf)

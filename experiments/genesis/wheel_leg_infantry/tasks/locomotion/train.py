@@ -37,9 +37,9 @@ def main():
     parser.add_argument("--log-root", type=str, default="logs")
     parser.add_argument(
         "--config",
-        choices=("config_locomotion", "config_downstairs", "config_stand_up", "config"),
+        choices=("config_locomotion", "config_downstairs", "config_stand_up"),
         default="config_locomotion",
-        help="select locomotion config (default: config_locomotion; config is a legacy alias); when resuming, requires --resume-config current to take effect",
+        help="select locomotion config (default: config_locomotion); when resuming, requires --resume-config current to take effect",
     )
     parser.add_argument(
         "--load-weights",
@@ -51,8 +51,6 @@ def main():
     add_randomization_arguments(parser, evaluation=False)
     add_resume_arguments(parser)
     args = parser.parse_args()
-    if args.config == "config":
-        args.config = "config_locomotion"
 
     if args.load_weights is not None and args.resume is not None:
         parser.error("--load-weights cannot be combined with --resume")
