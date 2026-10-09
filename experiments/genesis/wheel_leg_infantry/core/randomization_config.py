@@ -1,16 +1,22 @@
-"""训练、评估与环境共用的随机化配置入口及旧配置迁移。"""
+"""随机化配置入口：默认值、旧存档迁移及训练/评估命令行覆盖。
+
+动力学实现位于 dynamics_randomization，传感器实现位于 sensor_randomization。
+持久化配置键、CLI 和课程目标仍沿用 dynamics/sensors、domain_rand/sensor_noise。
+"""
 
 import argparse
 from copy import deepcopy
 
-from .domain_randomization import default_domain_rand_cfg
-from .sensor_noise import IMU_ERROR_KEYS, ENCODER_CHANNELS, SensorNoise, default_sensor_noise_cfg
+from .dynamics_randomization import default_dynamics_randomization_cfg
+from .sensor_randomization import (
+    IMU_ERROR_KEYS, ENCODER_CHANNELS, default_sensor_randomization_cfg, resolve_sensor_randomization_cfg,
+)
 
 
 def default_randomization_cfg(*, dynamics_enabled=True, sensors_enabled=False):
     return {
-        "dynamics": default_domain_rand_cfg(enabled=dynamics_enabled),
-        "sensors": default_sensor_noise_cfg(enabled=sensors_enabled),
+        "dynamics": default_dynamics_randomization_cfg(enabled=dynamics_enabled),
+        "sensors": default_sensor_randomization_cfg(enabled=sensors_enabled),
     }
 
 
@@ -24,12 +30,13 @@ def normalize_randomization_config(env_cfg, obs_cfg):
     config.setdefault("dynamics", deepcopy(env_cfg.get("domain_rand", {"enabled": False})))
     imu = obs_cfg.get("imu", {})
     if "sensors" not in config and any(key in imu for key in IMU_ERROR_KEYS):
-        legacy = default_sensor_noise_cfg(enabled=True)
+        legacy = default_sensor_randomization_cfg(enabled=True)
+        legacy["tof"]["enabled"] = False
         legacy["imu"] = {key: deepcopy(imu.get(key, 0.0)) for key in IMU_ERROR_KEYS}
         for name in ENCODER_CHANNELS:
             legacy[name] = {"enabled": False, "std": 0.0, "bias_range": [0.0, 0.0]}
         config["sensors"] = legacy
-    config["sensors"] = SensorNoise(config.get("sensors")).config
+    config["sensors"] = resolve_sensor_randomization_cfg(config.get("sensors"))
     env_cfg["randomization"] = config
     env_cfg.pop("domain_rand", None)
     if "imu" in obs_cfg:

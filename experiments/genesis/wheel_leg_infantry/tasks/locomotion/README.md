@@ -334,8 +334,9 @@ NGXY_WAVE_SMOKE=1 .venv/bin/python -m unittest tests.genesis.test_trapezoidal_wa
 
 ## 单点 ToF
 
-默认在底盘前侧面左右上角安装两个向前下方 45° 的 ToF，测距沿光轴计算。
-下底面左右边缘距前侧 20 cm 处另有两个沿机身 -Z 垂直向下的 ToF，共四个。
+默认在底盘前侧底缘左右安装两个向前下方 45° 的 ToF，测距沿光轴计算。
+底部左右另有两个沿机身 -Z 垂直向下的 ToF，共四个。
+四路安装高度均为机身坐标 `z=-0.16 m`，在默认安装随机化范围内仍保留至少 10 mm 底盘外侧余量。
 `obs_cfg["tof"]` 配置安装位置、俯角及量程（默认 1.2 米）。策略在原有输入末尾追加
 前左、前右、下左、下右四维归一化距离，locomotion 输入从 32 维变为 36 维，需要重新训练。
 `history_frames=1` 控制每个 ToF 的历史帧数（正整数，包含当前帧）；例如设为 `5` 时，
@@ -353,6 +354,8 @@ Genesis Raycaster 内部缓存仍随物理仿真刷新，`update_hz` 控制对�
 训练 jump 的 warmup 权重时，在 `config_common.py` 中设置
 `"tof": default_tof_cfg(include_in_observation=False)`，actor/critic 都不加入 ToF，actor 恢复 32 维。
 此时传感器仍测距；若同时不需要测距开销，可将 `tof.enabled` 设为 `False`。
+`env_cfg["randomization"]["sensors"]["tof"]` 配置测距白噪声、每回合偏置和三轴安装位置/角度随机化，
+受 `--sensor-noise` 总开关与 `sensor_noise.strength` 课程控制；局部 reset 仅重采样对应环境。
 Genesis 与 MuJoCo 使用相同配置；详见 [ToF 配置与观测契约](../../core/TOF.md)。
 eval 窗口右上角实时显示 `Front L/R`、`Down L/R` 的米制距离、量程和观测开关；
 `[no hit/range]` 表示未命中或超出有效量程。旧权重未启用测距时，GUI 会自动开启仅供显示的测距，保持策略输入维度。

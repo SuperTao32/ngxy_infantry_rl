@@ -68,3 +68,8 @@ MuJoCo 的 `mjOBJ_BODY` 速度采用惯性主轴坐标系；这里用 `mjOBJ_XBO
 
 
 覆盖观测初值与关节映射、动作延迟/裁剪/力矩限制、IMU 坐标系、气弹簧保持、控制时钟、非法动作，以及实际速度与位移差分的一致性。
+
+ToF 测距噪声和安装偏移使用存档中的 `env_cfg.randomization.sensors.tof` 配置，
+可用 `--sensor-noise` / `--no-sensor-noise` 覆盖总开关（仅作用于 ToF，其他传感器仍为理想测量）。
+安装位置、角度及测距偏置在 reset 时重采样，白噪声随新测距帧更新；
+详见 [ToF 配置与随机化](../../genesis/wheel_leg_infantry/core/TOF.md)。

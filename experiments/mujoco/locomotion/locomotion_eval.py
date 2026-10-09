@@ -35,6 +35,8 @@ def parse_args(argv=None):
     p.add_argument("--ckpt", type=int)
     p.add_argument("--checkpoint", type=Path, help="完整模型路径；同目录必须有 cfgs.pkl")
     p.add_argument("--headless", action="store_true")
+    p.add_argument("--sensor-noise", action=argparse.BooleanOptionalAction, default=None,
+                   help="override ToF randomization (default: saved config; other sensors stay ideal)")
     p.add_argument("--duration", type=float, default=30, help="仿真秒数")
     p.add_argument("--vx", type=float, default=0)
     p.add_argument("--wz", type=float, default=0)
@@ -61,6 +63,8 @@ def main(argv=None):
     configs = load_run_configs(run)
     if "jump" in configs or configs["env_cfg"].get("handoff_on_landing"):
         raise ValueError("Use a locomotion checkpoint")
+    if args.sensor_noise is not None:
+        configs["env_cfg"].setdefault("randomization", {}).setdefault("sensors", {})["enabled"] = args.sensor_noise
     if not args.headless:
         prepare_tof_for_viewer(configs["obs_cfg"])
     env = MujocoLocomotionEnv(configs, (args.vx, args.wz, args.height))

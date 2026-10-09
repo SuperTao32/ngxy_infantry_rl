@@ -7,7 +7,7 @@ import math
 from copy import deepcopy
 
 from ...terrains import default_terrain_cfg
-from ...core.randomization import default_randomization_cfg
+from ...core.randomization_config import default_randomization_cfg
 from ...core.tof import default_tof_cfg
 
 

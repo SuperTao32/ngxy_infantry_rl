@@ -17,9 +17,9 @@ import torch
 from tensordict import TensorDict
 
 from ...core.curriculum import CurriculumManager
-from ...core.domain_randomization import DomainRandomizationManager, MOTOR_NAMES, SPRING_NAMES
-from ...core.randomization import normalize_randomization_config
-from ...core.sensor_noise import SensorNoise
+from ...core.dynamics_randomization import DynamicsRandomizationManager, MOTOR_NAMES, SPRING_NAMES
+from ...core.randomization_config import normalize_randomization_config
+from ...core.sensor_randomization import SensorRandomizationManager
 from ...core.tof import GenesisToF, ToFHistory, ToFSamplingClock, resolve_tof_cfg
 from ...core.kinematics import compute_leg_angle, compute_leg_length, constrain_leg_targets
 from ...core.tensor_utils import as_gain_tensor, as_range_tensors, sample_uniform
@@ -71,9 +71,9 @@ class LocomotionEnv(LocomotionRewards):
         self._pending_terrain_index = None
 
         randomization = normalize_randomization_config(env_cfg, obs_cfg)
-        self.domain_rand = DomainRandomizationManager(randomization["dynamics"])
+        self.domain_rand = DynamicsRandomizationManager(randomization["dynamics"])
         randomization["dynamics"] = self.domain_rand.config
-        self.sensor_noise = SensorNoise(randomization["sensors"])
+        self.sensor_noise = SensorRandomizationManager(randomization["sensors"])
         self.batch_dofs_info = (
             self.domain_rand.requires_batched_dofs
             or bool(env_cfg.get("handoff_on_landing", False))
@@ -335,7 +335,7 @@ class LocomotionEnv(LocomotionRewards):
         )
 
         # tof
-        self.tof = GenesisToF(self.scene, self.robot, self.tof_cfg) if self.tof_cfg["enabled"] else None
+        self.tof = GenesisToF(self.scene, self.robot, self.tof_cfg, self.sensor_noise.config["tof"]) if self.tof_cfg["enabled"] else None
         self.tof_distances = torch.empty(
             (num_envs, len(self.tof_cfg.get("sensors", ()))), dtype=gs.tc_float, device=self.device,
         )
@@ -659,7 +659,7 @@ class LocomotionEnv(LocomotionRewards):
             due = self.tof_clock.advance()
             if due.any():
                 # Raycaster 的内部 eager cache 仍随物理步刷新；仅发布到期的新测距帧。
-                self.tof_distances[due] = self.tof.read()[due]
+                self.tof_distances[due] = self.tof.read(env_ids=due, strength=self.sensor_noise.strength)
                 if self.tof_history is not None:
                     self.tof_history.append(self.tof_distances, due)
         self._update_velocity_estimator()
@@ -917,8 +917,10 @@ class LocomotionEnv(LocomotionRewards):
         self._update_encoder_measurements(reset_env_ids)
         self._reset_task_buffers(env_idx)
         if self.tof is not None:
-            distances = self.tof.read(after_reset=True)
-            self.tof_distances[reset_env_ids] = distances[reset_env_ids]
+            self.tof.reset(reset_env_ids, strength=self.sensor_noise.strength)
+            self.tof_distances[reset_env_ids] = self.tof.read(
+                after_reset=True, env_ids=reset_env_ids, strength=self.sensor_noise.strength,
+            )
             self.tof_clock.reset(reset_env_ids)
             if self.tof_history is not None:
                 self.tof_history.reset(self.tof_distances, reset_env_ids)

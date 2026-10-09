@@ -57,7 +57,7 @@ def _reward_cfg() -> dict:
             "landing_base_oscillation": 0.0,
             "landing_joint_vel": 0.0,
             # 每个离地轮子持续扣分；接触由 wheel_contact_force_threshold 判定。
-            "wheel_airborne": -5.0,
+            "wheel_airborne": -10.0,
             "base_contact": -10.0,
             "alive": 5.0,
             "death": -100.0,
@@ -69,7 +69,7 @@ def _command_cfg() -> dict:
     return {
         "num_commands": 3,
         "lin_vel_range": [3.0, 3.0],
-        "ang_vel_range": [6.0, 6.0],
+        "ang_vel_range": [-6.0, 6.0],
         "base_height_range": [0.21, 0.36],
         # |vx| <= 1 m/s 使用课程角速度范围；更快时收紧到 ±1 rad/s。
         "high_speed_ang_vel": {"lin_vel_threshold": 1.5, "max_abs_ang_vel": 2.0},
@@ -132,7 +132,7 @@ def _curriculum_cfg() -> dict:
                         "height_full_error": 0.03,
                         "height_zero_error": 0.09,
                         "attitude_full_angle_deg": 1.0,
-                        "attitude_zero_angle_deg": 2.0,
+                        "attitude_zero_angle_deg": 4.0,
                         "floor": 0.10,
                     },
                     "reward_scales": {
@@ -146,7 +146,7 @@ def _curriculum_cfg() -> dict:
             },
             {
                 "name": "locomotion2",
-                "start_iteration": 2000,
+                "start_iteration": 2500,
                 "targets": {
                     "standing_reward": {"tracking_sigma": 0.05},
                     "domain_rand": {"strength": 0.0},
@@ -167,7 +167,7 @@ def _curriculum_cfg() -> dict:
                         "height_full_error": 0.02,
                         "height_zero_error": 0.05,
                         "attitude_full_angle_deg": 0.8,
-                        "attitude_zero_angle_deg": 4.0,
+                        "attitude_zero_angle_deg": 3.0,
                         "floor": 0.05,
                     },
                     "reward_scales": {
@@ -183,7 +183,7 @@ def _curriculum_cfg() -> dict:
             },
             {
                 "name": "locomotion_rand",
-                "start_iteration": 4000,
+                "start_iteration": 4500,
                 "targets": {
                     "standing_reward": {"tracking_sigma": 0.02},
                     "domain_rand": {"strength": 0.4},

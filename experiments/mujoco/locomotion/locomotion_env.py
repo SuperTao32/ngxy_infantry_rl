@@ -11,6 +11,7 @@ from experiments.genesis.wheel_leg_infantry.core.kinematics import (
     compute_leg_angle, compute_leg_length, constrain_leg_targets,
 )
 from experiments.genesis.wheel_leg_infantry.core.tof import ToFHistory, ToFSamplingClock, resolve_tof_cfg
+from experiments.genesis.wheel_leg_infantry.core.sensor_randomization import SensorRandomizationManager
 from experiments.mujoco.locomotion.tof import MujocoToF, add_tof_sites
 from experiments.genesis.wheel_leg_infantry.tasks.locomotion.velocity_estimator import (
     complementary_forward_velocity_update, gravity_compensated_forward_acceleration,
@@ -59,7 +60,10 @@ class MujocoLocomotionEnv:
         add_tof_sites(spec, self.tof_cfg)
         self.model = spec.compile()
         self.data = mujoco.MjData(self.model)
-        self.tof = MujocoToF(self.model, self.data, self.tof_cfg) if self.tof_cfg["enabled"] else None
+        sensor_noise = SensorRandomizationManager(self.cfg.get("randomization", {}).get("sensors"))
+        self.tof = MujocoToF(
+            self.model, self.data, self.tof_cfg, sensor_noise.config["tof"], strength=sensor_noise.strength,
+        ) if self.tof_cfg["enabled"] else None
         self.tof_distances = torch.empty(len(self.tof_cfg.get("sensors", ())), dtype=torch.float32)
         self.tof_history = ToFHistory(self.tof_distances, self.tof_cfg) if self.tof_cfg["include_in_observation"] else None
         self.base_id = self.model.body(self.cfg.get("base_link_name", "base_link")).id
@@ -110,6 +114,8 @@ class MujocoLocomotionEnv:
         self.target_joint = self.default.numpy().copy()
         self.target_wheel = np.zeros(2)
         self.spring_force = np.zeros(2)
+        if self.tof is not None:
+            self.tof.reset()
         mujoco.mj_forward(self.model, self.data)
         self._update_tof(reset=True)
         return self.observations()

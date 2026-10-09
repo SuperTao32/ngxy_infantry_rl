@@ -6,7 +6,7 @@ import math
 
 import torch
 
-from ...core.randomization import add_randomization_arguments, apply_randomization_arguments
+from ...core.randomization_config import add_randomization_arguments, apply_randomization_arguments
 from ...tools.run_utils import load_run_configs, load_runner_class, resolve_checkpoint, resolve_recorded_run, resolve_run_dir
 from .staged_runner import build_frozen_locomotion_actor, stabilize_with_locomotion
 from .warm_start import validate_locomotion_source

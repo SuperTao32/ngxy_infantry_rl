@@ -1,19 +1,22 @@
 """前向与下向单点 ToF 的安装、量程和观测契约。"""
 
-from copy import deepcopy
+from copy import copy, deepcopy
 import math
 
 import numpy as np
 import torch
+
+from .sensor_randomization import ToFRandomization, sanitize_tof_distances
 
 
 def default_tof_cfg(
     *, include_in_observation=True, history_frames=1, update_hz=50.0, max_range_m=1.2,
     forward_reference_distance_m=1.0, downward_reference_distance_m=0.5,
 ):
-    # base_link_collision 的前侧面左右上角，沿碰撞盒前法向外移 2 mm。
-    # 坐标已经包含碰撞盒的 pos/quat；base_link 坐标为 X 前、Y 左、Z 上。
-    # 下向组位于下底面左右边缘，沿盒体前后轴距前侧 0.20 m，向底面外移 2 mm。
+    # base_link 坐标为 X 前、Y 左、Z 上；前向组位于前侧底缘，下向组位于底部左右。
+    # 四路从 z=-0.15 向下外移 10 mm，避免位置随机化后贴入底盘碰撞箱。
+    # 对 wheelbipeV14_2 实际 pos/quat/size，默认三轴 ±5 mm 下仍有至少 10 mm
+    # 的底盘外侧余量；默认三轴 ±2° 下光轴始终朝该外侧平面之外。
     return {
         "enabled": True,
         "include_in_observation": include_in_observation,
@@ -23,13 +26,13 @@ def default_tof_cfg(
         "min_range_m": 0.0,
         "max_range_m": max_range_m,
         "sensors": [
-            {"name": "tof_left", "pos_offset": [0.23, 0.15, 0.055], "downward_angle_deg": 45.0,
+            {"name": "tof_left", "pos_offset": [0.23, 0.15, -0.16], "downward_angle_deg": 45.0,
              "reference_distance_m": forward_reference_distance_m},
-            {"name": "tof_right", "pos_offset": [0.23, -0.15, 0.055], "downward_angle_deg": 45.0,
+            {"name": "tof_right", "pos_offset": [0.23, -0.15, -0.16], "downward_angle_deg": 45.0,
              "reference_distance_m": forward_reference_distance_m},
-            {"name": "tof_down_left", "pos_offset": [0.10, 0.12, -0.15], "downward_angle_deg": 90.0,
+            {"name": "tof_down_left", "pos_offset": [0.10, 0.12, -0.16], "downward_angle_deg": 90.0,
              "reference_distance_m": downward_reference_distance_m},
-            {"name": "tof_down_right", "pos_offset": [0.10, -0.12, -0.15], "downward_angle_deg": 90.0,
+            {"name": "tof_down_right", "pos_offset": [0.10, -0.12, -0.16], "downward_angle_deg": 90.0,
              "reference_distance_m": downward_reference_distance_m},
         ],
     }
@@ -88,13 +91,6 @@ def tof_site_quat(sensor):
     # MuJoCo site 的 +Z 轴为光轴，绕 +Y 转 90° + 俯角。
     half_angle = math.radians(90.0 + sensor["downward_angle_deg"]) / 2
     return (math.cos(half_angle), 0.0, math.sin(half_angle), 0.0)
-
-
-def sanitize_tof_distances(distances, cfg):
-    """最近交点不在量程内或不存在时统一返回 max_range_m。"""
-    lo, hi = cfg["min_range_m"], cfg["max_range_m"]
-    valid = torch.isfinite(distances) & (distances >= lo) & (distances < hi)
-    return torch.where(valid, distances, hi)
 
 
 def tof_observation(distances, cfg):
@@ -156,11 +152,15 @@ class ToFHistory:
 class GenesisToF:
     """附着在机身上的单射线 Raycaster，以及无物理步进的复位刷新。"""
 
-    def __init__(self, scene, robot, cfg):
+    def __init__(self, scene, robot, cfg, randomization_cfg=None):
         import genesis as gs
 
         self.robot = robot
         self.cfg = cfg
+        self.randomization_cfg = randomization_cfg
+        self.randomization = None
+        self._mount_metadata = None
+        self._link = robot.get_link(cfg["link_name"])
         self.sensors = [
             scene.add_sensor(gs.sensors.Raycaster(
                 entity_idx=robot.idx,
@@ -176,8 +176,55 @@ class GenesisToF:
         ]
         self._reset_raw = None
 
-    def read(self, *, after_reset=False):
+    def reset(self, env_ids=None, *, strength=1.0):
+        if self.randomization is None:
+            pos = self.robot.get_pos()
+            self.randomization = ToFRandomization(
+                self.randomization_cfg, pos.shape[0], len(self.sensors), device=pos.device, dtype=pos.dtype,
+            )
+        self.randomization.reset(env_ids, strength=strength)
+
+    def _read_randomized_mounts(self, *, after_reset=False):
+        # 当前 Genesis Raycaster 在 build 时把安装位姿烘焙到所有环境共享的射线。
+        # set_pos/quat_offset 不会更新这些射线，因此用私有查询 metadata 为每个
+        # 环境构造真实传感器坐标系；复用 Genesis BVH，不改共享 sensor cache。
+        from genesis.utils.geom import transform_by_quat, transform_quat_by_quat
+
+        first = self.sensors[0]
+        if self._mount_metadata is None:
+            metadata = copy(first._shared_metadata)
+            metadata.solver_groups = []
+            metadata.ray_starts = metadata.ray_starts.clone()
+            batch = self.randomization.bias.shape[0]
+            metadata.links_pos = self.randomization.bias.new_zeros((batch, metadata.n_sensors, 3))
+            metadata.links_quat = self.randomization.bias.new_zeros((batch, metadata.n_sensors, 4))
+            metadata.links_quat[..., 0] = 1
+            self._mount_cols = [sensor._idx for sensor in self.sensors]
+            for sensor in self.sensors:
+                ray = metadata.sensors_ray_start_idx[sensor._idx]
+                metadata.ray_starts[ray] = 0
+            self._nominal_positions = self.randomization.position.new_tensor([
+                sensor["pos_offset"] for sensor in self.cfg["sensors"]
+            ])
+            self._mount_metadata = metadata
+            self._mount_raw = self.randomization.bias.new_empty((metadata.total_cache_size, batch))
+        metadata = self._mount_metadata
+        local_pos = self._nominal_positions + self.randomization.position
+        link_pos = self._link.get_pos(relative=False)[:, None, :]
+        link_quat = self._link.get_quat(relative=False)[:, None, :].expand_as(self.randomization.rotation_quat)
+        metadata.links_pos[:, self._mount_cols] = link_pos + transform_by_quat(local_pos, link_quat)
+        metadata.links_quat[:, self._mount_cols] = transform_quat_by_quat(self.randomization.rotation_quat, link_quat)
         if after_reset:
+            first._shared_context.update()
+        type(first)._update_raw_data(first._shared_context, metadata, self._mount_raw)
+        return torch.cat([
+            self._mount_raw[sensor._cache_offset:sensor._cache_offset + 1].T for sensor in self.sensors
+        ], dim=-1)
+
+    def read(self, *, after_reset=False, env_ids=None, strength=1.0):
+        if self.randomization is not None and self.randomization.mount_active:
+            distances = self._read_randomized_mounts(after_reset=after_reset)
+        elif after_reset:
             # Genesis 的 read() 只读取 eager cache；set_qpos 不刷新传感器。
             # 当前 Genesis 没有公开的即时刷新接口。只重新调用 Raycaster 几何
             # 查询，使用独立缓存，不推进 IMU 历史、噪声或仿真时钟。
@@ -197,4 +244,7 @@ class GenesisToF:
             ], dim=-1)
         else:
             distances = torch.cat([sensor.read().distances.flatten(1) for sensor in self.sensors], dim=-1)
-        return sanitize_tof_distances(distances, self.cfg)
+        selected = slice(None) if env_ids is None else env_ids
+        if self.randomization is not None:
+            return self.randomization.measure(distances[selected], self.cfg, env_ids, strength=strength)
+        return sanitize_tof_distances(distances[selected], self.cfg)

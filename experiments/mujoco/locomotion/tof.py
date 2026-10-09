@@ -4,7 +4,8 @@ import mujoco
 import numpy as np
 import torch
 
-from experiments.genesis.wheel_leg_infantry.core.tof import sanitize_tof_distances, tof_site_quat
+from experiments.genesis.wheel_leg_infantry.core.tof import tof_site_quat
+from experiments.genesis.wheel_leg_infantry.core.sensor_randomization import ToFRandomization
 
 
 def add_tof_sites(spec, cfg):
@@ -23,12 +24,23 @@ def add_tof_sites(spec, cfg):
 
 
 class MujocoToF:
-    def __init__(self, model, data, cfg):
+    def __init__(self, model, data, cfg, randomization_cfg=None, *, strength=1.0):
         self.model, self.data, self.cfg = model, data, cfg
         self.site_ids = [model.site(sensor["name"] + "_site").id for sensor in cfg["sensors"]]
         self.geomgroup = np.array([1, 1, 0, 1, 1, 1], dtype=np.uint8)
         self.collision_ids = np.flatnonzero(model.geom_contype | model.geom_conaffinity)
         self.geomid = np.empty(1, dtype=np.int32)
+        self.strength = strength
+        self.randomization = ToFRandomization(randomization_cfg, 1, len(self.site_ids))
+
+    def reset(self):
+        self.randomization.reset(strength=self.strength)
+        for index, (site_id, sensor) in enumerate(zip(self.site_ids, self.cfg["sensors"])):
+            self.model.site_pos[site_id] = np.asarray(sensor["pos_offset"]) + self.randomization.position[0, index].numpy()
+            mujoco.mju_mulQuat(
+                self.model.site_quat[site_id], self.randomization.rotation_quat[0, index].double().numpy(),
+                np.asarray(tof_site_quat(sensor)),
+            )
 
     def read(self):
         # mj_ray 忽略 alpha=0 的几何。查询期间临时启用不可见碰撞盒，
@@ -43,4 +55,6 @@ class MujocoToF:
             ) for site_id in self.site_ids]
         finally:
             self.model.geom_rgba[self.collision_ids, 3] = alphas
-        return sanitize_tof_distances(torch.tensor(distances, dtype=torch.float32), self.cfg)
+        return self.randomization.measure(
+            torch.tensor([distances], dtype=torch.float32), self.cfg, strength=self.strength,
+        )[0]

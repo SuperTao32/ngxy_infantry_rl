@@ -7,7 +7,7 @@ import genesis as gs
 import torch
 
 from ...terrains import TERRAIN_PRESETS, default_terrain_cfg, resolve_terrain_cfg
-from ...core.randomization import add_randomization_arguments, apply_randomization_arguments
+from ...core.randomization_config import add_randomization_arguments, apply_randomization_arguments
 from ...tools.tof_viewer import prepare_tof_for_viewer
 from ...tools.run_utils import (
     load_run_configs,

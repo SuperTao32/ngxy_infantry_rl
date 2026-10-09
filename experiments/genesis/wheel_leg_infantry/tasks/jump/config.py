@@ -6,8 +6,8 @@ from copy import deepcopy
 import math
 from typing import Mapping, Sequence
 
-from ...core.domain_randomization import default_domain_rand_cfg
-from ...core.randomization import normalize_randomization_config
+from ...core.dynamics_randomization import default_dynamics_randomization_cfg
+from ...core.randomization_config import normalize_randomization_config
 from ...core.tof import resolve_tof_cfg
 from ..locomotion.config_locomotion import get_cfgs as get_locomotion_cfgs
 from .height_reference import validate_height_reference
@@ -79,7 +79,7 @@ def get_cfgs(locomotion_cfgs: Sequence[Mapping] | None = None):
     command_cfg = deepcopy(dict(locomotion_cfgs[3]))
     command_cfg.update({"num_commands": 3, **deepcopy(warmup_cfg["command_ranges"])})
     obs_cfg = _get_obs_cfg(locomotion_cfgs[1])
-    normalize_randomization_config(env_cfg, obs_cfg)["dynamics"] = default_domain_rand_cfg(enabled=False)
+    normalize_randomization_config(env_cfg, obs_cfg)["dynamics"] = default_dynamics_randomization_cfg(enabled=False)
     reward_cfg = _get_reward_cfg()
     curriculum_cfg = _get_curriculum_cfg()
     # 采样比例只在课程中配置；复制首阶段作为初始值，关闭课程时也使用这一比例。

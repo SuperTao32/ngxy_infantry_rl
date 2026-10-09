@@ -6,7 +6,7 @@ import argparse
 from copy import deepcopy
 
 from ...core.train_config import get_train_cfg
-from ...core.randomization import add_randomization_arguments, apply_randomization_arguments
+from ...core.randomization_config import add_randomization_arguments, apply_randomization_arguments
 from ...tools.run_utils import (
     add_resume_arguments,
     create_versioned_run_dir,
