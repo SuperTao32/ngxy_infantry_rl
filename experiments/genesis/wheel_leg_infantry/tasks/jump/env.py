@@ -15,7 +15,7 @@ from ..locomotion.env import LocomotionEnv
 from .config import MODE_NAMES, PHASE_NAMES, validate_configs, validate_mode_probabilities, validate_platform_enabled
 from .height_reference import sample_height_reference
 from .geometry import active_step_heights, target_wheel_support, trigger_distance
-from .terrain import JumpTerrain
+from ...terrains.jump_terrain import JumpTerrain
 from .observation import JUMP_POLICY_LAYOUT, LOCOMOTION_POLICY_LAYOUT, layout_dim
 from .phase import phase_encoding, validate_phase_durations
 from .reward_state import JumpRewardState

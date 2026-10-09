@@ -6,7 +6,7 @@ from copy import deepcopy
 import genesis as gs
 import torch
 
-from ...core.terrain import TERRAIN_PRESETS, default_terrain_cfg
+from ...terrains import TERRAIN_PRESETS, default_terrain_cfg, resolve_terrain_cfg
 from ...core.randomization import add_randomization_arguments, apply_randomization_arguments
 from ...tools.run_utils import (
     load_run_configs,
@@ -14,7 +14,7 @@ from ...tools.run_utils import (
     resolve_checkpoint,
     resolve_run_dir,
 )
-from .config import get_final_command_cfg
+from .config_common import get_final_command_cfg
 from .env import LocomotionEnv
 from .interactive_viewer import KeyboardCommand, format_tensor
 
@@ -35,6 +35,7 @@ def _parse_args(argv=None):
         default=None,
         help="override the saved terrain to test the same policy on another surface",
     )
+    parser.add_argument("--difficulty", type=int, default=None, help="terrain level from the corresponding terrains/<preset>.py module")
     parser.add_argument(
         "--terrain-size",
         type=float,
@@ -66,6 +67,9 @@ def _apply_terrain_overrides(env_cfg, args):
     env_cfg["terrain"] = default_terrain_cfg(preset)
     if args.terrain_size is not None:
         env_cfg["terrain"]["tile_size"] = list(args.terrain_size)
+    if args.difficulty is not None:
+        env_cfg["terrain"]["difficulty"] = args.difficulty
+        env_cfg["terrain"] = resolve_terrain_cfg(env_cfg["terrain"])
 
 
 def print_evaluation_diagnostics(env, step):

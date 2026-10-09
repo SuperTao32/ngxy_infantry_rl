@@ -6,8 +6,8 @@ import genesis as gs
 import numpy as np
 import torch
 
-from ..core.terrain import TERRAIN_PRESETS, TerrainManager
-from ..tasks.locomotion.config import get_cfgs
+from ..terrains import TERRAIN_PRESETS, TerrainManager
+from ..tasks.locomotion.config_locomotion import get_cfgs
 
 
 def main():

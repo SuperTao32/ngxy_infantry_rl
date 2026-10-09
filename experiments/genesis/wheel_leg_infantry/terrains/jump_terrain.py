@@ -2,9 +2,9 @@
 
 import torch
 
-from ...core.terrain import TerrainManager
-from .config import validate_platform_enabled
-from .geometry import active_step_heights
+from .manager import TerrainManager
+from ..tasks.jump.config import validate_platform_enabled
+from ..tasks.jump.geometry import active_step_heights
 
 
 class JumpTerrain(TerrainManager):

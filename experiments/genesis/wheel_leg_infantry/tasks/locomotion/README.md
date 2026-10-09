@@ -1,6 +1,8 @@
 # 行走地形
 
-当前可选预设为 `plane`、`stairs`、`platform_ridge`、`trapezoidal_wave`。`stairs` 使用固定箱体楼梯。
+地形代码统一位于 [`terrains/`](../../terrains/README.md)。每种地形的默认参数、难度表和几何实现放在同名文件中，公共尺寸在 `terrains/config.py` 中修改。
+
+当前可选预设为 `plane`、`stairs`、`platform_ridge`、`trapezoidal_wave`、`square_wave`、`random_rough`。`stairs` 使用固定箱体楼梯。
 
 平地统一使用 `plane`（z=0 解析平面），移除重复的 `flat` 预设。`plane` 默认没有边界复位；设置 `terrain["bounded"] = True` 可按 `tile_size` 与 `boundary_margin` 开启边界 timeout。旧配置中的 `preset="flat"` 自动迁移到 `plane`，默认保留其边界复位行为；其余地形继续按原规则检查边界。
 
@@ -16,48 +18,228 @@
 ```
 
 
-## 按课程调整地形
+## 地形参数与难度等级
 
-在阶段的 `targets["terrain"]` 中设置 `preset` 和 `subterrain_parameters`，字段与 `env_cfg["terrain"]` 一致。后续阶段按字段累计覆盖，没有写出的参数继承前一阶段；第一阶段以基础环境配置为起点。
+几何参数和实现按地形分文件维护：[`terrains/`](../../terrains/README.md)。
+`plane.py`、`stairs.py`、`platform_ridge.py`、`trapezoidal_wave.py`、`square_wave.py`、`random_rough.py`
+各自包含 `PARAMETERS`（默认参数）、`LEVELS`（难度表）及对应几何类。等级内未写的字段继承 `PARAMETERS`，不继承前一级。
+平地只有 0 级，其余默认 0–4 级；可以增加连续的整数等级。距离单位 m，坡角单位度。
+
+例如在 `stairs.py` 修改：
 
 ```python
-"stages": [
-    {"name": "flat", "start_iteration": 0,
-     "targets": {"terrain": {"preset": "plane"}}},
-    {"name": "low_steps", "start_iteration": 1000,
-     "targets": {"terrain": {
-         "preset": "platform_ridge",
-         "subterrain_parameters": {"platform_ridge": {
-             "first_height": 0.10, "ridge_height": 0.18,
-             "second_height": 0.15, "second_length": 1.20,
-         }},
-     }}},
-    {"name": "high_steps", "start_iteration": 3000,
-     "targets": {"terrain": {"subterrain_parameters": {"platform_ridge": {
-         "first_height": 0.20, "ridge_height": 0.35, "second_height": 0.30,
-     }}}}},
-    {"name": "stairs", "start_iteration": 5000,
-     "targets": {"terrain": {"preset": "stairs"}}},
-]
+LEVELS = {
+    0: {"step_height": 0.04},
+    1: {"step_height": 0.08},
+    2: {"step_height": 0.12},
+    3: {"step_height": 0.16},
+    4: {"step_height": 0.20},
+}
 ```
 
-`platform_ridge` 的高度、长度、凸台宽度、接近距离、底板厚度均可调整，`second_length=None` 仍表示延伸到 tile 边界。`ridge_height` 必须高于两侧平台，所有几何必须能放进 `tile_size`。同样可以切换 `trapezoidal_wave`，并配置相应参数。
+课程只选择类型和等级：
 
-`config_downstairs.py` 提供平地 → 低平台 → 标准平台 → 楼梯 → 梯形波的完整示例，可直接修改阶段迭代数和参数：
+```python
+{"name": "easy", "start_iteration": 0,
+ "targets": {"terrain": {"preset": "stairs", "difficulty": 0}}},
+{"name": "hard", "start_iteration": 2000,
+ "targets": {"terrain": {"preset": "stairs", "difficulty": 3}}},
+```
+
+`config_downstairs.py` 已改为等级引用：梯形波 4 级 → 楼梯 4 级 → 平台凸台 0–4 级。
+平台等级保留此前各阶段的第二平台高度和接近距离，几何参数现已集中到参数文件。
+旧的 `subterrain_parameters` 写法仍可使用；指定 `difficulty` 时，该类型的几何以难度表为准。
+
+## 按比例混合与自动升降级
+
+训练按 `config_locomotion → config_mix_terrain → config_downstairs` 交接权重。
+[`config_common.py`](config_common.py) 共享机器人、动作与观测定义，每次返回独立字典；
+三份配置各自维护奖励、命令和课程，任务需要的接触阈值、终止条件可在本地覆盖。
 
 ```bash
+# 1. 平地行走训练
 .venv/bin/python -m experiments.genesis.wheel_leg_infantry.tasks.locomotion.train \
-  --config config_downstairs -e downstairs_course -B 64
+  --config config_locomotion -e locomotion_base -B 64
+
+# 2. 加载第一阶段权重，开始混合地形课程（替换为实际 checkpoint 路径）
+.venv/bin/python -m experiments.genesis.wheel_leg_infantry.tasks.locomotion.train \
+  --config config_mix_terrain -e locomotion_mixed -B 64 \
+  --load-weights /path/to/locomotion/model_N.pt
+
+# 3. 加载混合地形权重，开始 downstairs 课程
+.venv/bin/python -m experiments.genesis.wheel_leg_infantry.tasks.locomotion.train \
+  --config config_downstairs -e locomotion_downstairs -B 64 \
+  --load-weights /path/to/mixed/model_N.pt
 ```
 
-指定训练 `--terrain` 时，基础配置和各课程阶段的 preset 都被覆盖为该类型，阶段中的几何参数仍然生效。若需要课程切换不同类型，不传 `--terrain`。
+跨阶段使用 `--load-weights`：只加载 actor/critic，优化器和课程迭代从 0 重新开始。
+同一阶段中断后使用 `--resume`，恢复已保存的配置、优化器、迭代和地形等级。
+`--config config` 和 `--config config_mixed` 仍作为旧名称别名保留。
 
-所有不同的课程地形在启动时预构建，阶段切换会在当前控制步完成动作和奖励后结束所有回合，再按新地形复位；runner 收到截断标志和新观测。恢复 checkpoint 时按恢复迭代数选中对应地形。多地形课程中的平地使用有限地面，各阶段都启用 tile 边界复位。预构建的实体增加场景内存与碰撞开销；未指定 `-B` 时默认使用 8192 个并行环境。
+[`config_mix_terrain.py`](config_mix_terrain.py) 从第 0 次迭代直接训练混合地形，无站立预热。
+默认启用平地 / 梯形波 / 方波 / 随机起伏，权重为 10 / 30 / 30 / 30；
+楼梯和平台凸台条目保持注释，交给后续 downstairs 阶段训练，也可自行启用。
+各非平地类型从 0 级开始，在 0–4 级内独立调整。
+前进指令保持 0.5–1.5 m/s，yaw 角速度为 ±0.2 rad/s，站立概率为 0。
 
-## eval 地形默认值
+混合课程在 0 / 2000 / 4000 次迭代分别使用 0 / 0.4 / 1.0 的动力学与传感器随机化强度，
+高度命令从 0.22–0.28 m 扩展至 0.22–0.32 m、0.22–0.36 m。
+后两阶段不覆盖地形配置，保留自动升降级的进度。
+奖励参数在 `_reward_cfg()` 独立维护：保留速度跟踪和动作平滑、启用落地振荡惩罚，
+并放宽越障时的姿态门控。默认参数是迁移训练起点，尚需实际训练验证收敛效果。
 
-评估保留日志中的地形类型（或 `--terrain` 指定的类型），但几何参数和 `tile_size` 每次重新读取当前 `default_terrain_cfg(preset)`，不沿用日志内的旧几何，也不再自动缩成 12 × 6 m。`--terrain-size LENGTH WIDTH` 可显式覆盖尺寸。eval 不运行训练课程；要查看某阶段地形，用 `--terrain` 选择类型，并在 `default_terrain_cfg` 中设置所需参数。
+修改 `_terrain_cfg()` 中的混合比例和自动升降条件；也可在课程的 `targets["terrain"]` 中覆盖，例如：
 
+```python
+"terrain": {
+    "mixture": [
+        {"preset": "plane", "weight": 20, "difficulty": 0},
+        {"preset": "stairs", "weight": 50, "difficulty": 1,
+         "min_difficulty": 0, "max_difficulty": 4},
+        {"preset": "random_rough", "weight": 30, "difficulty": 0,
+         "min_difficulty": 0, "max_difficulty": 4},
+    ],
+    "adaptive": {
+        "enabled": True,
+        "window_episodes": 100,
+        "promote_threshold": 0.80,
+        "demote_threshold": 0.30,
+        "min_distance": 2.0,
+        "min_duration_s": 2.0,
+        "max_lin_vel_rmse": 0.5,
+        "max_ang_vel_rmse": 1.0,
+        "max_tilt_deg": 60.0,
+    },
+}
+```
+
+- `weight` 是每次 reset 时的抽样权重，无需合计为 1；0 表示不抽取。同一类型只写一次。
+  比例是长期回合采样比例，不保证每一时刻的并行环境数量比例精确一致。
+- `difficulty` 是初始等级。省略 `min_difficulty` / `max_difficulty` 时，两者都等于初始等级，固定该等级。
+  只有一种地形也可以使用一个 `mixture` 条目获得自动升降级。
+- 成功必须同时满足：无失败终止、全回合无机身接地或超过倾斜阈值；水平净位移达标；实际回合时长达标；
+  前向线速度和 yaw 角速度的全回合跟踪 RMSE 达标。边界 timeout 和自然 timeout 均可作为完成回合；
+  初始化、手动 reset 和阶段切换截断不计入统计。不要给要求越障的混合阶段配置纯站立指令。
+- 每种地形独立累计当前等级的已完成回合。达到至少 `window_episodes` 个样本后计算一次成功率；
+  同一仿真步同时结束的回合整体纳入窗口，达到升级阈值升一级，达到降级阈值降一级，中间区间保持。
+  每次判断后清空窗口。升级后在途旧等级回合不会污染新窗口。
+- 其他环境继续当前回合，新等级仅影响下次 reset。类型、难度的碰撞几何均预构建在独立 patch，
+  出生高度、奖励高度和边界判断使用对应 patch 的局部坐标；平地 patch 同样有边界。
+- 后续阶段可以覆盖 `mixture` 整个列表或部分 `adaptive` 字段；改变地形配置时会统一截断并复位所有环境，
+  新配置从其初始等级开始。回到单地形时设置 `"mixture": None` 并指定 `preset`、`difficulty`。
+
+训练日志记录 `terrain/<类型>/difficulty`、`success_rate`（最近完成窗口）和 `window_episodes`（当前窗口样本数）。
+完整 checkpoint 保存每种地形的等级、窗口计数与成功数；恢复时沿用，`--load-weights` 则重新开始课程。
+训练配置保存难度表快照，因此修改参数文件不会改变旧实验的默认续训；需要新几何时使用新课程/加载权重。
+
+训练时不要传 `--terrain`，否则会改成指定的单地形默认参数并移除各阶段的混合配置和等级引用。
+多类型、多等级预构建会增加场景内存与碰撞开销。训练入口在任一阶段含混合地形时，
+省略 `-B` 默认使用 64 个环境（包括恢复保存的混合课程）；其他课程仍默认 8192。
+显式 `-B` 始终优先，建议先验证 64，再逐步增加并行环境数。
+碰撞容量按单个环境同时接触的地形计算，不随预构建类型、等级或课程阶段数累加。
+若看到 `Jacobian shape ... is too large`，说明约束数 × 自由度数 × 环境数超出 Genesis 的索引上限，
+应降低 `-B`；这发生在权重加载之前，与 checkpoint 是否兼容无关。
+
+## 评估指定等级
+
+```bash
+.venv/bin/python -m experiments.genesis.wheel_leg_infantry.tasks.locomotion.eval \
+  -e locomotion_mixed --terrain stairs --difficulty 2
+```
+
+评估不运行自动课程。通过 `--terrain` 选择类型，通过 `--difficulty` 选择当前参数文件里的等级；
+`--terrain-size LENGTH WIDTH` 覆盖尺寸。不指定等级时使用该类型的 `PARAMETERS` 默认几何。
+混合训练日志的基础 preset 可能为 plane，评估时应显式指定要检查的类型。
+
+## 验证
+
+```bash
+.venv/bin/python -m unittest tests.genesis.test_mixed_terrain.MixedTerrainTests -v
+NGXY_MIXED_TERRAIN_SMOKE=1 .venv/bin/python -m unittest tests.genesis.test_mixed_terrain.MixedTerrainSmokeTests -v
+```
+
+## 方波地形
+
+`square_wave` 沿 x 方向周期排列高平台和低平台，台阶为垂直立面，沿 y 方向铺满地形宽度。默认高差 20 cm，高、低平台各长 1.5 m，周期为 3 m。机器人默认出生在高平台中央 `(0, 0)`；沿 +x 前进 0.75 m 后下台阶。平台使用固定箱体，复位和奖励查询使用同一截面。
+
+```python
+"terrain": {
+    "preset": "square_wave",
+    "subterrain_parameters": {
+        "square_wave": {
+            "height": 0.20,
+            "high_length": 1.50,
+            "low_length": 1.50,
+            "base_thickness": 0.10,
+        },
+    },
+},
+```
+
+## 随机起伏地形
+
+`random_rough` 在 x/y 两个方向生成连续随机起伏，默认相对 `z=0` 的高度范围为 ±5 cm。随机控制点间距默认 0.5 m，经双三次插值生成细网格，中心半径 0.5 m 内保持平整，并平滑过渡到周围起伏。出生中心高度为 0，机器人姿态仍由通用 reset 配置控制。
+
+```python
+"terrain": {
+    "preset": "random_rough",
+    "horizontal_scale": 0.10,  # 最终碰撞网格的水平间距
+    "subterrain_parameters": {
+        "random_rough": {
+            "height": 0.05,  # 最大正负起伏；0 表示平地
+            "noise_scale": 0.50,  # 控制点间距，越小起伏越密；不能小于 horizontal_scale
+            "spawn_flat_radius": 0.50,  # 平整出生区半径；0 表示不设平整区
+            "base_thickness": 0.10,
+            "seed": 0,
+        },
+    },
+},
+```
+
+地形使用独立的 `seed`，相同参数可复现同一形状，不受训练 `--seed` 和其他随机采样影响。所有并行环境共享该形状，每次 episode reset 不重新生成；要更换形状，可修改地形 `seed` 或在课程下一阶段覆盖它。`height` 以米为单位，不受 `vertical_scale` 量化。
+
+碰撞使用闭合的非凸分块网格，保留凹谷；高度查询按相同三角面插值。多个随机地形阶段拥有独立碰撞实体，切换时由课程统一移入/移出场景。随机地形的首次构建及碰撞开销高于平地。
+
+两种地形均可直接用于训练、评估和模型查看：
+
+```bash
+uv run --locked python -m experiments.genesis.wheel_leg_infantry.tasks.locomotion.train \
+  --config config_downstairs --terrain square_wave -e locomotion_square -B 64
+
+uv run --locked python -m experiments.genesis.wheel_leg_infantry.tasks.locomotion.train \
+  --config config_downstairs --terrain random_rough -e locomotion_random -B 64
+
+uv run --locked python -m experiments.genesis.wheel_leg_infantry.tasks.locomotion.eval \
+  --log-root log_shared -e locomotion_v2 --terrain random_rough
+```
+
+课程示例（加入 `curriculum_cfg["stages"]`，保持迭代数递增、阶段名唯一）：
+
+```python
+{
+    "name": "square_steps",
+    "start_iteration": 2000,
+    "targets": {"terrain": {
+        "preset": "square_wave",
+        "subterrain_parameters": {"square_wave": {"height": 0.10}},
+    }},
+},
+{
+    "name": "random_surface",
+    "start_iteration": 4000,
+    "targets": {"terrain": {
+        "preset": "random_rough",
+        "subterrain_parameters": {"random_rough": {"height": 0.05, "seed": 17}},
+    }},
+},
+```
+
+按课程切换类型时不要传训练 `--terrain`；该选项会覆盖所有阶段的地形类型。eval 继续加载当前 `default_terrain_cfg` 中对应类型的默认参数。
+
+```bash
+.venv/bin/python -m unittest tests.genesis.test_square_random_terrain -v
+NGXY_SQUARE_RANDOM_SMOKE=1 .venv/bin/python -m unittest tests.genesis.test_square_random_terrain.SquareRandomSmokeTests -v
+```
 
 ## 平台—窄凸台—平台地形
 

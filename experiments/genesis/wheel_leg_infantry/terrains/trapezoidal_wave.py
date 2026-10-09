@@ -4,9 +4,24 @@ import math
 
 import torch
 
+from .base import TerrainGeometry
 
-class TrapezoidalWave:
-    def __init__(self, parameters, tile_size):
+
+PRESET = "trapezoidal_wave"
+PARAMETER_KEY = "trapezoidal_wave"
+PARAMETERS = dict(height=0.20, platform_length=1.50, slope_angle_deg=23.0, base_thickness=0.10)
+LEVELS = {
+    0: dict(height=0.04, slope_angle_deg=5.0),
+    1: dict(height=0.08, slope_angle_deg=10.0),
+    2: dict(height=0.12, slope_angle_deg=15.0),
+    3: dict(height=0.16, slope_angle_deg=20.0),
+    4: dict(height=0.20, slope_angle_deg=23.0),
+}
+
+
+class TrapezoidalWave(TerrainGeometry):
+    def __init__(self, parameters, tile_size, horizontal_scale=0.1, *, boundary_margin=None):
+        super().__init__(parameters, tile_size, horizontal_scale, boundary_margin=boundary_margin)
         for name in ("height", "platform_length", "base_thickness"):
             value = float(parameters[name])
             if not math.isfinite(value) or value <= 0.0:
@@ -17,7 +32,6 @@ class TrapezoidalWave:
             raise ValueError("trapezoidal_wave.slope_angle_deg must be between 0 and 90 degrees")
         self.ramp_length = self.height / math.tan(math.radians(angle))
         self.period = 2.0 * (self.platform_length + self.ramp_length)
-        self.tile_size = tuple(tile_size)
         # x=0 位于高平台中央，+x 方向依次经过下坡、低平台、上坡。
         self.segments = self._build_segments()
 
@@ -72,3 +86,6 @@ class TrapezoidalWave:
             scene.add_entity(gs.morphs.MeshSet(files=(mesh,), fixed=True, convexify=True, decimate=False, batch_fixed_verts=False))
             for mesh in self.meshes()
         )
+
+
+TERRAIN_CLASS = TrapezoidalWave
