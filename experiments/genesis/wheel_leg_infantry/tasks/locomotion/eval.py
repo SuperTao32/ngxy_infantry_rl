@@ -8,6 +8,7 @@ import torch
 
 from ...terrains import TERRAIN_PRESETS, default_terrain_cfg, resolve_terrain_cfg
 from ...core.randomization import add_randomization_arguments, apply_randomization_arguments
+from ...tools.tof_viewer import prepare_tof_for_viewer
 from ...tools.run_utils import (
     load_run_configs,
     load_runner_class,
@@ -145,6 +146,7 @@ def main():
     _apply_terrain_overrides(env_cfg, args)
     obs_cfg = deepcopy(configs["obs_cfg"])
     apply_randomization_arguments(env_cfg, obs_cfg, args)
+    prepare_tof_for_viewer(obs_cfg)
     reward_cfg = deepcopy(configs["reward_cfg"])
     command_cfg = get_final_command_cfg(configs["command_cfg"], configs["curriculum_cfg"])
     train_cfg = configs["train_cfg"]
@@ -183,6 +185,7 @@ def main():
     obs_dict = env.reset()
     env.focus_viewer()
     keyboard = KeyboardCommand(env)
+    keyboard.update_caption()
     print("[eval] camera: left drag=rotate, middle/Shift+left drag=pan, wheel/right drag=zoom, Home=focus robot")
     print_evaluation_diagnostics(env, step=0)
     step = 0

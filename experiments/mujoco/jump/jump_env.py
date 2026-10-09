@@ -20,6 +20,7 @@ class MujocoJumpEnv:
     def __init__(self, configs, source_configs, vx=0.0, handoff="landing"):
         validate_locomotion_source(source_configs)
         self.configs = deepcopy(configs)
+        self.configs["obs_cfg"]["tof"] = {"enabled": False, "include_in_observation": False}
         cfg = self.configs["env_cfg"]
         # Teacher sees the same prefix and action interface used during jump training.
         for key in ("robot_mjcf", "joint_names", "wheel_names", "default_joint_pos",

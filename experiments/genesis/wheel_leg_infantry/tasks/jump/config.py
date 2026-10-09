@@ -8,6 +8,7 @@ from typing import Mapping, Sequence
 
 from ...core.domain_randomization import default_domain_rand_cfg
 from ...core.randomization import normalize_randomization_config
+from ...core.tof import resolve_tof_cfg
 from ..locomotion.config_locomotion import get_cfgs as get_locomotion_cfgs
 from .height_reference import validate_height_reference
 from .observation import JUMP_POLICY_LAYOUT, LOCOMOTION_POLICY_LAYOUT, layout_dim
@@ -197,6 +198,8 @@ def _get_jump_modes_cfg(episode_length_s: float):
 def _get_obs_cfg(locomotion_obs_cfg: Mapping):
     """继承 locomotion 观测前缀，追加 jump 观测与缩放。"""
     obs_cfg = deepcopy(dict(locomotion_obs_cfg))
+    # jump 不使用 ToF，也不为无用的测距创建传感器；不修改来源 locomotion 配置。
+    obs_cfg["tof"] = {"enabled": False, "include_in_observation": False}
     obs_cfg.setdefault("obs_scales", {})
     obs_cfg["obs_scales"].update(
         {
@@ -445,5 +448,7 @@ def validate_configs(env_cfg, obs_cfg, curriculum_cfg=None):
     if env_cfg["handoff_on_landing"]:
         raise ValueError("jump_modes requires the full landing stabilization window")
     expected_policy = layout_dim(JUMP_POLICY_LAYOUT)
+    if resolve_tof_cfg(obs_cfg.get("tof"))["include_in_observation"]:
+        raise ValueError("jump does not support ToF observations; set tof.include_in_observation=False")
     if obs_cfg["num_policy_obs"] != expected_policy or obs_cfg["num_critic_obs"] != expected_policy + 19:
         raise ValueError("jump_modes observation dimensions must include 3D mode and 2D privileged state")

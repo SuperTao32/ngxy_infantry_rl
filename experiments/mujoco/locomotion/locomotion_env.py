@@ -10,6 +10,8 @@ from tensordict import TensorDict
 from experiments.genesis.wheel_leg_infantry.core.kinematics import (
     compute_leg_angle, compute_leg_length, constrain_leg_targets,
 )
+from experiments.genesis.wheel_leg_infantry.core.tof import ToFHistory, ToFSamplingClock, resolve_tof_cfg
+from experiments.mujoco.locomotion.tof import MujocoToF, add_tof_sites
 from experiments.genesis.wheel_leg_infantry.tasks.locomotion.velocity_estimator import (
     complementary_forward_velocity_update, gravity_compensated_forward_acceleration,
     wheel_forward_velocity,
@@ -31,6 +33,8 @@ class MujocoLocomotionEnv:
         self.obs_cfg = configs["obs_cfg"]
         self.scales = self.obs_cfg["obs_scales"]
         self.estimator = self.obs_cfg.get("velocity_estimator", {})
+        self.tof_cfg = resolve_tof_cfg(self.obs_cfg.get("tof"))
+        self.tof_clock = ToFSamplingClock(self.tof_cfg, self.dt) if self.tof_cfg["enabled"] else None
         if self.cfg["num_actions"] != 6 or configs["command_cfg"]["num_commands"] != 3:
             raise ValueError("Only the 6-action, 3-command locomotion contract is supported")
         imu = self.obs_cfg.get("imu", {})
@@ -52,8 +56,12 @@ class MujocoLocomotionEnv:
         spec.worldbody.add_geom(name="sim2sim_floor", type=mujoco.mjtGeom.mjGEOM_PLANE,
                                 size=[0, 0, 0.05], friction=[1, 0.01, 0.01], rgba=[0.25, 0.3, 0.35, 1])
         spec.worldbody.add_light(pos=[0, -2, 4], dir=[0, 0, -1])
+        add_tof_sites(spec, self.tof_cfg)
         self.model = spec.compile()
         self.data = mujoco.MjData(self.model)
+        self.tof = MujocoToF(self.model, self.data, self.tof_cfg) if self.tof_cfg["enabled"] else None
+        self.tof_distances = torch.empty(len(self.tof_cfg.get("sensors", ())), dtype=torch.float32)
+        self.tof_history = ToFHistory(self.tof_distances, self.tof_cfg) if self.tof_cfg["include_in_observation"] else None
         self.base_id = self.model.body(self.cfg.get("base_link_name", "base_link")).id
         site = self.model.site("base_link_site")
         if self.model.body(imu.get("link_name", "base_link")).id != site.bodyid[0]:
@@ -103,7 +111,21 @@ class MujocoLocomotionEnv:
         self.target_wheel = np.zeros(2)
         self.spring_force = np.zeros(2)
         mujoco.mj_forward(self.model, self.data)
+        self._update_tof(reset=True)
         return self.observations()
+
+    def _update_tof(self, *, reset=False):
+        if self.tof is not None:
+            if reset:
+                self.tof_clock.reset()
+            elif not self.tof_clock.advance().item():
+                return
+            self.tof_distances.copy_(self.tof.read())
+            if self.tof_history is not None:
+                if reset:
+                    self.tof_history.reset(self.tof_distances)
+                else:
+                    self.tof_history.append(self.tof_distances)
 
     def observations(self):
         q = tensor(self.data.qpos[self.jq])
@@ -122,6 +144,8 @@ class MujocoLocomotionEnv:
             "leg_angle": compute_leg_angle(q, self.front, self.rear) * s["leg_angle"],
             "actions": self.actions,
         }
+        if self.tof_cfg["include_in_observation"]:
+            self.components["tof_distance"] = self.tof_history.observation()
         obs = torch.cat(tuple(self.components.values())).unsqueeze(0)
         if not torch.isfinite(obs).all():
             raise FloatingPointError("Non-finite policy observation")
@@ -171,6 +195,7 @@ class MujocoLocomotionEnv:
         mujoco.mj_forward(self.model, self.data)
         if any(w.number for w in self.data.warning):
             raise FloatingPointError("MuJoCo reported a simulation warning; stop and inspect dynamics")
+        self._update_tof()
         self.acc = tensor(self.data.sensor("accelerometer").data)
         self.gyro = tensor(self.data.sensor("gyro").data)
         self.gravity = tensor(self.data.xmat[self.base_id].reshape(3, 3).T @ [0, 0, -1])

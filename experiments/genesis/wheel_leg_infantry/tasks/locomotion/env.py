@@ -20,6 +20,7 @@ from ...core.curriculum import CurriculumManager
 from ...core.domain_randomization import DomainRandomizationManager, MOTOR_NAMES, SPRING_NAMES
 from ...core.randomization import normalize_randomization_config
 from ...core.sensor_noise import SensorNoise
+from ...core.tof import GenesisToF, ToFHistory, ToFSamplingClock, resolve_tof_cfg
 from ...core.kinematics import compute_leg_angle, compute_leg_length, constrain_leg_targets
 from ...core.tensor_utils import as_gain_tensor, as_range_tensors, sample_uniform
 from ...terrains.manager import make_terrain
@@ -100,6 +101,8 @@ class LocomotionEnv(LocomotionRewards):
         # IMU配置
         self.imu_cfg = self.sensor_noise.imu_options(obs_cfg.get("imu", {}))
         self.imu_acc_scale = float(obs_cfg["obs_scales"].get("lin_acc", 1.0 / 9.81))
+        self.tof_cfg = resolve_tof_cfg(obs_cfg.get("tof"))
+        self.tof_clock = ToFSamplingClock(self.tof_cfg, self.dt, num_envs, self.device) if self.tof_cfg["enabled"] else None
 
         # 速度估计器配置
         self.velocity_estimator_cfg = dict(obs_cfg.get("velocity_estimator", {}))
@@ -314,7 +317,7 @@ class LocomotionEnv(LocomotionRewards):
             ),
         )
 
-        # actor 使用 IMU 和轮速观测，仿真真值只供 critic 和诊断使用。
+        # actor 使用 IMU、轮速和 ToF 观测，仿真真值只供 critic 和诊断使用。
         self.imu = self.scene.add_sensor(
             gs.sensors.IMU(
                 entity_idx=self.robot.idx,
@@ -330,6 +333,13 @@ class LocomotionEnv(LocomotionRewards):
                 jitter=self.imu_cfg.get("jitter", 0.0),
             )
         )
+
+        # tof
+        self.tof = GenesisToF(self.scene, self.robot, self.tof_cfg) if self.tof_cfg["enabled"] else None
+        self.tof_distances = torch.empty(
+            (num_envs, len(self.tof_cfg.get("sensors", ()))), dtype=gs.tc_float, device=self.device,
+        )
+        self.tof_history = ToFHistory(self.tof_distances, self.tof_cfg) if self.tof_cfg["include_in_observation"] else None
 
         # build环境
         self.scene.build(n_envs=num_envs)
@@ -645,6 +655,13 @@ class LocomotionEnv(LocomotionRewards):
         self.joint_vel = self.robot.get_dofs_velocity(self.joints_dof_idx)
         self.wheel_vel = self.robot.get_dofs_velocity(self.wheels_dof_idx)
         self._update_encoder_measurements()
+        if self.tof is not None:
+            due = self.tof_clock.advance()
+            if due.any():
+                # Raycaster 的内部 eager cache 仍随物理步刷新；仅发布到期的新测距帧。
+                self.tof_distances[due] = self.tof.read()[due]
+                if self.tof_history is not None:
+                    self.tof_history.append(self.tof_distances, due)
         self._update_velocity_estimator()
         self._update_wheel_contact()
 
@@ -790,7 +807,7 @@ class LocomotionEnv(LocomotionRewards):
         reset_base_lin_vel_body = transform_by_quat(reset_base_lin_vel, reset_quat_inv)
         reset_base_ang_vel_body = transform_by_quat(reset_base_ang_vel, reset_quat_inv)
 
-        self.robot.set_qpos(reset_qpos, envs_idx=env_idx, zero_velocity=True, skip_forward=True)
+        self.robot.set_qpos(reset_qpos, envs_idx=env_idx, zero_velocity=True, skip_forward=self.tof is None)
         # Genesis 浮动基座 qvel 的前 3 维是世界系线速度，后 3 维是机体系角速度。
         self.robot.set_dofs_velocity(
             torch.concatenate((reset_base_lin_vel, reset_base_ang_vel_body), dim=-1),
@@ -899,6 +916,12 @@ class LocomotionEnv(LocomotionRewards):
         self._terrain_fallen[reset_env_ids] = False
         self._update_encoder_measurements(reset_env_ids)
         self._reset_task_buffers(env_idx)
+        if self.tof is not None:
+            distances = self.tof.read(after_reset=True)
+            self.tof_distances[reset_env_ids] = distances[reset_env_ids]
+            self.tof_clock.reset(reset_env_ids)
+            if self.tof_history is not None:
+                self.tof_history.reset(self.tof_distances, reset_env_ids)
 
         # 更新extras和episoded的reward
         if env_idx is not None and env_idx.any():
@@ -1086,7 +1109,8 @@ class LocomotionEnv(LocomotionRewards):
         base_contact_force = torch.linalg.vector_norm(all_contact_forces[:, self.base_link_idx, :], dim=-1)
         self.base_contact.copy_((base_contact_force > self.base_contact_force_threshold).to(dtype=gs.tc_float))
         both_wheels_contact = torch.all(self.wheel_contact > 0.5, dim=1)
-        self.alive_gate.copy_((both_wheels_contact & (self.base_contact < 0.5)).to(dtype=gs.tc_float))
+        # 存活奖励只要求机身不接地；轮子离地由 wheel_airborne 单独约束。
+        self.alive_gate.copy_((self.base_contact < 0.5).to(dtype=gs.tc_float))
 
         # 双轮由“未同时接触”切换为“同时接触”视为落地。首个仿真步只用于
         # 初始化接触状态，避免机器人 reset 后本来就在地面却被误判为落地。
@@ -1144,6 +1168,7 @@ class LocomotionEnv(LocomotionRewards):
             "leg_length": self.measured_leg_length * self.obs_scales["leg_length"],  # 2
             "leg_angle": self.measured_leg_angle * self.obs_scales["leg_angle"],  # 2
             "actions": self.actions,
+            **({"tof_distance": self.tof_history.observation()} if self.tof_cfg["include_in_observation"] else {}),
             **self._get_task_observation_components(),
         }
         self.obs_buf = torch.concatenate(tuple(self.obs_components.values()), dim=-1)

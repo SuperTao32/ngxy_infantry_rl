@@ -12,6 +12,7 @@ import torch
 from rsl_rl.models import MLPModel
 
 from experiments.genesis.wheel_leg_infantry.tools.run_utils import load_run_configs, resolve_checkpoint, resolve_run_dir
+from experiments.genesis.wheel_leg_infantry.tools.tof_viewer import prepare_tof_for_viewer, tof_overlay_lines
 from .locomotion_env import MujocoLocomotionEnv
 
 
@@ -60,6 +61,8 @@ def main(argv=None):
     configs = load_run_configs(run)
     if "jump" in configs or configs["env_cfg"].get("handoff_on_landing"):
         raise ValueError("Use a locomotion checkpoint")
+    if not args.headless:
+        prepare_tof_for_viewer(configs["obs_cfg"])
     env = MujocoLocomotionEnv(configs, (args.vx, args.wz, args.height))
     obs = env.observations()
     actor = load_actor(configs, checkpoint, obs)
@@ -82,6 +85,7 @@ def main(argv=None):
             viewer.cam.distance = 2.5
             viewer.cam.elevation = -20
             viewer.cam.azimuth = 135
+            viewer.set_texts((None, mujoco.mjtGridPos.mjGRID_TOPRIGHT, "\n".join(tof_overlay_lines(env)), ""))
             print("[keys] I/K: vx ±2.0, J/L: wz ±1.0, U/O: height ±0.1, Space: stop, R: reset")
         writer = None
         steps = int(np.ceil(args.duration / env.dt))
@@ -127,6 +131,7 @@ def main(argv=None):
                     raise RuntimeError(f"Robot fell; stopped without automatic reset: {row}")
                 if viewer is not None:
                     viewer.cam.lookat[:] = env.data.xpos[env.base_id]
+                    viewer.set_texts((None, mujoco.mjtGridPos.mjGRID_TOPRIGHT, "\n".join(tof_overlay_lines(env)), ""))
                     viewer.sync()
                     time.sleep(max(0, env.dt - (time.monotonic() - start)))
     finally:

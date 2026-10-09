@@ -331,3 +331,28 @@ NGXY_PLATFORM_RIDGE_SMOKE=1 .venv/bin/python -m unittest tests.genesis.test_plat
 .venv/bin/python -m unittest tests.genesis.test_trapezoidal_wave -v
 NGXY_WAVE_SMOKE=1 .venv/bin/python -m unittest tests.genesis.test_trapezoidal_wave.TrapezoidalWaveSmokeTests -v
 ```
+
+## 单点 ToF
+
+默认在底盘前侧面左右上角安装两个向前下方 45° 的 ToF，测距沿光轴计算。
+下底面左右边缘距前侧 20 cm 处另有两个沿机身 -Z 垂直向下的 ToF，共四个。
+`obs_cfg["tof"]` 配置安装位置、俯角及量程（默认 1.2 米）。策略在原有输入末尾追加
+前左、前右、下左、下右四维归一化距离，locomotion 输入从 32 维变为 36 维，需要重新训练。
+`history_frames=1` 控制每个 ToF 的历史帧数（正整数，包含当前帧）；例如设为 `5` 时，
+actor 输入为 `32 + 4 * 5 = 52` 维。排列为 `[前左旧→新, 前右旧→新, 下左旧→新, 下右旧→新]`。
+`update_hz=50.0` 配置 ToF 更新频率（缺省也是 50 Hz），必须为正有限数且不高于环境控制频率。
+只有新测距帧到来时追加历史，期间保持上一帧；重复读取观测不会推进历史。
+reset 立即测距并用首帧填满该环境的历史，同时重置该环境的采样相位，不影响其他环境。
+旧存档缺少此字段时按单帧处理；改变帧数后需要使用匹配输入维度的权重重新训练。
+历史名义时间跨度为 `(history_frames - 1) / update_hz`；50 Hz、5 帧对应 80 ms。
+当前 Genesis 控制频率为 100 Hz（每两步更新 ToF），MuJoCo 为 50 Hz（每步更新 ToF）。
+采样时刻对齐控制步；非整数步周期在下一控制步发布，保留采样相位余量以避免累计漂移。
+Genesis Raycaster 内部缓存仍随物理仿真刷新，`update_hz` 控制对外测距及策略历史的更新频率。
+`config_common.py` 的 `get_obs_cfg()` 中可分别设置 `forward_reference_distance_m=1.0`、
+`downward_reference_distance_m=0.5`；同组左右共用参考距离，观测为 `clamp(距离 / 参考距离, 0, 1)`，测距量程由 `max_range_m=1.2` 独立配置。
+训练 jump 的 warmup 权重时，在 `config_common.py` 中设置
+`"tof": default_tof_cfg(include_in_observation=False)`，actor/critic 都不加入 ToF，actor 恢复 32 维。
+此时传感器仍测距；若同时不需要测距开销，可将 `tof.enabled` 设为 `False`。
+Genesis 与 MuJoCo 使用相同配置；详见 [ToF 配置与观测契约](../../core/TOF.md)。
+eval 窗口右上角实时显示 `Front L/R`、`Down L/R` 的米制距离、量程和观测开关；
+`[no hit/range]` 表示未命中或超出有效量程。旧权重未启用测距时，GUI 会自动开启仅供显示的测距，保持策略输入维度。

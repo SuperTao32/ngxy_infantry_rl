@@ -8,6 +8,7 @@ from copy import deepcopy
 
 from ...terrains import default_terrain_cfg
 from ...core.randomization import default_randomization_cfg
+from ...core.tof import default_tof_cfg
 
 
 def get_env_cfg() -> dict:
@@ -85,6 +86,16 @@ def get_obs_cfg() -> dict:
             "link_name": "base_link",
             "pos_offset": [0.0, 0.0, 0.0],
         },
+        # True: (32 + 4 * history_frames)D actor；False: 32D actor，供 jump warmup。
+        "tof": default_tof_cfg(
+            include_in_observation=True,
+            history_frames=3,
+            update_hz=50.0,  # ToF 更新频率；历史仅在新测距帧到来时推进。
+            max_range_m=1.2,  # 测距量程，单位 m；独立于观测缩放参考距离。
+            # 观测 = clamp(距离 / 参考距离, 0, 1)，单位 m。
+            forward_reference_distance_m=1.0,
+            downward_reference_distance_m=0.25,
+        ),
         "obs_scales": {
             "lin_vel": 1.0 / 3.5,
             "lin_acc": 1.0 / 9.81,
@@ -94,7 +105,7 @@ def get_obs_cfg() -> dict:
             "wheel_vel": 1.0 / 50.0,
             "base_height": 1.0 / 0.35,
             "leg_length": 1.0 / 0.35,
-            "leg_angle": 1.0,
+            "leg_angle": 1.0, 
         },
     }
 

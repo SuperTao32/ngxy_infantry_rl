@@ -185,6 +185,12 @@
         </body>
       </body>
       <site name="base_link_site" pos="0 0 0" quat="1 0 0 0" />
+      <!-- Front upper corners, 2 mm outside the collision box; +Z beams point forward/down 45 deg. -->
+      <site name="tof_left_site" pos="0.22646730 0.15698653 0.05818593" quat="0.3826834324 0 0.9238795325 0" size="0.008" rgba="0.2 0.9 0.3 1" />
+      <site name="tof_right_site" pos="0.23490785 -0.14289151 0.05680100" quat="0.3826834324 0 0.9238795325 0" size="0.008" rgba="0.2 0.9 0.3 1" />
+      <!-- Bottom left/right edges, 20 cm behind the front face, 2 mm outside; beams along base -Z. -->
+      <site name="tof_down_left_site" pos="0.02721910 0.15232356 -0.14647577" quat="0 0 1 0" size="0.008" rgba="0.2 0.9 0.3 1" />
+      <site name="tof_down_right_site" pos="0.03565965 -0.14755448 -0.14786070" quat="0 0 1 0" size="0.008" rgba="0.2 0.9 0.3 1" />
     </body>
   </worldbody>
 

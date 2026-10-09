@@ -1,4 +1,4 @@
-"""Locomotion 与 jump 的 actor 观测布局契约。"""
+"""无 ToF 的 locomotion teacher 与 jump 的 actor 观测布局契约。"""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ LOCOMOTION_POLICY_LAYOUT: tuple[tuple[str, int], ...] = (
     ("actions", 6),
 )
 
-# 前 32 维的顺序和缩放与 locomotion 一致，checkpoint 第一层可按前缀复制。
+# 前 32 维的顺序和缩放与关闭 ToF 观测的 locomotion 一致，可按前缀复制权重。
 # warmup teacher 的 commands[:, 2] 为目标 base 离地高度。
 # jump 时第三项为目标 base 到左右轮底的平均世界竖直距离，由模式和计时器生成。
 JUMP_POLICY_LAYOUT = LOCOMOTION_POLICY_LAYOUT + (

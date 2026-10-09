@@ -8,8 +8,10 @@
 | step_20cm | `[0, 1, 0]` | 0.20 m |
 | step_40cm | `[0, 0, 1]` | 0.40 m |
 
-actor 为 47D，最后 3D 是任务 mode。locomotion teacher 仍读取前 32D。
+actor 为 47D，最后 3D 是任务 mode。locomotion teacher 读取前 32D。
 critic 为 66D，额外可见边缘距离和落稳进度；actor 不读取位置、台阶距离或 ToF。
+训练 warmup teacher 时，将 locomotion 的 `tof.include_in_observation` 设为 `False`；
+已有兼容的 32D teacher 也可继续使用。包含 ToF 观测的 teacher 会在加载前被拒绝。
 速度估计已从观测中删除；旧输入维度的 checkpoint 不能直接加载，需重新训练 locomotion teacher 和 jump。
 动作空间保持原来的 4 个腿关节 + 2 个轮子。
 
@@ -17,7 +19,10 @@ critic 为 66D，额外可见边缘距离和落稳进度；actor 不读取位置
 预热后直接进入起跳，不设 crouch 阶段及相关奖励。critic 的物理阶段编码为三维 one-hot；
 实际离地和触地事件决定物理阶段，actor 仍使用六维连续时间编码。
 
-## env 指定起跳距离，不需要 ToF
+## env 指定起跳距离
+
+jump 默认关闭 ToF，起跳位置使用下面的速度—距离表。
+locomotion 的观测开关详见 [ToF 配置](../../core/TOF.md)。
 
 每轮先在远离障碍的平地上用冻结的 locomotion teacher 稳速，随后：
 

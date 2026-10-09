@@ -8,6 +8,8 @@ from typing import Mapping
 
 import torch
 
+from ...core.tof import resolve_tof_cfg
+
 
 @dataclass(frozen=True)
 class WarmStartReport:
@@ -22,6 +24,11 @@ def validate_locomotion_source(source_configs: Mapping) -> None:
     """拒绝无法证明与当前 jump 基础接口一致的旧 locomotion 配置。"""
     env_cfg = source_configs["env_cfg"]
     obs_cfg = source_configs["obs_cfg"]
+    if resolve_tof_cfg(obs_cfg.get("tof"))["include_in_observation"]:
+        raise ValueError(
+            "jump requires a 32-dimensional locomotion teacher without ToF observations; "
+            "train locomotion with tof.include_in_observation=False"
+        )
     command_cfg = source_configs["command_cfg"]
     required_env_keys = {"num_actions", "joint_names", "wheel_names", "joint_pos_scale", "wheel_vel_scale"}
     missing = required_env_keys.difference(env_cfg)

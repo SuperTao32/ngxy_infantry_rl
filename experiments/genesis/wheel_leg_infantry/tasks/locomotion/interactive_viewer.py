@@ -4,6 +4,8 @@ from genesis.ext.pyrender.constants import FONT_SIZE, TEXT_PADDING, TextAlign
 from genesis.vis.keybindings import Key, KeyAction, Keybind
 from genesis.vis.viewer_plugins import ViewerPlugin
 
+from ...tools.tof_viewer import tof_overlay_lines
+
 
 class DiagnosticsOverlay(ViewerPlugin):
     """Draw persistent evaluation diagnostics as separate lines."""
@@ -119,6 +121,7 @@ class KeyboardCommand:
             f"roll={env.base_euler[0, 0].item():+.1f} deg  pitch={env.base_euler[0, 1].item():+.1f} deg",
             f"legs     left={env.leg_length[0, 0].item():.3f} m  right={env.leg_length[0, 1].item():.3f} m",
             f"obs      n={obs.numel()}  min={obs.min().item():+.2f}  max={obs.max().item():+.2f}  " f"mean={obs.mean().item():+.2f}",
+            *tof_overlay_lines(env),
             f"joint Kd       {format_tensor(pd['joint_kd'], precision=2)}",
             f"joint -Kd*qdot {format_tensor(pd['joint_kd_damping'], precision=2)}",
         )

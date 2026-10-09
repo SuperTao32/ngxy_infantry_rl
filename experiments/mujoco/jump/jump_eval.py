@@ -85,7 +85,9 @@ def main(argv=None):
     actors = {"locomotion": load_actor(source_configs, source_checkpoint, env.observations()),
               "jump": load_actor(configs, checkpoint, env.jump_observations())}
     print(f"[sim2sim] jump={checkpoint}\n[sim2sim] locomotion={source_checkpoint}")
-    print(f"[sim2sim] obs=32/44; jump horizon={env.cycle_s:.2f}s; handoff={args.handoff}; flat ground")
+    locomotion_dim = env.sim.observations()["policy"].shape[-1]
+    jump_dim = env.jump_observations()["policy"].shape[-1]
+    print(f"[sim2sim] obs={locomotion_dim}/{jump_dim}; jump horizon={env.cycle_s:.2f}s; handoff={args.handoff}; flat ground")
     print("[keys] Space: jump; I/K or Up/Down: vx ±0.1; Backspace: stop; R: reset")
     keys = SimpleQueue()
     scheduled = iter(sorted(args.jump_at))
@@ -132,7 +134,7 @@ def main(argv=None):
                 if output:
                     row.update(zip(("command_vx", "command_wz", "command_height"), command))
                     values = obs["policy"][0].tolist()
-                    row.update({f"obs_{i}": values[i] if i < len(values) else "" for i in range(44)})
+                    row.update({f"obs_{i}": values[i] if i < len(values) else "" for i in range(jump_dim)})
                     row.update({f"action_{i}": x for i, x in enumerate(env.sim.actions.tolist())})
                     if writer is None:
                         writer = csv.DictWriter(output, fieldnames=list(row))
