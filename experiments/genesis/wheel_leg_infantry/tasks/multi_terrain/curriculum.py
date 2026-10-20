@@ -7,6 +7,7 @@ from ...core.curriculum import CurriculumManager, _deep_update
 from ...terrains.config import resolve_terrain_cfg
 from ...terrains.registry import TERRAIN_REGISTRY, level_catalog, level_parameters
 from .config import TASK_NAMES
+from ..locomotion.config_common import validate_high_base_height_velocity_limits
 
 
 def positive(value, name):
@@ -84,6 +85,7 @@ def resolve_tasks(config, *, require_locomotion=True):
 
 
 def validate_stage(name, stage):
+    validate_high_base_height_velocity_limits(stage["commands"])
     if name == "locomotion" and stage["terrain"]["preset"] != "plane":
         raise ValueError("locomotion must use the plane terrain")
     for key in ("lin_vel_range", "ang_vel_range", "base_height_range"):

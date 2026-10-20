@@ -28,6 +28,7 @@ from ...terrains.manager import TerrainManager
 from ...terrains.registry import TERRAIN_REGISTRY
 from ...terrains.curriculum import TerrainCourse, merge_terrain_config, terrain_course_configs
 from .rewards import LocomotionRewards
+from .config_common import validate_high_base_height_velocity_limits
 from .tracking_gate import DEFAULT_TRACKING_GATE_CFG, merge_tracking_gate_config, smooth_gate
 from .velocity_estimator import (
     complementary_forward_velocity_update,
@@ -1028,17 +1029,33 @@ class LocomotionEnv(LocomotionRewards):
     def _sample_commands(self, command_cfg, limits):
         """按给定配置采样，不写回，供混合任务各自使用命令分布。"""
         commands = sample_uniform(*limits, (self.num_envs,))
+        lower, upper = limits
+        angular_lower = lower[1].expand(self.num_envs)
+        angular_upper = upper[1].expand(self.num_envs)
+        angular_resample = torch.zeros(self.num_envs, dtype=torch.bool, device=commands.device)
+        height_velocity_limits_cfg = command_cfg.get("high_base_height_velocity_limits")
+        if height_velocity_limits_cfg is not None:
+            high_height = commands[:, 2] > height_velocity_limits_cfg["base_height_threshold"]
+            limit = height_velocity_limits_cfg["max_abs_lin_vel"]
+            # 先收紧采样区间；固定速度或不相交区间退到最近的限速边界。
+            high_height_lin_vel = sample_uniform(lower[0].clamp(-limit, limit), upper[0].clamp(-limit, limit), (self.num_envs,))
+            commands[:, 0] = torch.where(high_height, high_height_lin_vel, commands[:, 0])
+            angular_resample |= high_height
         high_speed_cfg = command_cfg.get("high_speed_ang_vel")
         if high_speed_cfg is not None:
-            # 按 |vx| 分档，在收紧后的范围内均匀采样，避免截断造成边界堆积。
-            lower, upper = limits
+            # 按最终 |vx| 分档，两项限制同时触发时取更严格的角速度区间。
+            high_speed = commands[:, 0].abs() > high_speed_cfg["lin_vel_threshold"]
             limit = high_speed_cfg["max_abs_ang_vel"]
-            high_speed_ang_vel = sample_uniform(lower[1].clamp(min=-limit), upper[1].clamp(max=limit), (self.num_envs,))
-            commands[:, 1] = torch.where(
-                commands[:, 0].abs() > high_speed_cfg["lin_vel_threshold"],
-                high_speed_ang_vel,
-                commands[:, 1],
-            )
+            angular_lower = torch.where(high_speed, angular_lower.clamp(min=-limit), angular_lower)
+            angular_upper = torch.where(high_speed, angular_upper.clamp(max=limit), angular_upper)
+            angular_resample |= high_speed
+        if height_velocity_limits_cfg is not None:
+            limit = height_velocity_limits_cfg["max_abs_ang_vel"]
+            angular_lower = torch.where(high_height, angular_lower.clamp(-limit, limit), angular_lower)
+            angular_upper = torch.where(high_height, angular_upper.clamp(-limit, limit), angular_upper)
+        if height_velocity_limits_cfg is not None or high_speed_cfg is not None:
+            angular = sample_uniform(angular_lower, angular_upper, ())
+            commands[:, 1] = torch.where(angular_resample, angular, commands[:, 1])
         standing_probability = command_cfg.get("standing_probability", 0.0)
         if standing_probability > 0.0:
             # 静止样本只清零 vx、wz，仍跟踪当前课程采样的机身高度。
@@ -1225,6 +1242,7 @@ class LocomotionEnv(LocomotionRewards):
     def _build_command_limits(self, command_cfg=None):
         """构造 [vx, wz, base_height] 的采样上下限。"""
         command_cfg = self.command_cfg if command_cfg is None else command_cfg
+        validate_high_base_height_velocity_limits(command_cfg)
         standing_probability = float(command_cfg.get("standing_probability", 0.0))
         if not math.isfinite(standing_probability) or not 0.0 <= standing_probability <= 1.0:
             raise ValueError("standing_probability must be finite and in [0, 1]")

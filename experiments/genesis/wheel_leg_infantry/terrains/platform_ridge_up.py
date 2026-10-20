@@ -7,7 +7,7 @@ PRESET = "platform_ridge_up"
 PARAMETER_KEY = "platform_ridge_up"
 PARAMETERS = dict(first_height=0.20, first_length=0.80, ridge_height=0.35,
                   ridge_width=0.15, second_height=0.30, second_length=1.2,
-                  approach_length=1.0, base_thickness=0.10)
+                  approach_length=1.3, base_thickness=0.10)
 LEVELS = {
     0: dict(first_height=0.10, ridge_height=0.15, second_height=0.12),
     1: dict(first_height=0.125, ridge_height=0.20, second_height=0.16),

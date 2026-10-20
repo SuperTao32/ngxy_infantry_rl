@@ -112,6 +112,17 @@ def get_obs_cfg() -> dict:
     }
 
 
+def validate_high_base_height_velocity_limits(command_cfg: dict) -> None:
+    """校验按目标机身高度触发的速度上限；缺省或 None 表示关闭。"""
+    cfg = command_cfg.get("high_base_height_velocity_limits")
+    if cfg is None:
+        return
+    for key in ("base_height_threshold", "max_abs_lin_vel", "max_abs_ang_vel"):
+        value = float(cfg[key])
+        if not math.isfinite(value) or value < 0.0:
+            raise ValueError(f"high_base_height_velocity_limits.{key} must be finite and nonnegative")
+
+
 def get_final_command_cfg(command_cfg: dict, curriculum_cfg: dict) -> dict:
     """返回 eval 使用的命令配置（含静止采样率），累计应用到课程最终阶段。"""
     resolved = deepcopy(command_cfg)

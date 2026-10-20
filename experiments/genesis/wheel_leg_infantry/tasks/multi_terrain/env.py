@@ -187,7 +187,7 @@ class MultiTerrainEnv(MultiTerrainRewards, LocomotionEnv):
             mask = selected & (self.terrain_tile_index == i)
             if not mask.any():
                 continue
-            # 采样支持平地静止概率和高速转向限制，写回仅限本任务、本回合。
+            # 采样支持静止概率、高速转向及高机身限速，写回仅限本任务、本回合。
             commands = self._sample_commands(cfg, limits)
             self.commands[mask] = commands[mask]
 

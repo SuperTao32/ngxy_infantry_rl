@@ -121,6 +121,7 @@ def get_cfgs():
             ang_vel_range=[-5.0, 5.0],
             base_height_range=[0.2, 0.36],
             high_speed_ang_vel=dict(lin_vel_threshold=1.5, max_abs_ang_vel=2.0),
+            high_base_height_velocity_limits=dict(base_height_threshold=0.34, max_abs_lin_vel=1.5, max_abs_ang_vel=2.0),
             standing_probability=0.3,
         ),
         rewards=dict(
@@ -261,12 +262,11 @@ def get_cfgs():
             demote_threshold=0.2,
             # 对应 stairs_up.LEVELS 的等级；机身目标离地高度（m），两端相同表示固定高度。
             overrides={ 
-                0: dict(commands=dict(base_height_range=[0.26, 0.30])),
-                1: dict(commands=dict(base_height_range=[0.28, 0.32])),
-                2: dict(commands=dict(base_height_range=[0.30, 0.34])),
-                3: dict(commands=dict(base_height_range=[0.32, 0.36])),
-                4: dict(commands=dict(base_height_range=[0.34, 0.36])),
-                5: dict(commands=dict(base_height_range=[0.36, 0.36])),
+                0: dict(commands=dict(base_height_range=[0.30, 0.32])),
+                1: dict(commands=dict(base_height_range=[0.32, 0.34])),
+                2: dict(commands=dict(base_height_range=[0.34, 0.38])),
+                3: dict(commands=dict(base_height_range=[0.38, 0.38])),
+                4: dict(commands=dict(base_height_range=[0.38, 0.38])),
             },
         ),
     )

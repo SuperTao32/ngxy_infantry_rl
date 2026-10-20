@@ -27,6 +27,17 @@ Actor 继续使用传感器测量值。两者保持相同的通道顺序、缩�
 
 ## 训练和续训
 
+命令配置支持按目标机身高度限制速度（多地形任务可在各自 `commands` 中配置）：
+
+```python
+"high_base_height_velocity_limits": {"base_height_threshold": 0.34, "max_abs_lin_vel": 1.5, "max_abs_ang_vel": 2.0},
+```
+
+采样的目标 `base_height > 0.34 m` 时，限制 `|vx| ≤ 1.5 m/s`、`|wz| ≤ 2.0 rad/s`；
+等于阈值时使用原范围。速度在收紧后的区间内均匀采样，原区间与限速区间不相交时使用最近的限速边界。
+与 `high_speed_ang_vel` 同时触发时取更严格的角速度上限，高速判定使用收紧后的 `vx`。
+静止样本仍只清零速度、保留高度。省略此配置或设为 `None` 可关闭。
+
 ```bash
 .venv/bin/python -m experiments.genesis.wheel_leg_infantry.tasks.locomotion.train \
   -e locomotion_v4 -B 64 --max_iterations 10001

@@ -70,9 +70,11 @@ def _command_cfg() -> dict:
         "num_commands": 3,
         "lin_vel_range": [3.0, 3.0],
         "ang_vel_range": [-6.0, 6.0],
-        "base_height_range": [0.21, 0.36],
-        # |vx| <= 1 m/s 使用课程角速度范围；更快时收紧到 ±1 rad/s。
+        "base_height_range": [0.20, 0.38],
+        # |vx| > 1.5 m/s 时，偏航角速度收紧到 ±2 rad/s。
         "high_speed_ang_vel": {"lin_vel_threshold": 1.5, "max_abs_ang_vel": 2.0},
+        # 目标机身高度超过阈值时，同时收紧线速度与偏航角速度。
+        "high_base_height_velocity_limits": {"base_height_threshold": 0.32, "max_abs_lin_vel": 2.0, "max_abs_ang_vel": 3.0},
         # 静止站立采样；课程可通过 command_ranges.standing_probability 覆盖。
         "standing_probability": 0.10,
     }
@@ -203,12 +205,12 @@ def _curriculum_cfg() -> dict:
                         "standing_probability": 0.25,
                         "lin_vel_range": [-3.0, 3.0],
                         "ang_vel_range": [-5.0, 5.0],
-                        "base_height_range": [0.20, 0.36],
+                        "base_height_range": [0.20, 0.38],
                     },
                     "tracking_gate": {
-                        "height_full_error": 0.02,
+                        "height_full_error": 0.01,
                         "height_zero_error": 0.04,
-                        "attitude_full_angle_deg": 0.6,
+                        "attitude_full_angle_deg": 0.5,
                         "attitude_zero_angle_deg": 2.0,
                         "floor": 0.05,
                     },
@@ -237,7 +239,7 @@ def _curriculum_cfg() -> dict:
                         "standing_probability": 0.25,
                         "lin_vel_range": [-3.5, 3.5],
                         "ang_vel_range": [-6.0, 6.0],
-                        "base_height_range": [0.20, 0.36],
+                        "base_height_range": [0.20, 0.38],
                     },
                     "reward_scales": {},
                 },
