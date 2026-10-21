@@ -537,6 +537,14 @@ TensorBoard 的 `task/<name>/...` 分别记录环境占比、当前难度（`dif
 .venv/bin/python -m experiments.genesis.wheel_leg_infantry.tasks.multi_terrain.eval \
   -e multi_terrain_v1 --task slope_down --headless --steps 3000
 
+# 全部回合采用间断通行：障碍前停车、通行、障碍后停车，再重新起步。
+.venv/bin/python -m experiments.genesis.wheel_leg_infantry.tasks.multi_terrain.eval \
+  -e multi_terrain_v1 --task stairs_up --intermittent
+
+# 全部回合采用普通通行；不传开关则沿用存档中该难度的间断回合比例。
+.venv/bin/python -m experiments.genesis.wheel_leg_infantry.tasks.multi_terrain.eval \
+  -e multi_terrain_v1 --task stairs_up --no-intermittent
+
 # 无需 GPU 的几何、配置、课程、奖励、命令及重置测试。
 .venv/bin/python -m unittest tests.genesis.test_multi_terrain -v
 
@@ -544,5 +552,10 @@ TensorBoard 的 `task/<name>/...` 分别记录环境占比、当前难度（`dif
 NGXY_MULTI_TERRAIN_SMOKE=1 .venv/bin/python -m unittest \
   tests.genesis.test_multi_terrain.SimulationTests -v
 ```
+
+显式开关优先于 `curriculum.overrides` 中的间断比例。旧存档没有 `intermittent` 配置时，
+`--intermittent` 使用当前对应地形的停车参数；已有停车参数保持存档值。
+`locomotion` 不支持 `--intermittent`。评估输出总成功数、普通/间断各自成功数，
+间断回合额外输出两次停稳是否完成、停车失败和最大停稳漂移距离。
 
 课程和奖励是初始训练配置，各地形最终等级的成功率需要训练后验证。
