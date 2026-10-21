@@ -5,6 +5,7 @@ import torch
 from ...terrains.manager import TerrainManager
 from ...terrains.scene import TerrainPatches
 from .curriculum import TaskCurriculum, positive
+from .intermittent import resolve_intermittent
 
 
 class TaskTrack:
@@ -19,7 +20,7 @@ class TaskTrack:
         self.boundary_margin = self.terrain.config["boundary_margin"]
         if self.boundary_margin is None:
             raise ValueError("task terrain requires a finite boundary_margin")
-        self.obstacle_end = self.goal_x = 0.0
+        self.obstacle_start = self.obstacle_end = self.goal_x = 0.0
         if name == "locomotion":
             return
         traversal = stage["traversal"]
@@ -33,7 +34,22 @@ class TaskTrack:
         elif "distance" in traversal:
             raise ValueError(f"{name}: traversal.distance cannot replace the geometry's obstacle end")
         positive(self.obstacle_end, "obstacle_end")
+        # 平台凸台下行先遇到凸台，上行先遇到第一平台。
+        if name in {"platform_ridge_down", "platform_ridge_up"}:
+            self.obstacle_start = self.geometry.boxes[1 if self.geometry.ascending else 2][0][0]
+        else:
+            self.obstacle_start = self.geometry.start_x
         self.goal_x = self.obstacle_end + self.direction * traversal["landing_length"]
+        intermittent = resolve_intermittent(stage.get("intermittent", {}), task=name)
+        if intermittent["probability"]:
+            # 停车窗口、制动和再次起步都必须留在末沿后的可行驶区域内。
+            end_space = (intermittent["post_stop_distance_range_m"][1] + intermittent["max_braking_distance_m"]
+                         + intermittent["stop_position_tolerance_m"] + intermittent["restart_distance_m"])
+            safe_end = self.tile_size[0] / 2 - max(0.5, self.boundary_margin)
+            if name == "platform_ridge_up":
+                safe_end = min(safe_end, self.geometry.boxes[3][1][0] - self.boundary_margin)
+            if self.obstacle_end * self.direction + end_space >= safe_end:
+                raise ValueError(f"{name}: intermittent stop and restart need more space after the obstacle")
         if abs(self.goal_x) + max(0.5, self.boundary_margin) >= self.tile_size[0] / 2 or self.tile_size[1] / 2 <= 1.0:
             raise ValueError("track needs safe finish and lateral margins within tile_size")
 

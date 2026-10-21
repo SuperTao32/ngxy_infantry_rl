@@ -7,6 +7,7 @@ from ...core.curriculum import CurriculumManager, _deep_update
 from ...terrains.config import resolve_terrain_cfg
 from ...terrains.registry import TERRAIN_REGISTRY, level_catalog, level_parameters
 from .config import TASK_NAMES
+from .intermittent import resolve_intermittent
 from ..locomotion.config_common import validate_high_base_height_velocity_limits
 
 
@@ -59,7 +60,7 @@ def resolve_tasks(config, *, require_locomotion=True):
             level_parameters(preset, level, catalog)  # 包括范围中间的等级，不能静默跳过缺级。
             override = overrides.get(level, {})
             if not isinstance(override, dict) or set(override) - {
-                "commands", "rewards", "termination", "success", "resampling_time_s", "tracking_success", "landing_stability", "ascent"
+                "commands", "rewards", "termination", "success", "resampling_time_s", "tracking_success", "landing_stability", "ascent", "intermittent"
             }:
                 raise ValueError(f"{name}: difficulty overrides only support task behavior, not terrain geometry")
             _deep_update(current, override)
@@ -86,6 +87,9 @@ def resolve_tasks(config, *, require_locomotion=True):
 
 def validate_stage(name, stage):
     validate_high_base_height_velocity_limits(stage["commands"])
+    intermittent = resolve_intermittent(stage.get("intermittent", {}), task=name)
+    if intermittent["probability"] and any(stage["commands"]["ang_vel_range"]):
+        raise ValueError(f"{name}: intermittent traversal requires zero angular commands")
     if name == "locomotion" and stage["terrain"]["preset"] != "plane":
         raise ValueError("locomotion must use the plane terrain")
     for key in ("lin_vel_range", "ang_vel_range", "base_height_range"):

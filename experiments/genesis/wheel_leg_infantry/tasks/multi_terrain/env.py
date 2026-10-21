@@ -11,10 +11,11 @@ from .config import TASK_NAMES
 from .curriculum import allocate_counts, initial_task_counts, resolve_task_command_ranges, resolve_tasks
 from .rewards import MultiTerrainRewards
 from .terrain import TaskTerrain
+from .intermittent import IntermittentTraversal
 
 
 class MultiTerrainEnv(MultiTerrainRewards, LocomotionEnv):
-    EVENT_REWARDS = {"task_progress", "task_success", "death", "stairs_up_support", "stairs_up_retract",
+    EVENT_REWARDS = {"task_progress", "task_success", "death", "intermittent_stop", "stairs_up_support", "stairs_up_retract",
                      "stairs_up_takeoff", "stairs_up_landing_distance", "stairs_up_approach_lift", "stairs_up_backswing",
                      "stairs_up_forward_swing", "stairs_up_extend", "stairs_up_wheel_support"}
 
@@ -100,6 +101,7 @@ class MultiTerrainEnv(MultiTerrainRewards, LocomotionEnv):
         self.tables["half_y"] = self.base_pos.new_tensor([t.tile_size[1] / 2 - t.boundary_margin for t in self.terrain.tracks])
         # 基类每拍回调，具体重采样周期由每项任务决定。
         self.resample_step = 1
+        self.intermittent = IntermittentTraversal(self)
 
     def _value(self, name):
         return self.tables[name][self.terrain_tile_index]
@@ -177,11 +179,15 @@ class MultiTerrainEnv(MultiTerrainRewards, LocomotionEnv):
             state.tables["approach_top_height"][tiles] + state.tables["approach_clearance_m"][tiles])
         target_angle = torch.deg2rad(state.tables["backswing_angle_deg"][tiles])
         state.backswing_peak[ids] = (self.leg_angle[ids].clamp_min(0) / target_angle[:, None]).clamp_max(1)
+        self.intermittent.reset(self, env_idx)
 
     def _resample_commands(self, envs_idx):
         selected = torch.ones_like(self.traversal) if envs_idx is None else envs_idx
         selected = selected & (self.task_steps % self._value("resample_steps").long() == 0)
+        # 间断回合持有 reset 时的行驶命令，不能被周期重采样覆盖。
+        selected &= ~self.intermittent.enabled | (self.task_steps == 0)
         if not selected.any():
+            self.intermittent.apply_commands(self)
             return
         for i, (cfg, limits) in enumerate(self.stage_commands):
             mask = selected & (self.terrain_tile_index == i)
@@ -189,7 +195,13 @@ class MultiTerrainEnv(MultiTerrainRewards, LocomotionEnv):
                 continue
             # 采样支持静止概率、高速转向及高机身限速，写回仅限本任务、本回合。
             commands = self._sample_commands(cfg, limits)
+            intermittent = mask & self.intermittent.enabled
+            if intermittent.any() and cfg.get("standing_probability", 0):
+                moving = self._sample_commands({**cfg, "standing_probability": 0.0}, limits)
+                commands[intermittent] = moving[intermittent]
             self.commands[mask] = commands[mask]
+            self.intermittent.move_commands[intermittent] = commands[intermittent]
+        self.intermittent.apply_commands(self)
 
     def _update_task_state(self):
         self.task_steps += 1
@@ -217,6 +229,9 @@ class MultiTerrainEnv(MultiTerrainRewards, LocomotionEnv):
         self._update_locomotion_tracking()
         self._update_stairs_down_landing(wheels, wheel_heights)
         self._update_stairs_up_ascent(wheels)
+        self.intermittent.update(self, wheels)
+        self.stall_steps.masked_fill_(self.intermittent.reward_paused | self.intermittent.paused, 0)
+        self.success &= self.intermittent.success_mask()
 
     def _update_stairs_up_ascent(self, wheels):
         state = self.stairs_up_buffers
@@ -480,18 +495,26 @@ class MultiTerrainEnv(MultiTerrainRewards, LocomotionEnv):
 
     def _episode_timeout(self):
         # 独立计时不受 runner.init_at_random_ep_len 修改的 episode_length_buf 干扰。
-        return self.task_steps >= (self._value("episode_length_s") / self.dt).ceil().long()
+        duration = self._value("episode_length_s") + self.intermittent.timeout_extension(self)
+        return self.task_steps >= (duration / self.dt).ceil().long()
 
     def _task_termination(self):
         outside = ~self._task_in_corridor(self.base_pos[:, :2])
         stalled = self.stall_steps * self.dt >= self._value("stall_timeout_s")
-        return self.traversal & (outside | (stalled & ~self.success) | self.stairs_up_buffers.fallen_off)
+        return self.traversal & (outside | (stalled & ~self.success) | self.stairs_up_buffers.fallen_off
+                                 | self.intermittent.failed)
 
     def _task_success(self):
         return self.success
 
     def _get_reward_scale(self, name):
-        return self.reward_tables[name][self.terrain_tile_index]
+        scale = self.reward_tables[name][self.terrain_tile_index]
+        if name in {"task_progress", "task_success", "stairs_up_support", "stairs_up_retract",
+                    "stairs_up_takeoff", "stairs_up_landing_distance", "stairs_up_approach_lift",
+                    "stairs_up_backswing", "stairs_up_forward_swing", "stairs_up_extend",
+                    "stairs_up_wheel_support", "stairs_up_wheel_forward_action"}:
+            scale = scale * ~self.intermittent.reward_paused
+        return scale
 
     def _record_task_outcomes(self):
         ids = self.reset_buf.nonzero(as_tuple=False).flatten()
@@ -531,6 +554,19 @@ class MultiTerrainEnv(MultiTerrainRewards, LocomotionEnv):
                     metrics[f"task/{name}/duration_s"] = self.task_steps[mask] * self.dt
                     if name != "locomotion":
                         metrics[f"task/{name}/progress_m"] = self.farthest_x[mask] - self.episode_start_x[mask]
+                        state = self.intermittent
+                        metrics[f"task/{name}/intermittent_fraction"] = state.enabled[mask].float()
+                        intermittent = mask & state.enabled
+                        ordinary = mask & ~state.enabled
+                        if ordinary.any():
+                            metrics[f"task/{name}/ordinary_success"] = self.outcome_success[ordinary].float()
+                        if intermittent.any():
+                            prefix = f"task/{name}/intermittent_"
+                            metrics[prefix + "success"] = self.outcome_success[intermittent].float()
+                            metrics[prefix + "pre_stop_completed"] = (state.completed_stops[intermittent] >= 1).float()
+                            metrics[prefix + "post_stop_completed"] = (state.completed_stops[intermittent] >= 2).float()
+                            metrics[prefix + "stop_failure"] = state.failed[intermittent].float()
+                            metrics[prefix + "max_stop_drift_m"] = state.max_stop_drift[intermittent]
                     if name == "stairs_up":
                         state = self.stairs_up_buffers
                         metrics[f"task/{name}/support_reached"] = state.support_awarded[mask].float()

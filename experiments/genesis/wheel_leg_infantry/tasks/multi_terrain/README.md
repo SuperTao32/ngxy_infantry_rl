@@ -98,6 +98,76 @@ TensorBoard 的任务指标和 checkpoint 的课程窗口来自 rank 0，续训�
 由于环境数量为整数，比例存在最多一个环境的取整误差；任何阶段权重大于 0 的任务分不到环境时直接报错。
 训练必须保留 `locomotion.enabled=True` 且 `weight>0`。
 
+## 间断通行模式
+
+七种通关任务都可按**回合比例**混入间断通行，默认各为 30%；剩余回合保持原通关方式。
+`locomotion` 继续使用原来的静止采样。每个 task 的配置独立，例如：
+
+```python
+intermittent=_intermittent_cfg(
+    probability=0.3,                         # 0 关闭，1 全部采用；每次 reset 独立抽样
+    approach_speed_m_s=0.4,                   # 接近阶段速度上限
+    pre_stop_distance_range_m=[0.2, 0.4],     # 第一障碍沿前，触发停车的轮心距离
+    post_stop_distance_range_m=[0.35, 0.6],   # 最后障碍沿后，触发停车的轮心距离
+    hold_duration_range_s=[0.5, 1.5],         # 连续停稳时长，本回合两次停车共用
+    stop_timeout_s=4.0,                       # 每次停车的制动 + 停稳总时限
+    max_braking_distance_m=0.8,               # 收到零指令到首次停稳的最大位移
+    stop_position_tolerance_m=0.15,           # 首次停稳后相对固定位置的最大漂移
+    stop_lin_vel_m_s=0.08,                    # 世界水平速度的停稳门限
+    stop_ang_vel_rad_s=0.15,                  # 三轴角速度模长的停稳门限
+    edge_margin_m=0.02,                       # 边缘前轮子外缘的最小余量
+    restart_distance_m=0.3,                   # 第二次停车后必须重新前进的距离
+    extra_episode_time_s=6.0,                 # 为慢速接近/再次起步增加的运动时间
+),
+```
+
+`platform_ridge_up` 的末端平台仅长 1.2 m，默认沿后停车触发距离为 0.25～0.35 m、
+最大制动位移为 0.2 m、重新起步距离为 0.2 m；其他任务使用上面的通用默认值。
+配置会检查停车及重新起步是否留有足够地面空间。
+
+也可在 `curriculum.overrides[level]["intermittent"]` 中按难度覆盖比例或参数。
+比例是回合抽样概率，不是严格的环境配额或训练时间占比；间断回合通常更长。
+参数默认值位于 `intermittent.py`，`config.py` 的 `_intermittent_cfg()` 复制完整配置到每个任务快照。
+
+一个被选中的回合必须顺序完成：
+
+1. **接近**：保持本回合机身高度，前进指令取任务采样速度与 `approach_speed_m_s` 的较小值。
+2. **边缘前停留**：任一轮心进入抽样的沿前距离后，线速度和偏航速度设为零；双轮必须留在第一障碍沿前。
+3. **通过地形**：连续停稳达标后恢复本回合采样的正向速度。
+4. **通过后停车**：双轮越过最后障碍沿、满足轮子余量且接地，并到达抽样的沿后距离，再给零速度指令。
+5. **重新起步**：再次连续停稳后恢复行驶；实际前进至少 `restart_distance_m` 且满足原通关条件，才结束回合。
+
+台阶/坡面入口使用真实几何起点；平台凸台下行入口是凸台前沿，上行入口是第一平台前沿。
+组合地形在整个障碍之前和之后各停一次，不要求在每个中间边缘停车。
+沿前距离取更靠近入口的轮心，沿后距离取更靠近末沿的轮心，支持斜向接近。
+距离是**发出停车指令的位置**，实际停车还会产生制动位移。
+
+停稳需要同时满足速度门限、双轮接地、机身未触地和位置约束；任一条件不满足会清零连续停稳计时。
+边缘前越沿、停车位移越界或停车超时判为失败；两次停车不能靠等待时间或提前到终点跳过。
+制动完成后固定停留位置，后续振荡不会重新选取锚点，避免靠缓慢漂移不断移动停车位置。
+
+停车期间暂停停滞计时，屏蔽前进/通关及上台阶动作引导奖励，保留平衡、碰撞和零速跟踪约束。
+各 task 的 `rewards` 新增 `standing_drift=-3.0` 与 `intermittent_stop=3.0`；后者每次连续停稳达标只发放一次。
+普通通关回合的命令与停滞判定保持原样。间断回合的正向行驶命令在 reset 时抽样后保持，避免周期重采样覆盖停车指令。
+回合时限为原时限 + `extra_episode_time_s` + 已实际消耗的停车时间；每次停车仍受独立的 `stop_timeout_s` 限制。
+
+TensorBoard 在 `task/<任务名>/` 下分别记录 `ordinary_success`、`intermittent_success`、
+`intermittent_fraction`、`intermittent_pre_stop_completed`、`intermittent_post_stop_completed`、
+`intermittent_stop_failure` 和 `intermittent_max_stop_drift_m`。最后一项不包含首次停稳之前的制动距离。
+任务成功率课程统计两种模式的完整回合结果。
+
+状态机使用训练地形真值安排命令，不增加 actor/critic 观测维度，不要求部署端提供阶段编号。
+缺少 `intermittent` 的旧配置默认关闭。**旧 run 直接 `--resume` 会继续使用旧保存配置**；
+启用新模式需使用 `--resume --resume-config current`，或用 `--load-weights` 新建训练。
+
+回归检查（不启动训练）：
+
+```bash
+.venv/bin/python -m unittest discover -s tests/genesis -p test_intermittent.py -v
+# 另含八个环境、全部任务最低难度的 CPU 短仿真；关闭 ToF 和随机化。
+NGXY_INTERMITTENT_SMOKE=1 .venv/bin/python -m unittest discover -s tests/genesis -p test_intermittent.py -v
+```
+
 ## 独立课程、奖励与命令
 
 每个任务的主要字段：

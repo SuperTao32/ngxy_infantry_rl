@@ -1,10 +1,18 @@
 """独立配置各任务的环境占比、几何、命令、奖励和成功率课程。"""
 
+from copy import deepcopy
+
+from .intermittent import DEFAULTS as INTERMITTENT_DEFAULTS
 from ..locomotion.config_locomotion import get_cfgs as locomotion_cfgs
 from ..locomotion.config_common import get_final_command_cfg
 from ...terrains.registry import level_catalog
 
 TASK_NAMES = ("locomotion", "stairs_down", "stairs_up", "slope_up", "slope_down", "square_wave", "platform_ridge_down", "platform_ridge_up")
+
+
+def _intermittent_cfg(probability, **overrides):
+    """各地形按回合抽样；距离、时长等可在对应 task 中覆盖。"""
+    return {**deepcopy(INTERMITTENT_DEFAULTS), "probability": probability, **overrides}
 
 
 def _get_curriculum_cfg():
@@ -69,7 +77,7 @@ def _get_curriculum_cfg():
             },
             {
                 "name": "all",
-                "start_iteration": 4000,
+                "start_iteration": 3000,
                 "targets": {
                     "domain_rand": {"strength": 0.6},
                     "sensor_noise": {"strength": 0.6},
@@ -119,7 +127,7 @@ def get_cfgs():
             num_commands=3,
             lin_vel_range=[-3.2, 3.2],
             ang_vel_range=[-5.0, 5.0],
-            base_height_range=[0.2, 0.36],
+            base_height_range=[0.2, 0.38],
             high_speed_ang_vel=dict(lin_vel_threshold=1.5, max_abs_ang_vel=2.0),
             high_base_height_velocity_limits=dict(base_height_threshold=0.34, max_abs_lin_vel=1.5, max_abs_ang_vel=2.0),
             standing_probability=0.3,
@@ -181,10 +189,12 @@ def get_cfgs():
             num_commands=3,
             lin_vel_range=[0.5, 1.0],
             ang_vel_range=[0.0, 0.0],
-            base_height_range=[0.36, 0.36],
+            base_height_range=[0.38, 0.38],
             standing_probability=0.0,
         ),
         rewards=dict(
+            standing_drift=-3.0,
+            intermittent_stop=3.0,  # 每次连续停稳达标只奖励一次。
             task_progress=5.0,
             task_success=30.0,
             leg_symmetry_bonus=5.0,
@@ -207,6 +217,7 @@ def get_cfgs():
         resampling_time_s=3.0,
         terrain=dict(preset="stairs_up", tile_size=[16.0, 6.0]),
         traversal=dict(landing_length=0.8),
+        intermittent=_intermittent_cfg(probability=0.3),
         termination=dict(
             episode_length_s=4.0,
             termination_if_roll_greater_than=30.0,
@@ -261,7 +272,7 @@ def get_cfgs():
             promote_threshold=0.9,
             demote_threshold=0.2,
             # 对应 stairs_up.LEVELS 的等级；机身目标离地高度（m），两端相同表示固定高度。
-            overrides={ 
+            overrides={
                 0: dict(commands=dict(base_height_range=[0.30, 0.32])),
                 1: dict(commands=dict(base_height_range=[0.32, 0.34])),
                 2: dict(commands=dict(base_height_range=[0.34, 0.38])),
@@ -287,6 +298,8 @@ def get_cfgs():
             tracking_ang_vel=-3.0,
             gated_tracking_lin_vel=5.0,
             gated_tracking_ang_vel=7.0,
+            standing_drift=-3.0,
+            intermittent_stop=3.0,  # 每次连续停稳达标只奖励一次。
             task_progress=5.0,
             task_success=20.0,
             task_lateral=-1.0,
@@ -304,6 +317,7 @@ def get_cfgs():
         resampling_time_s=10.0,
         terrain=dict(preset="stairs", tile_size=[16.0, 6.0]),
         traversal=dict(landing_length=0.8),
+        intermittent=_intermittent_cfg(probability=0.3),
         termination=dict(
             episode_length_s=10.0,
             termination_if_roll_greater_than=10.0,
@@ -350,6 +364,8 @@ def get_cfgs():
             tracking_ang_vel=-10.0,
             gated_tracking_lin_vel=5.0,
             gated_tracking_ang_vel=7.0,
+            standing_drift=-3.0,
+            intermittent_stop=3.0,  # 每次连续停稳达标只奖励一次。
             task_progress=5.0,
             task_success=20.0,
             task_lateral=-5.0,
@@ -368,6 +384,7 @@ def get_cfgs():
         resampling_time_s=10.0,
         terrain=dict(preset="slope_up", tile_size=[16.0, 6.0]),
         traversal=dict(landing_length=2.0),
+        intermittent=_intermittent_cfg(probability=0.3),
         termination=dict(
             episode_length_s=10.0,
             termination_if_roll_greater_than=10.0,
@@ -412,6 +429,8 @@ def get_cfgs():
             tracking_ang_vel=-10.0,
             gated_tracking_lin_vel=5.0,
             gated_tracking_ang_vel=7.0,
+            standing_drift=-3.0,
+            intermittent_stop=3.0,  # 每次连续停稳达标只奖励一次。
             task_progress=5.0,
             task_success=20.0,
             task_lateral=-2.0,
@@ -429,6 +448,7 @@ def get_cfgs():
         resampling_time_s=10.0,
         terrain=dict(preset="slope_down", tile_size=[16.0, 6.0]),
         traversal=dict(landing_length=0.8),
+        intermittent=_intermittent_cfg(probability=0.3),
         termination=dict(
             episode_length_s=10.0,
             termination_if_roll_greater_than=10.0,
@@ -473,6 +493,8 @@ def get_cfgs():
             tracking_ang_vel=-3.0,
             gated_tracking_lin_vel=5.0,
             gated_tracking_ang_vel=7.0,
+            standing_drift=-3.0,
+            intermittent_stop=3.0,  # 每次连续停稳达标只奖励一次。
             task_progress=5.0,
             task_success=20.0,
             task_lateral=-1.0,
@@ -488,6 +510,7 @@ def get_cfgs():
         resampling_time_s=10.0,
         terrain=dict(preset="square_wave", tile_size=[16.0, 6.0]),
         traversal=dict(landing_length=0.8),
+        intermittent=_intermittent_cfg(probability=0.3),
         termination=dict(
             episode_length_s=10.0,
             termination_if_roll_greater_than=10.0,
@@ -533,6 +556,8 @@ def get_cfgs():
             tracking_ang_vel=-3.0,
             gated_tracking_lin_vel=5.0,
             gated_tracking_ang_vel=7.0,
+            standing_drift=-3.0,
+            intermittent_stop=3.0,  # 每次连续停稳达标只奖励一次。
             task_progress=5.0,
             task_success=20.0,
             task_lateral=-2.0,
@@ -547,6 +572,7 @@ def get_cfgs():
         resampling_time_s=10.0,
         terrain=dict(preset="platform_ridge_down", tile_size=[16.0, 6.0]),
         traversal=dict(landing_length=0.8),
+        intermittent=_intermittent_cfg(probability=0.3),
         termination=dict(
             episode_length_s=15.0,
             termination_if_roll_greater_than=45.0,
@@ -582,7 +608,7 @@ def get_cfgs():
             num_commands=3,
             lin_vel_range=[0.5, 1.0],
             ang_vel_range=[0.0, 0.0],
-            base_height_range=[0.36, 0.36],
+            base_height_range=[0.38, 0.38],
             standing_probability=0.0,
         ),
         rewards=dict(
@@ -590,6 +616,8 @@ def get_cfgs():
             tracking_ang_vel=-3.0,
             gated_tracking_lin_vel=5.0,
             gated_tracking_ang_vel=2.0,
+            standing_drift=-3.0,
+            intermittent_stop=3.0,  # 每次连续停稳达标只奖励一次。
             task_progress=5.0,
             task_success=20.0,
             base_balance=-30.0,
@@ -603,6 +631,13 @@ def get_cfgs():
         resampling_time_s=10.0,
         terrain=dict(preset="platform_ridge_up", tile_size=[16.0, 6.0]),
         traversal=dict(landing_length=0.8),
+        # 末端平台仅长 1.2 m，停车和重新起步使用更紧凑的距离。
+        intermittent=_intermittent_cfg(
+            probability=0.3,
+            post_stop_distance_range_m=[0.25, 0.35],
+            max_braking_distance_m=0.2,
+            restart_distance_m=0.2,
+        ),
         termination=dict(
             episode_length_s=15.0,
             termination_if_roll_greater_than=45.0,
@@ -628,11 +663,11 @@ def get_cfgs():
             promote_threshold=0.9,
             demote_threshold=0.2,
             overrides={
-                0: dict(commands=dict(base_height_range=[0.26, 0.30])),
-                1: dict(commands=dict(base_height_range=[0.28, 0.32])),
-                2: dict(commands=dict(base_height_range=[0.30, 0.34])),
-                3: dict(commands=dict(base_height_range=[0.33, 0.36])),
-                4: dict(commands=dict(base_height_range=[0.36, 0.36])),
+                0: dict(commands=dict(base_height_range=[0.30, 0.32])),
+                1: dict(commands=dict(base_height_range=[0.32, 0.34])),
+                2: dict(commands=dict(base_height_range=[0.34, 0.38])),
+                3: dict(commands=dict(base_height_range=[0.36, 0.38])),
+                4: dict(commands=dict(base_height_range=[0.37, 0.38])),
             },
         ),
     )
@@ -642,7 +677,7 @@ def get_cfgs():
     env.update(
         episode_length_s=25.0,
         resampling_time_s=0.01,
-        base_init_pos_range=[[-0.6, 0.5], [0.0, 0.0], [0.22, 0.22]],
+        base_init_pos_range=[[-0.3, 0.3], [0.0, 0.0], [0.22, 0.22]],
         # 地形保持固定方向；出生 yaw 决定本回合斜向跨越的参考线。
         base_init_rpy_offset_range_deg=[[0.0, 0.0], [0.0, 0.0], [-10.0, 10.0]],
     )

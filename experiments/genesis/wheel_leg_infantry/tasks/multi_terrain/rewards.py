@@ -4,6 +4,9 @@ import torch
 
 
 class MultiTerrainRewards:
+    def _reward_intermittent_stop(self):
+        return self.intermittent.stop_event & ~self.terminated_buf
+
     # 各通关任务共用。
     def _reward_task_progress(self):
         return self.progress * ~self.terminated_buf
