@@ -4,10 +4,17 @@ import math
 
 import torch
 
+from .braking import BrakingEnvelope, STOP_CONFIRMATION_S
+
 
 DEFAULTS = dict(
     probability=0.0,
-    approach_speed_m_s=1.0,
+    predictive_braking=False,  # 旧快照缺字段时保持固定触发距离。
+    crossing_speed_m_s=2.0,
+    braking_distance_scale=1.25,
+    braking_distance_margin_m=0.05,
+    braking_time_margin_s=0.5,
+    approach_speed_m_s=0.5,
     pre_stop_distance_range_m=[0.3, 0.4],
     post_stop_distance_range_m=[0.1, 0.2],
     hold_duration_range_s=[0.5, 1.5],
@@ -27,6 +34,10 @@ def resolve_intermittent(options, *, task):
         raise ValueError(f"{task}: invalid intermittent options")
     cfg = {**DEFAULTS, **options}
     for key, value in cfg.items():
+        if key == "predictive_braking":
+            if not isinstance(value, bool):
+                raise ValueError(f"{task}: intermittent.predictive_braking must be boolean")
+            continue
         values = value if key.endswith("_range_m") or key.endswith("_range_s") else [value]
         if (not isinstance(values, (list, tuple)) or len(values) != (2 if "_range_" in key else 1)
                 or any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) for v in values)):
@@ -36,6 +47,8 @@ def resolve_intermittent(options, *, task):
                 raise ValueError(f"{task}: intermittent.probability must be in [0, 1]")
         elif min(values) <= 0 or values[0] > values[-1]:
             raise ValueError(f"{task}: intermittent.{key} must be positive and ordered")
+    if cfg["braking_distance_scale"] < 1:
+        raise ValueError(f"{task}: intermittent.braking_distance_scale must be at least 1")
     if cfg["hold_duration_range_s"][1] >= cfg["stop_timeout_s"]:
         raise ValueError(f"{task}: intermittent.stop_timeout_s must exceed maximum hold duration")
     if task == "locomotion" and cfg["probability"]:
@@ -52,7 +65,15 @@ class IntermittentTraversal:
         for cfg in options:
             if cfg["probability"] and cfg["pre_stop_distance_range_m"][0] <= env.wheel_radius + cfg["edge_margin_m"]:
                 raise ValueError("intermittent pre-stop distance must leave room for wheel radius and edge margin")
+        for cfg, stage in zip(options, env.terrain.stages):
+            if cfg["probability"] and cfg["predictive_braking"]:
+                clearance = stage.get("success", {}).get("wheel_clearance_m")
+                if clearance is not None and cfg["post_stop_distance_range_m"][1] < (
+                        env.wheel_radius + clearance + cfg["braking_distance_margin_m"]):
+                    raise ValueError("intermittent post-stop range must include wheel clearance and braking margin")
         self.tables = {key: env.base_pos.new_tensor([cfg[key] for cfg in options]) for key in DEFAULTS}
+        self.braking = BrakingEnvelope(env.base_pos) if any(cfg["predictive_braking"] for cfg in options) else None
+        self.stop_timeout = torch.zeros_like(env.base_height)
         self.edge = env.base_pos.new_tensor([t.obstacle_start for t in env.terrain.tracks])
         self.enabled = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
         self.phase = torch.zeros_like(env.episode_length_buf)
@@ -89,6 +110,7 @@ class IntermittentTraversal:
                      "failed", "reward_paused", "stop_event", "hold_started", "max_stop_drift", "restart_origin",
                      "stop_anchor", "move_commands", "hold_steps", "pre_distance", "post_distance"):
             getattr(self, name)[ids] = 0
+        self.stop_timeout[ids] = self.value(env, "stop_timeout_s")[ids]
         selected = self.enabled.clone()
         if env_idx is not None:
             selected &= env_idx
@@ -105,9 +127,12 @@ class IntermittentTraversal:
     def apply_commands(self, env):
         moving = self.enabled & ~self.paused
         env.commands[moving] = self.move_commands[moving]
+        predictive = moving & self.value(env, "predictive_braking").bool()
+        env.commands[predictive, 0] = torch.minimum(
+            env.commands[predictive, 0], self.value(env, "crossing_speed_m_s")[predictive])
         approach = self.enabled & (self.phase == self.APPROACH)
         env.commands[approach, 0] = torch.minimum(
-            self.move_commands[approach, 0], self.value(env, "approach_speed_m_s")[approach])
+            env.commands[approach, 0], self.value(env, "approach_speed_m_s")[approach])
         # 静止只覆盖线速度和偏航速度，机身高度保留本回合的采样值。
         env.commands[self.paused, :2] = 0
 
@@ -147,7 +172,7 @@ class IntermittentTraversal:
         self.total_pause_steps += paused.long()
         self.failed |= paused & (~position_ok | ~region_ok)
         completed = paused & (self.quiet_steps >= self.hold_steps) & ~self.failed
-        self.failed |= paused & ~completed & (self.pause_steps * env.dt >= self.value(env, "stop_timeout_s"))
+        self.failed |= paused & ~completed & (self.pause_steps * env.dt >= self.stop_timeout)
         self.stop_event.copy_(completed)
         self.completed_stops += completed.long()
         self.phase[completed & (phase == self.PRE_STOP)] = self.CROSS
@@ -159,14 +184,35 @@ class IntermittentTraversal:
                      & (along - self.restart_origin >= self.value(env, "restart_distance_m")))
         self.phase[restarted] = self.COMPLETE
 
+        pre_trigger = self.pre_distance
+        post_trigger = self.post_distance
+        predicted_timeout = self.value(env, "stop_timeout_s")
+        if self.braking is not None:
+            predictive = self.value(env, "predictive_braking").bool()
+            distance, duration = self.braking.predict(horizontal_speed, env.base_height)
+            margin = self.value(env, "braking_distance_margin_m")
+            # pre_distance 是最大前冲后仍希望保留的轮心到沿距离。
+            # 另留一拍采样行程；策略自身的动作延迟已经包含在标定数据内。
+            lead = distance * self.value(env, "braking_distance_scale") + margin + horizontal_speed * env.dt
+            pre_trigger = pre_trigger + torch.where(predictive, lead, 0)
+            # 沿后不能为了提前制动而在轮子尚未离开障碍时发 stop。
+            # 额外余量覆盖标定中的小幅回退（最大约 1.1 cm）。
+            post_trigger = torch.where(predictive, torch.maximum(
+                post_trigger, env.wheel_radius + env._value("wheel_clearance_m") + margin), post_trigger)
+            # 标定时间含 0.5 s 连续确认，替换为本回合要求的停留时间。
+            total = duration + self.hold_steps * env.dt - STOP_CONFIRMATION_S + self.value(env, "braking_time_margin_s")
+            predicted_timeout = torch.where(predictive, torch.maximum(predicted_timeout, total), predicted_timeout)
+
         pre_start = (self.enabled & (phase == self.APPROACH)
-                     & (edge - wheel_x.max(dim=1).values <= self.pre_distance))
+                     & (edge - wheel_x.max(dim=1).values <= pre_trigger))
         post_start = (self.enabled & (phase == self.CROSS) & after_edge
-                      & (wheel_x.min(dim=1).values - end >= self.post_distance)
+                      & (wheel_x.min(dim=1).values - end >= post_trigger)
                       & (env.wheel_contact > 0.5).all(dim=1))
         self.phase[pre_start] = self.PRE_STOP
         self.phase[post_start] = self.POST_STOP
         entered = pre_start | post_start
+        # 发出零命令时冻结时限，制动过程中不能随速度下降而缩短。
+        self.stop_timeout[entered] = predicted_timeout[entered]
         self.stop_anchor[entered] = env.base_pos[entered, :2]
         self.quiet_steps[entered] = 0
         self.pause_steps[entered] = 0

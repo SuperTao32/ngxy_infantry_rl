@@ -12,7 +12,9 @@ TASK_NAMES = ("locomotion", "stairs_down", "stairs_up", "slope_up", "slope_down"
 
 def _intermittent_cfg(probability, **overrides):
     """各地形按回合抽样；距离、时长等可在对应 task 中覆盖。"""
-    return {**deepcopy(INTERMITTENT_DEFAULTS), "probability": probability, **overrides}
+    return {**deepcopy(INTERMITTENT_DEFAULTS), "probability": probability,
+            "predictive_braking": True, "max_braking_distance_m": 1.1,
+            "post_stop_distance_range_m": [0.25, 0.35], **overrides}
 
 
 def _get_curriculum_cfg():
@@ -634,8 +636,10 @@ def get_cfgs():
         # 末端平台仅长 1.2 m，停车和重新起步使用更紧凑的距离。
         intermittent=_intermittent_cfg(
             probability=0.3,
-            post_stop_distance_range_m=[0.25, 0.35],
-            max_braking_distance_m=0.2,
+            post_stop_distance_range_m=[0.26, 0.28],
+            crossing_speed_m_s=0.5,
+            max_braking_distance_m=0.3,
+            stop_position_tolerance_m=0.1,
             restart_distance_m=0.2,
         ),
         termination=dict(

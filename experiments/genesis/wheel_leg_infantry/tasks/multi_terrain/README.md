@@ -106,41 +106,78 @@ TensorBoard 的任务指标和 checkpoint 的课程窗口来自 rank 0，续训�
 ```python
 intermittent=_intermittent_cfg(
     probability=0.3,                         # 0 关闭，1 全部采用；每次 reset 独立抽样
-    approach_speed_m_s=0.4,                   # 接近阶段速度上限
-    pre_stop_distance_range_m=[0.2, 0.4],     # 第一障碍沿前，触发停车的轮心距离
-    post_stop_distance_range_m=[0.35, 0.6],   # 最后障碍沿后，触发停车的轮心距离
+    predictive_braking=True,                # 按实际水平速度和实际离地高度预测沿前提前量
+    approach_speed_m_s=1.0,                  # 接近阶段速度上限
+    crossing_speed_m_s=2.0,                  # 间断模式所有运动阶段的速度上限
+    pre_stop_distance_range_m=[0.3, 0.4],    # 最大前冲后希望保留的轮心到第一沿的距离
+    post_stop_distance_range_m=[0.25, 0.35], # 最后沿后发出零速指令的轮心距离
+    braking_distance_scale=1.25,             # 实测最大轮心前冲乘数
+    braking_distance_margin_m=0.05,          # 额外提前量，同时作为沿后回退余量
+    braking_time_margin_s=0.5,               # 实测时间之外的额外宽限
     hold_duration_range_s=[0.5, 1.5],         # 连续停稳时长，本回合两次停车共用
-    stop_timeout_s=4.0,                       # 每次停车的制动 + 停稳总时限
-    max_braking_distance_m=0.8,               # 收到零指令到首次停稳的最大位移
-    stop_position_tolerance_m=0.15,           # 首次停稳后相对固定位置的最大漂移
-    stop_lin_vel_m_s=0.08,                    # 世界水平速度的停稳门限
-    stop_ang_vel_rad_s=0.15,                  # 三轴角速度模长的停稳门限
-    edge_margin_m=0.02,                       # 边缘前轮子外缘的最小余量
-    restart_distance_m=0.3,                   # 第二次停车后必须重新前进的距离
-    extra_episode_time_s=6.0,                 # 为慢速接近/再次起步增加的运动时间
+    stop_timeout_s=4.0,                      # 每次停车总时限下限，预测需要更久时自动增加
+    max_braking_distance_m=1.1,              # 收到零指令到首次停稳的最大机身位移，硬上限
+    stop_position_tolerance_m=0.15,          # 首次停稳后相对固定位置的最大漂移
+    stop_lin_vel_m_s=0.08,                   # 世界水平速度的停稳门限
+    stop_ang_vel_rad_s=0.15,                 # 三轴角速度模长的停稳门限
+    edge_margin_m=0.2,                      # 边缘前轮子外缘的最小余量
+    restart_distance_m=0.5,                  # 第二次停车后必须重新前进的距离
+    extra_episode_time_s=6.0,                # 为慢速接近/再次起步增加的运动时间
 ),
 ```
 
-`platform_ridge_up` 的末端平台仅长 1.2 m，默认沿后停车触发距离为 0.25～0.35 m、
-最大制动位移为 0.2 m、重新起步距离为 0.2 m；其他任务使用上面的通用默认值。
-配置会检查停车及重新起步是否留有足够地面空间。
+`platform_ridge_up` 的末端平台仅长 1.2 m，扣除边界余量后约 0.95 m 可用。
+该任务间断模式的 `crossing_speed_m_s=0.5`（接近、通过、重新起步均生效），
+沿后触发距离为 0.26～0.28 m、最大机身制动位移为 0.3 m、停稳漂移上限为 0.1 m、
+重新起步距离为 0.2 m。距离预算合计 0.88 m，配置仍检查所有难度的地面空间。
+普通通关回合不应用这些速度限制。
+
+制动标定来自 `logs/locomotion_v6/version_0002/braking_eval/20261024_164833_149169`，
+对应 `model_6100.pt`。16 次平地试验均停稳，关闭随机化、每个组合仅一次：
+
+| 目标速度 (m/s) | 四种高度中的最大轮心前冲 (m) | 停车确认时间范围 (s) |
+| --- | --- | --- |
+| 0.5 | 0.176 | 2.20～3.12 |
+| 1.0 | 0.341 | 1.67～2.57 |
+| 1.5 | 0.544 | 1.76～2.62 |
+| 2.0 | 0.826 | 1.88～2.77 |
+
+停车时间含 0.5 s 连续停稳确认。前冲使用双轮各自最大位移的较大值，不能用最终位移代替：
+机身/轮子有先前冲再回弹的过程。`braking.py` 保存实测起始速度、实际离地高度范围、
+轮心最大前冲及时间，不在训练循环中读取日志。按每个高度组的实际速度插值距离，
+邻接高度取较大预测；时间取邻接速度和高度的较大值。低于最小标定速度保留最低速的制动量，
+高于最高速度按速度比平方外推距离、按速度比外推时间；高度超界取全部高度的最大预测。
+这些是保守工程估计，不是随机化、换策略或坡面情况下的统计保证。
+
+沿前发出 stop 的轮心距离为：
+
+```text
+抽样的 pre_stop_distance + 1.25 × 预测最大轮心前冲 + 0.05 m + 实际水平速度 × dt
+```
+
+例如实际约 1 m/s、`dt=0.01 s` 时，默认约在第一沿前 0.76～0.90 m 发 stop。
+新参数中的 0.3～0.4 m 是预留距离，已包含轮半径与边缘安全余量，不能再次作为固定触发点。
+停车总时限为 `max(stop_timeout_s, 预测停车时间 - 0.5 + 本回合停留时间 + braking_time_margin_s)`，
+发出 stop 时冻结；默认标定范围内最长约 4.62 s。沿后仍须双轮离开障碍并接地，
+触发距离至少为 `轮半径 + wheel_clearance_m + braking_distance_margin_m`，给小幅回退留空间。
+沿后受地形约束不能任意提前，短平台通过降低间断模式速度控制制动距离。
 
 也可在 `curriculum.overrides[level]["intermittent"]` 中按难度覆盖比例或参数。
 比例是回合抽样概率，不是严格的环境配额或训练时间占比；间断回合通常更长。
-参数默认值位于 `intermittent.py`，`config.py` 的 `_intermittent_cfg()` 复制完整配置到每个任务快照。
+`intermittent.py` 保留旧配置的固定触发默认行为；`config.py` 的 `_intermittent_cfg()` 启用上述新参数并复制完整配置到每个任务快照。
 
 一个被选中的回合必须顺序完成：
 
-1. **接近**：保持本回合机身高度，前进指令取任务采样速度与 `approach_speed_m_s` 的较小值。
-2. **边缘前停留**：任一轮心进入抽样的沿前距离后，线速度和偏航速度设为零；双轮必须留在第一障碍沿前。
-3. **通过地形**：连续停稳达标后恢复本回合采样的正向速度。
+1. **接近**：保持本回合机身高度，前进指令不超过任务采样速度、`approach_speed_m_s` 和 `crossing_speed_m_s`。
+2. **边缘前停留**：任一轮心进入预测的沿前触发距离后，线速度和偏航速度设为零；双轮必须留在第一障碍沿前。
+3. **通过地形**：连续停稳达标后恢复正向速度，受 `crossing_speed_m_s` 限制。
 4. **通过后停车**：双轮越过最后障碍沿、满足轮子余量且接地，并到达抽样的沿后距离，再给零速度指令。
 5. **重新起步**：再次连续停稳后恢复行驶；实际前进至少 `restart_distance_m` 且满足原通关条件，才结束回合。
 
 台阶/坡面入口使用真实几何起点；平台凸台下行入口是凸台前沿，上行入口是第一平台前沿。
 组合地形在整个障碍之前和之后各停一次，不要求在每个中间边缘停车。
 沿前距离取更靠近入口的轮心，沿后距离取更靠近末沿的轮心，支持斜向接近。
-距离是**发出停车指令的位置**，实际停车还会产生制动位移。
+`predictive_braking=False` 时沿前距离仍是旧版的固定触发距离；新模式的沿前距离是最大前冲后的预留距离。沿后距离始终是发出停车指令的位置。
 
 停稳需要同时满足速度门限、双轮接地、机身未触地和位置约束；任一条件不满足会清零连续停稳计时。
 边缘前越沿、停车位移越界或停车超时判为失败；两次停车不能靠等待时间或提前到终点跳过。
@@ -149,7 +186,7 @@ intermittent=_intermittent_cfg(
 停车期间暂停停滞计时，屏蔽前进/通关及上台阶动作引导奖励，保留平衡、碰撞和零速跟踪约束。
 各 task 的 `rewards` 新增 `standing_drift=-3.0` 与 `intermittent_stop=3.0`；后者每次连续停稳达标只发放一次。
 普通通关回合的命令与停滞判定保持原样。间断回合的正向行驶命令在 reset 时抽样后保持，避免周期重采样覆盖停车指令。
-回合时限为原时限 + `extra_episode_time_s` + 已实际消耗的停车时间；每次停车仍受独立的 `stop_timeout_s` 限制。
+回合时限为原时限 + `extra_episode_time_s` + 已实际消耗的停车时间；每次停车仍受独立、进入停车时冻结的总时限限制。
 
 TensorBoard 在 `task/<任务名>/` 下分别记录 `ordinary_success`、`intermittent_success`、
 `intermittent_fraction`、`intermittent_pre_stop_completed`、`intermittent_post_stop_completed`、
@@ -158,7 +195,7 @@ TensorBoard 在 `task/<任务名>/` 下分别记录 `ordinary_success`、`interm
 
 状态机使用训练地形真值安排命令，不增加 actor/critic 观测维度，不要求部署端提供阶段编号。
 缺少 `intermittent` 的旧配置默认关闭。**旧 run 直接 `--resume` 会继续使用旧保存配置**；
-启用新模式需使用 `--resume --resume-config current`，或用 `--load-weights` 新建训练。
+缺少 `predictive_braking` 的已有间断配置也继续使用固定距离。启用新参数需使用 `--resume --resume-config current`，或用 `--load-weights` 新建训练。
 
 回归检查（不启动训练）：
 
