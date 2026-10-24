@@ -122,6 +122,52 @@ Genesis 的有效摩擦下限为 0.01。
 累计应用全局课程对该子任务的最终命令覆盖；仍可用 `--terrain` / `--difficulty` 切换测试地形。
 机器人、控制器、观测和网络结构沿用训练快照，评估只加载网络权重。
 
+### 不同速度的刹停距离
+
+`braking_eval.py` 在 Genesis 平地上测试当前策略收到零速命令后的刹停表现，默认无窗口：
+
+```bash
+.venv/bin/python -m experiments.genesis.wheel_leg_infantry.tasks.locomotion.braking_eval \
+  -e locomotion_v6 --speeds 0.5 1.0 1.5 2.0 --trials 3
+
+# 支持倒车，以及 locomotion / multi_terrain 的指定 checkpoint
+.venv/bin/python -m experiments.genesis.wheel_leg_infantry.tasks.locomotion.braking_eval \
+  -e multi_terrain_v7 --version 0 --ckpt 700 \
+  --speeds -1.0 -0.5 0.5 1.0 --height 0.22 --vis
+```
+
+每次复位为正立静止，先给零速命令等待 2 s，再给指定速度。
+实际机身前向速度连续 0.5 s 落在目标 ±0.1 m/s 内，且横向速度、角速度和姿态满足条件后，
+将 `vx/wz` 命令归零，高度保持不变。加速最多等待 10 s，未达标记为 `speed_not_reached`。
+制动从零速命令送入策略之前计时，保留模型动作延迟和观测历史，不直接清零轮速或动作。
+实际三维线速度 ≤0.05 m/s、三维角速度 ≤0.1 rad/s、roll/pitch 均 ≤10°、机身未接触地面，
+连续满足 0.5 s 才记为 `stopped`；制动超过 10 s 则记为 `stop_timeout`。
+阈值和等待时间均可通过 `--help` 中的参数调整，时间精度为一个控制周期。
+
+结果默认保存到所选训练版本的 `braking_eval/<时间戳>/`，也可用 `--output-dir` 指定新目录：
+
+| 文件/字段 | 含义 |
+| --- | --- |
+| `trials.csv` | 每次试验的状态、实际刹车初速度、距离和时间 |
+| `path_distance_m` | 从制动开始到确认停稳的水平累计路程，包括回退和确认窗口内的运动 |
+| `displacement_m` | 制动起点与终点之间的水平直线距离 |
+| `forward_distance_m` / `max_forward_distance_m` | 沿制动开始时车头方向（倒车取反）的净位移/最大位移 |
+| `max_excursion_m` | 制动期间距起点最远的水平距离 |
+| `stop_time_s` | 确认停稳所需时间，包含连续停稳窗口 |
+| `summary.csv` | 每个目标速度的成功/失败数，以及成功试验的均值、总体标准差、最大值 |
+| `trace.csv` | 每个控制周期的阶段、命令、位置和真实速度；`brake` 的 `phase_time_s=0` 为制动起点 |
+| `metadata.json` | checkpoint、随机种子、参数、实际控制周期和评估环境配置 |
+
+超时的距离仅代表观测截止时的运动，`stop_time_s` 留空；环境终止、自动复位或数值异常时距离留空，
+不把复位跳变计入路程。所有失败均排除在成功均值之外；查看汇总时同时检查成功数量和实际初速度。
+“停稳”只保证在配置的连续窗口内满足条件，不保证之后永不漂移。
+
+默认关闭动力学随机化、传感器噪声和随机打滑，可分别用 `--domain-rand`、`--sensor-noise`、
+`--wheel-slip` 开启。所有试验共享 `--seed` 对应的随机序列，每次 reset 重新采样已启用的随机项。
+默认高度取保存的最终命令范围中点，初始机身高度取保存 reset 范围中点；地形固定为 plane。
+重复试验在无随机化时通常相同，可用单次试验快速比较速度。`--backend cpu` 可用于无 GPU 环境。
+多地形模型使用与交互式 locomotion eval 相同的子任务配置适配。
+
 ## 转入多任务训练
 
 上/下 20 cm 台阶、上/下 23° 坡、变摩擦起伏路和小高度单级上台阶，全部在
