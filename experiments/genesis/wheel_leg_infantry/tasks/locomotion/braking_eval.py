@@ -13,6 +13,13 @@ from ...core.randomization_config import add_randomization_arguments, apply_rand
 from ...tools.run_utils import load_run_configs, load_runner_class, resolve_checkpoint, resolve_run_dir
 
 
+WHEEL_SIDES = ("left", "right")
+WHEEL_METRICS = (
+    "left_wheel_max_forward_distance_m", "right_wheel_max_forward_distance_m",
+    "wheel_max_forward_distance_m", "wheel_max_forward_from_base_m",
+)
+
+
 def _parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument("-e", "--exp_name", default="locomotion_v5")
@@ -61,10 +68,14 @@ def _state(env):
     velocity = env.base_lin_vel[0].detach().cpu().tolist()
     angular = env.base_ang_vel[0].detach().cpu().tolist()
     euler = env.base_euler[0].detach().cpu().tolist()
+    # wheel link 原点位于轮轴；使用与 base_pos 相同的坐标系，不从轮速积分。
+    wheels = env.robot.get_links_pos(links_idx_local=env.wheel_links_idx)[0].detach().cpu().tolist()
     return dict(x=position[0], y=position[1], z=position[2], vx=velocity[0], vy=velocity[1],
                 speed=math.hypot(*velocity), angular_speed=math.hypot(*angular),
                 tilt=max(abs(euler[0]), abs(euler[1])), yaw=euler[2],
-                base_contact=float(env.base_contact[0].item()))
+                base_contact=float(env.base_contact[0].item()),
+                **{f"{side}_wheel_{axis}": value for side, point in zip(WHEEL_SIDES, wheels)
+                   for axis, value in zip("xyz", point)})
 
 
 def _healthy(state, args):
@@ -79,20 +90,32 @@ class StopMeasurement:
         yaw = math.radians(state["yaw"])
         sign = -1 if target_speed < 0 else 1
         self.direction = (sign * math.cos(yaw), sign * math.sin(yaw))
+        self.wheel_origins = {side: (state[f"{side}_wheel_x"], state[f"{side}_wheel_y"]) for side in WHEEL_SIDES}
+        self.wheel_max_forward = dict.fromkeys(WHEEL_SIDES, 0.0)
+        # 同时提供相对于制动起点 base 的最远坐标，包含轮子已有的前后偏置。
+        # 初始帧也参与最大值：制动后立即回退时不能丢掉起点的前伸量。
+        self.wheel_max_from_base = max(self._project(point, self.origin) for point in self.wheel_origins.values())
         self.path = self.max_forward = self.max_excursion = 0.0
         self.displacement = self.forward = 0.0
         self.steps = self.stable_steps = 0
         self.dt, self.args = dt, args
         self.required_steps = math.ceil(args.stop_hold_time / dt)
 
+    def _project(self, point, origin):
+        return sum((p - o) * d for p, o, d in zip(point, origin, self.direction))
+
     def update(self, state):
         point = (state["x"], state["y"])
         self.path += math.dist(self.previous, point)
         self.previous = point
         self.displacement = math.dist(self.origin, point)
-        self.forward = sum((p - o) * d for p, o, d in zip(point, self.origin, self.direction))
+        self.forward = self._project(point, self.origin)
         self.max_forward = max(self.max_forward, self.forward)
         self.max_excursion = max(self.max_excursion, self.displacement)
+        for side in WHEEL_SIDES:
+            wheel = (state[f"{side}_wheel_x"], state[f"{side}_wheel_y"])
+            self.wheel_max_forward[side] = max(self.wheel_max_forward[side], self._project(wheel, self.wheel_origins[side]))
+            self.wheel_max_from_base = max(self.wheel_max_from_base, self._project(wheel, self.origin))
         self.steps += 1
         stable = (_healthy(state, self.args) and state["speed"] <= self.args.stop_speed
                   and state["angular_speed"] <= self.args.stop_angular_speed)
@@ -102,7 +125,11 @@ class StopMeasurement:
     def result(self):
         return dict(brake_elapsed_s=self.steps * self.dt, path_distance_m=self.path,
                     displacement_m=self.displacement, forward_distance_m=self.forward,
-                    max_forward_distance_m=self.max_forward, max_excursion_m=self.max_excursion)
+                    max_forward_distance_m=self.max_forward, max_excursion_m=self.max_excursion,
+                    left_wheel_max_forward_distance_m=self.wheel_max_forward["left"],
+                    right_wheel_max_forward_distance_m=self.wheel_max_forward["right"],
+                    wheel_max_forward_distance_m=max(self.wheel_max_forward.values()),
+                    wheel_max_forward_from_base_m=self.wheel_max_from_base)
 
 
 def run_trial(env, policy, speed, trial, height, args, trace):
@@ -113,7 +140,8 @@ def run_trial(env, policy, speed, trial, height, args, trace):
     result = dict(target_speed_mps=speed, trial=trial, status="", actual_brake_vx_mps=None,
                   actual_brake_speed_mps=None, brake_elapsed_s=None, stop_time_s=None,
                   path_distance_m=None, displacement_m=None, forward_distance_m=None,
-                  max_forward_distance_m=None, max_excursion_m=None)
+                  max_forward_distance_m=None, max_excursion_m=None,
+                  **dict.fromkeys(WHEEL_METRICS))
     total_steps = 0
 
     def step(command, phase, phase_step):
@@ -182,7 +210,7 @@ def summarize(results, speeds):
         rows = [row for row in results if row["target_speed_mps"] == speed]
         stopped = [row for row in rows if row["status"] == "stopped"]
         summary = dict(target_speed_mps=speed, trials=len(rows), stopped=len(stopped), failed=len(rows) - len(stopped))
-        for name in ("actual_brake_vx_mps", "path_distance_m", "max_forward_distance_m", "stop_time_s"):
+        for name in ("actual_brake_vx_mps", "path_distance_m", "max_forward_distance_m", "stop_time_s", *WHEEL_METRICS):
             values = [row[name] for row in stopped]
             for stat, fn in (("mean", mean), ("std", pstdev), ("max", max)):
                 summary[f"{name}_{stat}"] = fn(values) if values else None
@@ -261,7 +289,9 @@ def main(argv=None):
                     detail = ""
                     if result["status"] == "stopped":
                         detail = (f" actual_vx={result['actual_brake_vx_mps']:.3f} m/s"
-                                  f" distance={result['path_distance_m']:.3f} m time={result['stop_time_s']:.2f} s")
+                                  f" distance={result['path_distance_m']:.3f} m time={result['stop_time_s']:.2f} s"
+                                  f" wheel_max={result['wheel_max_forward_distance_m']:.3f} m"
+                                  f" wheel_from_base={result['wheel_max_forward_from_base_m']:.3f} m")
                     print(f"[braking] vx={speed:+.2f} trial={trial}/{args.trials}: {result['status']}{detail}", flush=True)
         print(f"[braking] results saved: {output}")
     finally:

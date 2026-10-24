@@ -153,14 +153,25 @@ Genesis 的有效摩擦下限为 0.01。
 | `displacement_m` | 制动起点与终点之间的水平直线距离 |
 | `forward_distance_m` / `max_forward_distance_m` | 沿制动开始时车头方向（倒车取反）的净位移/最大位移 |
 | `max_excursion_m` | 制动期间距起点最远的水平距离 |
+| `left_wheel_max_forward_distance_m` / `right_wheel_max_forward_distance_m` | 左/右轮轴原点相对各自制动起点，沿制动开始时行驶方向的最大位移 |
+| `wheel_max_forward_distance_m` | 左右轮上述最大位移的较大值，包含车体移动与腿部前伸 |
+| `wheel_max_forward_from_base_m` | 两个轮轴原点到达的最前方坐标，以制动开始时的 base 位置为零点，包含轮子初始前后偏置 |
 | `stop_time_s` | 确认停稳所需时间，包含连续停稳窗口 |
 | `summary.csv` | 每个目标速度的成功/失败数，以及成功试验的均值、总体标准差、最大值 |
-| `trace.csv` | 每个控制周期的阶段、命令、位置和真实速度；`brake` 的 `phase_time_s=0` 为制动起点 |
+| `trace.csv` | 每个控制周期的阶段、命令、base/左右轮轴位置和真实速度；`brake` 的 `phase_time_s=0` 为制动起点 |
 | `metadata.json` | checkpoint、随机种子、参数、实际控制周期和评估环境配置 |
 
 超时的距离仅代表观测截止时的运动，`stop_time_s` 留空；环境终止、自动复位或数值异常时距离留空，
 不把复位跳变计入路程。所有失败均排除在成功均值之外；查看汇总时同时检查成功数量和实际初速度。
 “停稳”只保证在配置的连续窗口内满足条件，不保证之后永不漂移。
+
+轮子位置直接读取 `left_wheel_link` / `right_wheel_link`（名称沿用保存配置）的链接原点，
+逐帧记录为 `left_wheel_x/y/z` 和 `right_wheel_x/y/z`，单位米。
+最大位移保留制动开始至确认停稳之间的峰值，腿回收或车辆回退不会减小已记录的最大值；
+投影方向固定为制动开始时的车头方向，倒车时取反。轮子初始帧也纳入统计。
+`wheel_max_forward_from_base_m` 可与 base 的 `max_forward_distance_m` 在同一起点下比较，
+若轮轴始终处于该起点后方，则前者为负。这些指标测量轮轴原点，不含轮胎半径，不能直接作为轮胎外缘的障碍物间隙。
+`summary.csv` 同样输出新增轮子指标在成功试验中的均值、总体标准差和最大值。
 
 默认关闭动力学随机化、传感器噪声和随机打滑，可分别用 `--domain-rand`、`--sensor-noise`、
 `--wheel-slip` 开启。所有试验共享 `--seed` 对应的随机序列，每次 reset 重新采样已启用的随机项。
