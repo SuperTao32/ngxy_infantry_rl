@@ -6,6 +6,7 @@ import json
 import math
 from copy import deepcopy
 from datetime import datetime
+from itertools import product
 from pathlib import Path
 from statistics import mean, pstdev
 
@@ -22,13 +23,14 @@ WHEEL_METRICS = (
 
 def _parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    parser.add_argument("-e", "--exp_name", default="locomotion_v5")
+    parser.add_argument("-e", "--exp_name", default="locomotion_v6")
     parser.add_argument("--log-root", default="logs")
     parser.add_argument("--version", help="version_0003 or 3; omitted: latest valid run")
     parser.add_argument("--ckpt", type=int, help="checkpoint number; omitted: latest")
     parser.add_argument("--speeds", type=float, nargs="+", default=[0.5, 1.0, 1.5, 2.0], help="signed target speeds, m/s")
-    parser.add_argument("--trials", type=int, default=3, help="trials per target speed")
-    parser.add_argument("--height", type=float, default=None, help="base height, m; omitted: saved command range midpoint")
+    parser.add_argument("--trials", type=int, default=1, help="trials per height/speed combination")
+    parser.add_argument("--height", "--heights", type=float, nargs="+", default=[0.20, 0.25, 0.30, 0.38],
+                        help="one or more target base heights in meters")
     parser.add_argument("--settle-time", type=float, default=2.0, help="initial zero-command settling time, s")
     parser.add_argument("--accel-timeout", type=float, default=10.0, help="maximum time to reach target speed, s")
     parser.add_argument("--speed-tolerance", type=float, default=0.1, help="absolute target speed tolerance, m/s")
@@ -39,7 +41,7 @@ def _parse_args(argv=None):
     parser.add_argument("--stop-hold-time", type=float, default=0.5, help="continuous stable stop confirmation time, s")
     parser.add_argument("--max-tilt", type=float, default=10.0, help="maximum absolute roll/pitch for stable tracking/stop, degrees")
     parser.add_argument("--seed", type=int, default=1)
-    parser.add_argument("--backend", choices=("gpu", "cpu"), default="gpu")
+    parser.add_argument("--backend", choices=("gpu", "cpu"), default="cpu")
     parser.add_argument("--vis", action="store_true", help="show Genesis viewer")
     parser.add_argument("--output-dir", type=Path, help="new result directory; omitted: run/braking_eval/timestamp")
     add_randomization_arguments(parser, evaluation=True)
@@ -49,8 +51,10 @@ def _parse_args(argv=None):
                  "stop_speed", "stop_angular_speed", "stop_hold_time", "max_tilt"):
         if not math.isfinite(getattr(args, name)) or getattr(args, name) <= 0:
             parser.error(f"--{name.replace('_', '-')} must be positive and finite")
-    if args.height is not None and (not math.isfinite(args.height) or args.height <= 0):
-        parser.error("--height must be positive and finite")
+    if any(not math.isfinite(height) or height <= 0 for height in args.height):
+        parser.error("--height values must be positive and finite, in meters")
+    if len(set(args.height)) != len(args.height):
+        parser.error("--height must not contain duplicates")
     if args.trials < 1:
         parser.error("--trials must be at least 1")
     if any(not math.isfinite(v) for v in args.speeds):
@@ -137,7 +141,7 @@ def run_trial(env, policy, speed, trial, height, args, trace):
     env.reset()
     if callable(getattr(policy, "reset", None)):
         policy.reset()
-    result = dict(target_speed_mps=speed, trial=trial, status="", actual_brake_vx_mps=None,
+    result = dict(target_height_m=height, target_speed_mps=speed, trial=trial, status="", actual_brake_vx_mps=None,
                   actual_brake_speed_mps=None, brake_elapsed_s=None, stop_time_s=None,
                   path_distance_m=None, displacement_m=None, forward_distance_m=None,
                   max_forward_distance_m=None, max_excursion_m=None,
@@ -159,7 +163,7 @@ def run_trial(env, policy, speed, trial, height, args, trace):
         state = _state(env)
         if not all(math.isfinite(value) for value in state.values()):
             return None, f"{phase}_nonfinite"
-        trace.writerow(dict(target_speed_mps=speed, trial=trial, phase=phase,
+        trace.writerow(dict(target_height_m=height, target_speed_mps=speed, trial=trial, phase=phase,
                             time_s=total_steps * env.dt, phase_time_s=phase_step * env.dt,
                             command_vx_mps=command, **state))
         return state, None
@@ -189,7 +193,7 @@ def run_trial(env, policy, speed, trial, height, args, trace):
     result.update(actual_brake_vx_mps=state["vx"], actual_brake_speed_mps=state["speed"])
     measurement = StopMeasurement(state, speed, env.dt, args)
     # t=0 就在下一次推理前：保留控制器原有动作延迟及所有策略/传感器历史。
-    trace.writerow(dict(target_speed_mps=speed, trial=trial, phase="brake", time_s=total_steps * env.dt,
+    trace.writerow(dict(target_height_m=height, target_speed_mps=speed, trial=trial, phase="brake", time_s=total_steps * env.dt,
                         phase_time_s=0.0, command_vx_mps=0.0, **state))
     for i in range(math.ceil(args.stop_timeout / env.dt)):
         state, failure = step(0.0, "brake", i + 1)
@@ -204,12 +208,13 @@ def run_trial(env, policy, speed, trial, height, args, trace):
     return result
 
 
-def summarize(results, speeds):
+def summarize(results, speeds, heights):
     summaries = []
-    for speed in speeds:
-        rows = [row for row in results if row["target_speed_mps"] == speed]
+    for height, speed in product(heights, speeds):
+        rows = [row for row in results if row["target_height_m"] == height and row["target_speed_mps"] == speed]
         stopped = [row for row in rows if row["status"] == "stopped"]
-        summary = dict(target_speed_mps=speed, trials=len(rows), stopped=len(stopped), failed=len(rows) - len(stopped))
+        summary = dict(target_height_m=height, target_speed_mps=speed, trials=len(rows),
+                       stopped=len(stopped), failed=len(rows) - len(stopped))
         for name in ("actual_brake_vx_mps", "path_distance_m", "max_forward_distance_m", "stop_time_s", *WHEEL_METRICS):
             values = [row[name] for row in stopped]
             for stat, fn in (("mean", mean), ("std", pstdev), ("max", max)):
@@ -238,7 +243,6 @@ def main(argv=None):
     checkpoint = resolve_checkpoint(run_dir, args.ckpt)
     configs = load_run_configs(run_dir)
     env_cfg, command_cfg = _prepare_task_configs(configs)
-    height = args.height if args.height is not None else mean(command_cfg["base_height_range"])
     env_cfg["terrain"] = default_terrain_cfg("plane")
     duration = args.settle_time + args.accel_timeout + args.stop_timeout + 2.0
     env_cfg.update(episode_length_s=duration, resampling_time_s=duration, show_FPS=False)
@@ -255,10 +259,10 @@ def main(argv=None):
     reward_cfg.update(reward_scales={}, terrain_reward_scales={})
     output = args.output_dir or run_dir / "braking_eval" / datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     output.mkdir(parents=True, exist_ok=False)
-    metadata = dict(checkpoint=str(checkpoint.resolve()), arguments=vars(args), height_m=height,
+    metadata = dict(checkpoint=str(checkpoint.resolve()), arguments=vars(args), heights_m=args.height,
                     env_cfg=env_cfg, obs_cfg=obs_cfg, command_cfg=command_cfg)
     (output / "metadata.json").write_text(json.dumps(metadata, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
-    print(f"[braking] checkpoint: {checkpoint}\n[braking] output: {output}\n[braking] plane, height={height:.3f} m", flush=True)
+    print(f"[braking] checkpoint: {checkpoint}\n[braking] output: {output}\n[braking] plane, heights={args.height} m", flush=True)
     print("[braking] distance/time include the continuous stop confirmation window; failed trials excluded from summary", flush=True)
     gs.init(backend=gs.gpu if args.backend == "gpu" else gs.cpu, seed=args.seed, logging_level="warning")
     env = None
@@ -276,23 +280,23 @@ def main(argv=None):
         (output / "metadata.json").write_text(json.dumps(metadata, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
         results = []
         with (output / "trace.csv").open("w", newline="", encoding="utf-8") as file, torch.no_grad():
-            trace = csv.DictWriter(file, fieldnames=["target_speed_mps", "trial", "phase", "time_s", "phase_time_s",
+            trace = csv.DictWriter(file, fieldnames=["target_height_m", "target_speed_mps", "trial", "phase", "time_s", "phase_time_s",
                                                    "command_vx_mps", *_state(env)])
             trace.writeheader()
-            for speed in args.speeds:
+            for height, speed in product(args.height, args.speeds):
                 for trial in range(1, args.trials + 1):
                     result = run_trial(env, policy, speed, trial, height, args, trace)
                     results.append(result)
                     file.flush()
                     _write_csv(output / "trials.csv", results)
-                    _write_csv(output / "summary.csv", summarize(results, args.speeds))
+                    _write_csv(output / "summary.csv", summarize(results, args.speeds, args.height))
                     detail = ""
                     if result["status"] == "stopped":
                         detail = (f" actual_vx={result['actual_brake_vx_mps']:.3f} m/s"
                                   f" distance={result['path_distance_m']:.3f} m time={result['stop_time_s']:.2f} s"
                                   f" wheel_max={result['wheel_max_forward_distance_m']:.3f} m"
                                   f" wheel_from_base={result['wheel_max_forward_from_base_m']:.3f} m")
-                    print(f"[braking] vx={speed:+.2f} trial={trial}/{args.trials}: {result['status']}{detail}", flush=True)
+                    print(f"[braking] height={height:.3f} m vx={speed:+.2f} trial={trial}/{args.trials}: {result['status']}{detail}", flush=True)
         print(f"[braking] results saved: {output}")
     finally:
         if env is not None:

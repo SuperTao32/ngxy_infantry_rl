@@ -130,12 +130,18 @@ Genesis 的有效摩擦下限为 0.01。
 .venv/bin/python -m experiments.genesis.wheel_leg_infantry.tasks.locomotion.braking_eval \
   -e locomotion_v6 --speeds 0.5 1.0 1.5 2.0 --trials 3
 
+# 高度单位为米，支持一次扫描多个高度（--heights 是 --height 的别名）
+.venv/bin/python -m experiments.genesis.wheel_leg_infantry.tasks.locomotion.braking_eval \
+  -e locomotion_v6 --height 0.20 0.25 0.30 0.38 --speeds 0.5 1.0 --trials 1
+
 # 支持倒车，以及 locomotion / multi_terrain 的指定 checkpoint
 .venv/bin/python -m experiments.genesis.wheel_leg_infantry.tasks.locomotion.braking_eval \
   -e multi_terrain_v7 --version 0 --ckpt 700 \
   --speeds -1.0 -0.5 0.5 1.0 --height 0.22 --vis
 ```
 
+默认测试 0.20、0.25、0.30、0.38 m 四个高度，每个“高度 × 速度”组合重复 `--trials` 次。
+只测试一个高度可传 `--height 0.25`；20 cm 应写为 `0.20`，不要写成 `20`。
 每次复位为正立静止，先给零速命令等待 2 s，再给指定速度。
 实际机身前向速度连续 0.5 s 落在目标 ±0.1 m/s 内，且横向速度、角速度和姿态满足条件后，
 将 `vx/wz` 命令归零，高度保持不变。加速最多等待 10 s，未达标记为 `speed_not_reached`。
@@ -148,7 +154,8 @@ Genesis 的有效摩擦下限为 0.01。
 
 | 文件/字段 | 含义 |
 | --- | --- |
-| `trials.csv` | 每次试验的状态、实际刹车初速度、距离和时间 |
+| `trials.csv` | 每次试验的目标高度、目标速度、状态、实际刹车初速度、距离和时间 |
+| `target_height_m` | 当前试验的高度命令（米），同时写入逐次结果、轨迹和汇总 |
 | `path_distance_m` | 从制动开始到确认停稳的水平累计路程，包括回退和确认窗口内的运动 |
 | `displacement_m` | 制动起点与终点之间的水平直线距离 |
 | `forward_distance_m` / `max_forward_distance_m` | 沿制动开始时车头方向（倒车取反）的净位移/最大位移 |
@@ -157,7 +164,7 @@ Genesis 的有效摩擦下限为 0.01。
 | `wheel_max_forward_distance_m` | 左右轮上述最大位移的较大值，包含车体移动与腿部前伸 |
 | `wheel_max_forward_from_base_m` | 两个轮轴原点到达的最前方坐标，以制动开始时的 base 位置为零点，包含轮子初始前后偏置 |
 | `stop_time_s` | 确认停稳所需时间，包含连续停稳窗口 |
-| `summary.csv` | 每个目标速度的成功/失败数，以及成功试验的均值、总体标准差、最大值 |
+| `summary.csv` | 按目标高度和目标速度分别统计成功/失败数，以及成功试验的均值、总体标准差、最大值 |
 | `trace.csv` | 每个控制周期的阶段、命令、base/左右轮轴位置和真实速度；`brake` 的 `phase_time_s=0` 为制动起点 |
 | `metadata.json` | checkpoint、随机种子、参数、实际控制周期和评估环境配置 |
 
@@ -175,7 +182,7 @@ Genesis 的有效摩擦下限为 0.01。
 
 默认关闭动力学随机化、传感器噪声和随机打滑，可分别用 `--domain-rand`、`--sensor-noise`、
 `--wheel-slip` 开启。所有试验共享 `--seed` 对应的随机序列，每次 reset 重新采样已启用的随机项。
-默认高度取保存的最终命令范围中点，初始机身高度取保存 reset 范围中点；地形固定为 plane。
+目标高度使用 `--height` 列表，初始机身高度取保存 reset 范围中点；地形固定为 plane。
 重复试验在无随机化时通常相同，可用单次试验快速比较速度。`--backend cpu` 可用于无 GPU 环境。
 多地形模型使用与交互式 locomotion eval 相同的子任务配置适配。
 
