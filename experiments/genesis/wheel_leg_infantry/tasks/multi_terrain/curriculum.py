@@ -8,6 +8,7 @@ from ...terrains.config import resolve_terrain_cfg
 from ...terrains.registry import TERRAIN_REGISTRY, level_catalog, level_parameters
 from .config import TASK_NAMES
 from .intermittent import resolve_intermittent
+from .parking import resolve_parking
 from ..locomotion.config_common import validate_high_base_height_velocity_limits
 
 
@@ -17,6 +18,7 @@ def positive(value, name):
 
 
 def resolve_tasks(config, *, require_locomotion=True):
+    resolve_parking(config.get("parking_curriculum", {}))
     tasks = deepcopy(config["tasks"])
     catalog = deepcopy(config.get("level_catalog")) if "level_catalog" in config else level_catalog()
     if set(tasks) - set(TASK_NAMES):

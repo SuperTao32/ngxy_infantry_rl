@@ -75,6 +75,14 @@ class IntermittentTraversal:
         self.braking = BrakingEnvelope(env.base_pos) if any(cfg["predictive_braking"] for cfg in options) else None
         self.stop_timeout = torch.zeros_like(env.base_height)
         self.edge = env.base_pos.new_tensor([t.obstacle_start for t in env.terrain.tracks])
+        # 短平台不能等满加速时间再停车；按末端剩余空间提前发 stop。
+        post_limits = []
+        for track, cfg in zip(env.terrain.tracks, options):
+            end = track.tile_size[0] / 2 - track.boundary_margin
+            if track.kind == "platform_ridge_up":
+                end = min(end, track.geometry.boxes[3][1][0] - track.boundary_margin)
+            post_limits.append(end - env.wheel_radius - cfg["max_braking_distance_m"] - cfg["stop_position_tolerance_m"])
+        self.post_brake_limit = env.base_pos.new_tensor(post_limits)
         self.enabled = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
         self.phase = torch.zeros_like(env.episode_length_buf)
         self.move_commands = torch.zeros_like(env.commands)
@@ -106,6 +114,7 @@ class IntermittentTraversal:
         # 老配置以及全部关闭时不消耗额外随机数，保持原有命令采样序列。
         self.enabled[ids] = (torch.rand_like(probability) < probability) if probability.any() else False
         self.enabled[ids] &= env.traversal[ids]
+        self.enabled[ids] |= env.parking.drill[ids]
         for name in ("phase", "quiet_steps", "pause_steps", "total_pause_steps", "completed_stops",
                      "failed", "reward_paused", "stop_event", "hold_started", "max_stop_drift", "restart_origin",
                      "stop_anchor", "move_commands", "hold_steps", "pre_distance", "post_distance"):
@@ -123,6 +132,7 @@ class IntermittentTraversal:
             if name == "hold_steps":
                 sampled = (sampled / env.dt).ceil().to(self.hold_steps.dtype)
             getattr(self, name)[selected] = sampled
+        self.phase[env.parking.post & selected] = self.CROSS
 
     def apply_commands(self, env):
         moving = self.enabled & ~self.paused
@@ -133,6 +143,8 @@ class IntermittentTraversal:
         approach = self.enabled & (self.phase == self.APPROACH)
         env.commands[approach, 0] = torch.minimum(
             env.commands[approach, 0], self.value(env, "approach_speed_m_s")[approach])
+        drills = env.parking.drill & moving
+        env.commands[drills, 0] = torch.minimum(env.commands[drills, 0], self.value(env, "approach_speed_m_s")[drills])
         # 静止只覆盖线速度和偏航速度，机身高度保留本回合的采样值。
         env.commands[self.paused, :2] = 0
 
@@ -161,6 +173,8 @@ class IntermittentTraversal:
         # 使用真实世界水平速度，避免坡面上的机体系水平分量掩盖滑动。
         vertical = (env.base_lin_vel * env.projected_gravity).sum(dim=1)
         horizontal_speed = (env.base_lin_vel.square().sum(dim=1) - vertical.square()).clamp_min(0).sqrt()
+        env.parking.motion_ready |= (env.parking.drill & ~paused
+                                     & (horizontal_speed >= env.parking.config["required_speed_m_s"]))
         quiet = (position_ok & region_ok & (horizontal_speed <= self.value(env, "stop_lin_vel_m_s"))
                  & (env.base_ang_vel.norm(dim=1) <= self.value(env, "stop_ang_vel_rad_s"))
                  & (env.wheel_contact > 0.5).all(dim=1) & (env.base_contact < 0.5))
@@ -178,6 +192,8 @@ class IntermittentTraversal:
         self.phase[completed & (phase == self.PRE_STOP)] = self.CROSS
         post_done = completed & (phase == self.POST_STOP)
         self.phase[post_done] = self.RESTART
+        # 练习的成功回合在本拍结束，不进入跨越/重新起步；前后标记保留到 reset。
+        self.phase[completed & env.parking.drill] = phase[completed & env.parking.drill]
         along, _ = env._task_path_coordinates(env.base_pos[:, :2])
         self.restart_origin[post_done] = along[post_done]
         restarted = (self.enabled & (phase == self.RESTART)
@@ -208,6 +224,10 @@ class IntermittentTraversal:
         post_start = (self.enabled & (phase == self.CROSS) & after_edge
                       & (wheel_x.min(dim=1).values - end >= post_trigger)
                       & (env.wheel_contact > 0.5).all(dim=1))
+        pre_start &= ~env.parking.drill | env.parking.motion_ready
+        post_start &= ~env.parking.drill | (env.parking.motion_ready
+                                           & ((env.task_steps * env.dt >= env.parking.config["post_move_time_s"])
+                                              | (wheel_x.max(dim=1).values >= self.post_brake_limit[env.terrain_tile_index])))
         self.phase[pre_start] = self.PRE_STOP
         self.phase[post_start] = self.POST_STOP
         entered = pre_start | post_start

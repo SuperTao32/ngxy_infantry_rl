@@ -38,6 +38,7 @@ def main(argv=None):
                         help="terrain LEVELS difficulty; default: maximum configured difficulty")
     parser.add_argument("--intermittent", action=argparse.BooleanOptionalAction, default=None,
                         help="force intermittent traversal on/off (default: use saved episode probability)")
+    parser.add_argument("--parking-only", action="store_true", help="evaluate pre/post parking exercises without crossing terrain")
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--headless", action="store_true")
     parser.add_argument("--steps", type=int, default=3000)
@@ -48,6 +49,11 @@ def main(argv=None):
     env_cfg, obs_cfg = configs["env_cfg"], configs["obs_cfg"]
     if "multi_terrain" not in env_cfg or args.task not in env_cfg["multi_terrain"]["tasks"]:
         parser.error("saved run has no requested multi_terrain task")
+    if args.parking_only:
+        if args.task == "locomotion" or args.intermittent is False:
+            parser.error("--parking-only requires a traversal task and cannot combine with --no-intermittent")
+        env_cfg["multi_terrain"].setdefault("parking_curriculum", {})["enabled"] = True
+        args.intermittent = True
     task = env_cfg["multi_terrain"]["tasks"][args.task]
     task.update(enabled=True, weight=1.0)
     env_cfg["multi_terrain"]["tasks"] = {args.task: task}
@@ -72,7 +78,8 @@ def main(argv=None):
         prepare_tof_for_viewer(obs_cfg)
     gs.init(backend=gs.gpu, precision="32", logging_level="warning", seed=args.seed)
     env = MultiTerrainEnv(1, env_cfg, obs_cfg, configs["reward_cfg"], configs["command_cfg"],
-                          evaluation=True, curriculum_cfg=dict(enabled=False, stages=[]), show_viewer=not args.headless)
+                          evaluation=True, parking_evaluation=args.parking_only,
+                          curriculum_cfg=dict(enabled=False, stages=[]), show_viewer=not args.headless)
     runner = load_runner_class()(env, configs["train_cfg"], None, device=gs.device)
     runner.load(str(resolve_checkpoint(run_dir, args.ckpt)),
                 load_cfg=dict(actor=True, critic=True, optimizer=False, iteration=False, rnd=False), map_location=gs.device)
@@ -81,6 +88,7 @@ def main(argv=None):
     wins = episodes = 0
     mode_wins = dict(ordinary=0, intermittent=0)
     mode_episodes = dict(ordinary=0, intermittent=0)
+    parking_wins, parking_episodes = dict(pre=0, post=0), dict(pre=0, post=0)
     with torch.no_grad():
         for _ in range(args.steps):
             if not args.headless and not env.scene.viewer.is_alive():
@@ -89,6 +97,15 @@ def main(argv=None):
             if done.any():
                 metrics = info["episode"]
                 prefix = f"task/{args.task}/"
+                if args.parking_only:
+                    side = "post" if prefix + "parking_post_success" in metrics else "pre"
+                    won = int(metrics[prefix + f"parking_{side}_success"].item())
+                    parking_wins[side] += won
+                    parking_episodes[side] += 1
+                    print(f"[eval] {args.task}/level_{difficulty}: parking_{side} success={won} "
+                          f"pre={parking_wins['pre']}/{parking_episodes['pre']} "
+                          f"post={parking_wins['post']}/{parking_episodes['post']}")
+                    continue
                 # step 已自动 reset；从本回合的结算指标读取模式，不能读取下一回合的状态。
                 mode = "intermittent" if prefix + "intermittent_success" in metrics else "ordinary"
                 won = int(metrics[prefix + "success"].item())

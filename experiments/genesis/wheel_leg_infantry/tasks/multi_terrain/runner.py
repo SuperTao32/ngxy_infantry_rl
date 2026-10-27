@@ -1,18 +1,27 @@
 """复用 RSL-RL checkpoint 的 infos 保存各任务成功率窗口与等级。"""
 
 from .config import TASK_NAMES
+from functools import partial
 
 
-def _expand_legacy_critic_input(module, state_dict, prefix, *args):
-    """迁移旧 critic：新增 one-hot 列置零，保持初始 value 不变。"""
+def _expand_legacy_critic_input(module, state_dict, prefix, *args, extra_columns=(len(TASK_NAMES),)):
+    """迁移旧 critic：只允许已知的尾部特权观测扩维，新增列置零。"""
     key = prefix + "mlp.0.weight"
     weight = state_dict.get(key)
     target = module.mlp[0].weight
-    if weight is not None and weight.shape == (target.shape[0], target.shape[1] - len(TASK_NAMES)):
+    if (weight is not None and weight.shape[0] == target.shape[0]
+            and target.shape[1] - weight.shape[1] in extra_columns):
         expanded = weight.new_zeros(target.shape)
         expanded[:, :weight.shape[1]] = weight
         state_dict[key] = expanded
-        print("[train] expanded legacy critic input with zero-initialized task one-hot weights")
+        # 支持启用观测归一化的快照；旧通道统计保持不变，新增通道使用初始统计。
+        for name, buffer in module.named_buffers():
+            saved = state_dict.get(prefix + name)
+            if name.startswith("obs_normalizer.") and saved is not None and saved.ndim and saved.shape[-1] == weight.shape[1]:
+                expanded_buffer = buffer.clone()
+                expanded_buffer[..., :saved.shape[-1]] = saved
+                state_dict[prefix + name] = expanded_buffer
+        print("[train] expanded legacy critic input with zero-initialized privileged observation weights")
 
 
 def task_runner_class(base, workers=None):
@@ -34,6 +43,8 @@ def task_runner_class(base, workers=None):
         def save(self, path, infos=None):
             infos = dict(infos or {})
             infos["terrain_curriculum"] = self.env.terrain_state_dict()
+            if hasattr(self.env, "parking_state_dict"):
+                infos["parking_curriculum"] = self.env.parking_state_dict()
             return super().save(path, infos)
 
         def load(self, path, load_cfg=None, strict=True, map_location=None):
@@ -41,8 +52,12 @@ def task_runner_class(base, workers=None):
             # 仅迁移权重；完整续训必须严格匹配模型和优化器维度。
             if (load_cfg is not None and load_cfg.get("critic", True)
                     and not load_cfg.get("optimizer", True) and not load_cfg.get("iteration", True)
-                    and self.env.obs_cfg.get("critic_task_one_hot", False)):
-                hook = self.alg._raw_critic.register_load_state_dict_pre_hook(_expand_legacy_critic_input)
+                    and (self.env.obs_cfg.get("critic_task_one_hot", False) or self.env.obs_cfg.get("critic_stop_phase", False))):
+                one_hot = len(TASK_NAMES) if self.env.obs_cfg.get("critic_task_one_hot", False) else 0
+                phases = 2 if self.env.obs_cfg.get("critic_stop_phase", False) else 0
+                additions = (phases, phases + one_hot) if phases else (one_hot,)
+                hook = self.alg._raw_critic.register_load_state_dict_pre_hook(
+                    partial(_expand_legacy_critic_input, extra_columns=tuple(n for n in additions if n)))
             try:
                 infos = super().load(path, load_cfg=load_cfg, strict=strict, map_location=map_location)
             finally:
@@ -51,6 +66,7 @@ def task_runner_class(base, workers=None):
             # --load-weights 明确重启课程；完整恢复时在 set_training_iteration/reset 应用。
             if load_cfg is None or load_cfg.get("iteration", True):
                 self.env._pending_terrain_state = (infos or {}).get("terrain_curriculum")
+                self.env._pending_parking_state = (infos or {}).get("parking_curriculum")
             return infos
 
     return TaskRunner

@@ -676,8 +676,14 @@ def get_cfgs():
         ),
     )
 
-    env["multi_terrain"] = dict(tasks=tasks, level_catalog=level_catalog())
+    env["multi_terrain"] = dict(
+        tasks=tasks, level_catalog=level_catalog(),
+        parking_curriculum=dict(enabled=True, window_episodes=100, success_threshold=0.9,
+                                replay_probability=0.2, post_move_time_s=1.0,
+                                post_spawn_offset_m=0.4, required_speed_m_s=0.2),
+    )
     obs["critic_task_one_hot"] = True
+    obs["critic_stop_phase"] = True
     env.update(
         episode_length_s=25.0,
         resampling_time_s=0.01,

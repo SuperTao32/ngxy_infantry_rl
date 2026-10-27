@@ -12,6 +12,7 @@ from .curriculum import allocate_counts, initial_task_counts, resolve_task_comma
 from .rewards import MultiTerrainRewards
 from .terrain import TaskTerrain
 from .intermittent import IntermittentTraversal
+from .parking import ParkingCurriculum
 
 
 class MultiTerrainEnv(MultiTerrainRewards, LocomotionEnv):
@@ -19,7 +20,9 @@ class MultiTerrainEnv(MultiTerrainRewards, LocomotionEnv):
                      "stairs_up_takeoff", "stairs_up_landing_distance", "stairs_up_approach_lift", "stairs_up_backswing",
                      "stairs_up_forward_swing", "stairs_up_extend", "stairs_up_wheel_support"}
 
-    def __init__(self, num_envs, env_cfg, obs_cfg, reward_cfg, command_cfg, *, evaluation=False, **kwargs):
+    def __init__(self, num_envs, env_cfg, obs_cfg, reward_cfg, command_cfg, *, evaluation=False, parking_evaluation=False, **kwargs):
+        self.evaluation = evaluation
+        self.parking_evaluation = parking_evaluation
         self.tasks = resolve_tasks(env_cfg["multi_terrain"], require_locomotion=not evaluation)
         self.task_terrain = TaskTerrain(self.tasks, initial_task_counts(self.tasks, num_envs, kwargs.get("curriculum_cfg")))
         reward_cfg = deepcopy(reward_cfg)
@@ -102,15 +105,57 @@ class MultiTerrainEnv(MultiTerrainRewards, LocomotionEnv):
         # 基类每拍回调，具体重采样周期由每项任务决定。
         self.resample_step = 1
         self.intermittent = IntermittentTraversal(self)
+        self.parking = ParkingCurriculum(self, evaluation=(getattr(self, "evaluation", False)
+                                                           and not getattr(self, "parking_evaluation", False)))
+        if self.parking.enabled:
+            offset = self.parking.config["post_spawn_offset_m"]
+            for i, (track, stage) in enumerate(zip(self.terrain.tracks, self.terrain.stages)):
+                if track.kind == "locomotion":
+                    continue
+                minimum = self.wheel_radius + stage["success"]["wheel_clearance_m"]
+                if not minimum < offset < self.intermittent.post_brake_limit[i].item() - track.obstacle_end * track.direction:
+                    raise ValueError(f"{track.kind}: parking post_spawn_offset_m leaves insufficient post-stop space")
+                approach = self.intermittent.tables["approach_speed_m_s"][i].item()
+                if min(approach, stage["commands"]["lin_vel_range"][1]) <= self.parking.config["required_speed_m_s"]:
+                    raise ValueError(f"{track.kind}: parking approach command must exceed required_speed_m_s")
+
+    def step(self, actions):
+        result = super().step(actions)
+        # 固定 PPO 采样边界同步，不能在局部 reset 分支中调用 collective。
+        if not self.evaluation and self.global_step % self.steps_per_iteration == 0:
+            self.parking.synchronize()
+        return result
+
+    def _sample_base_reset_state(self, env_ids):
+        state = list(super()._sample_base_reset_state(env_ids))
+        qpos, position, _, _, _, _, ground, centers, tiles = state
+        self.parking.select(self, env_ids, tiles)
+        post = self.parking.post[env_ids]
+        if post.any():
+            # 地形后练习从末沿后的平坦区域出发；z 按实际地面重新计算。
+            offset = self.parking.config["post_spawn_offset_m"]
+            position[post, 0] = centers[post, 0] + self.tables["obstacle_end"][tiles[post]] + self.tables["direction"][tiles[post]] * offset
+            new_ground = self.terrain.height_at(position[:, :2])
+            position[post, 2] += new_ground[post] - ground[post]
+            ground[post] = new_ground[post]
+            qpos[:, :3] = position
+        return tuple(state)
 
     def _value(self, name):
         return self.tables[name][self.terrain_tile_index]
 
     def _get_task_privileged_observation_components(self):
         # 旧 run 的保存配置没有此字段，保留原 critic 输入维度以支持完整续训。
-        if not self.obs_cfg.get("critic_task_one_hot", False):
-            return {}
-        return {"privileged_task_one_hot": self.task_one_hot_table[self.task_ids]}
+        components = {}
+        if self.obs_cfg.get("critic_task_one_hot", False):
+            components["privileged_task_one_hot"] = self.task_one_hot_table[self.task_ids]
+        if self.obs_cfg.get("critic_stop_phase", False):
+            state = self.intermittent
+            # 观测对应下一拍命令，不能使用结算上一拍奖励的 reward_paused。
+            components["privileged_stop_phase"] = torch.stack((
+                state.enabled & (state.phase == state.PRE_STOP),
+                state.enabled & (state.phase == state.POST_STOP)), dim=-1).to(self.base_pos.dtype)
+        return components
 
     def _task_progress_position(self, wheels):
         # 上台阶以双轮中心为进度参考，避免轮子不动时机身前倾也获得前进奖励。
@@ -232,6 +277,8 @@ class MultiTerrainEnv(MultiTerrainRewards, LocomotionEnv):
         self.intermittent.update(self, wheels)
         self.stall_steps.masked_fill_(self.intermittent.reward_paused | self.intermittent.paused, 0)
         self.success &= self.intermittent.success_mask()
+        self.success.copy_(torch.where(self.parking.drill, self.intermittent.stop_event & ~self.intermittent.failed,
+                                       self.success))
 
     def _update_stairs_up_ascent(self, wheels):
         state = self.stairs_up_buffers
@@ -501,7 +548,7 @@ class MultiTerrainEnv(MultiTerrainRewards, LocomotionEnv):
     def _task_termination(self):
         outside = ~self._task_in_corridor(self.base_pos[:, :2])
         stalled = self.stall_steps * self.dt >= self._value("stall_timeout_s")
-        return self.traversal & (outside | (stalled & ~self.success) | self.stairs_up_buffers.fallen_off
+        return self.traversal & (outside | (stalled & ~self.success) | (self.stairs_up_buffers.fallen_off & ~self.parking.drill)
                                  | self.intermittent.failed)
 
     def _task_success(self):
@@ -513,7 +560,7 @@ class MultiTerrainEnv(MultiTerrainRewards, LocomotionEnv):
                     "stairs_up_takeoff", "stairs_up_landing_distance", "stairs_up_approach_lift",
                     "stairs_up_backswing", "stairs_up_forward_swing", "stairs_up_extend",
                     "stairs_up_wheel_support", "stairs_up_wheel_forward_action"}:
-            scale = scale * ~self.intermittent.reward_paused
+            scale = scale * ~self.intermittent.reward_paused * ~self.parking.drill
         return scale
 
     def _record_task_outcomes(self):
@@ -529,7 +576,12 @@ class MultiTerrainEnv(MultiTerrainRewards, LocomotionEnv):
             mse = self.locomotion_buffers.tracking_errors / self.task_steps.clamp_min(1)[:, None]
             passed |= ((self.terrain_tile_index == i) & ~self.terminated_buf & self._episode_timeout()
                        & (mse <= limits).all(dim=1))
-        rows = torch.stack((self.terrain_tile_index[ids], self.terrain.assignment_epoch[ids], passed[ids].long()), dim=1).cpu().tolist()
+        drills = ids[self.parking.drill[ids]]
+        self.parking.observe(self.terrain_tile_index[drills], self.parking.post[drills], passed[drills])
+        # 停车达标不是跨越成功；不能让简单的停车回合推动地形难度升级。
+        crossing_ids = ids[~self.parking.drill[ids]]
+        rows = torch.stack((self.terrain_tile_index[crossing_ids], self.terrain.assignment_epoch[crossing_ids],
+                            passed[crossing_ids].long()), dim=1).cpu().tolist()
         groups = {}
         for tile, epoch, success in rows:
             task, level = self.terrain.variants[tile]
@@ -549,15 +601,27 @@ class MultiTerrainEnv(MultiTerrainRewards, LocomotionEnv):
                 metrics[f"task/{name}/curriculum_success_rate"] = self.terrain.controller.rates[i]
                 metrics[f"task/{name}/window_episodes"] = self.terrain.controller.counts[i]
                 if mask.any():
-                    metrics[f"task/{name}/success"] = self.outcome_success[mask].float()
+                    crossing = mask & ~self.parking.drill
+                    if crossing.any():
+                        metrics[f"task/{name}/success"] = self.outcome_success[crossing].float()
+                    if self.parking.enabled and name != "locomotion":
+                        tile = self.terrain.lookup[i, self.terrain.controller.levels[i]]
+                        prefix = f"task/{name}/parking_"
+                        metrics[prefix + "unlocked"] = self.parking.unlocked[tile].float().item()
+                        for side, label in enumerate(("pre", "post")):
+                            metrics[prefix + label + "_window_rate"] = self.parking.rates[tile, side].item()
+                            metrics[prefix + label + "_window_count"] = self.parking.counts[tile, side].item()
+                            selected = mask & self.parking.drill & (self.parking.post == bool(side))
+                            if selected.any():
+                                metrics[prefix + label + "_success"] = self.outcome_success[selected].float()
                     metrics[f"task/{name}/failure"] = self.terminated_buf[mask].float()
                     metrics[f"task/{name}/duration_s"] = self.task_steps[mask] * self.dt
                     if name != "locomotion":
                         metrics[f"task/{name}/progress_m"] = self.farthest_x[mask] - self.episode_start_x[mask]
                         state = self.intermittent
                         metrics[f"task/{name}/intermittent_fraction"] = state.enabled[mask].float()
-                        intermittent = mask & state.enabled
-                        ordinary = mask & ~state.enabled
+                        intermittent = crossing & state.enabled
+                        ordinary = crossing & ~state.enabled
                         if ordinary.any():
                             metrics[f"task/{name}/ordinary_success"] = self.outcome_success[ordinary].float()
                         if intermittent.any():
@@ -589,9 +653,16 @@ class MultiTerrainEnv(MultiTerrainRewards, LocomotionEnv):
     def terrain_state_dict(self):
         return self.terrain.controller.state_dict()
 
+    def parking_state_dict(self):
+        return self.parking.state_dict()
+
     def reset(self):
         saved = getattr(self, "_pending_terrain_state", None)
         if saved is not None:
             self.terrain.controller.load_state_dict(saved)
             self._pending_terrain_state = None
+        parking = getattr(self, "_pending_parking_state", None)
+        if parking is not None:
+            self.parking.load_state_dict(parking)
+            self._pending_parking_state = None
         return super().reset()
