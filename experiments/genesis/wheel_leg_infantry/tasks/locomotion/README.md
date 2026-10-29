@@ -2,6 +2,66 @@
 
 本目录只维护经典行走训练：速度和高度跟踪、姿态保持、静止站立及随机化课程。
 多地形通关任务统一位于 [`../multi_terrain/`](../multi_terrain/README.md)。
+常规行走配置为 `config_locomotion.py`，训练默认使用该配置，也可显式指定：
+
+```bash
+.venv/bin/python -m experiments.genesis.wheel_leg_infantry.tasks.locomotion.train \
+  --config config_locomotion -e locomotion_v2
+```
+
+locomotion 使用站姿复位和独立的行走课程，不包含起身阶段或起身奖励。standup 使用下方的独立配置，两者分别训练和保存策略。
+
+续训默认读取实验保存的配置；旧的混合训练实验若要改用独立任务配置，需指定 `--resume-config current --config config_locomotion` 或 `--resume-config current --config config_stand_up`。
+
+## 独立起身训练
+
+`config_stand_up.py` 复用 locomotion 环境，单独训练起身与站稳，仅保留 `stand_up` 阶段。每回合连续满足 `env_cfg["stand_up"]` 中的高度、倾角、腿角、速度和接触条件达到 `hold_time_s` 后记录成功，随后继续保持站立，直到回合结束。训练全程使用零速度、零转向和 0.22 m 目标高度，不会自动切入行走课程。行走训练单独使用 `config_locomotion.py`。
+
+```bash
+.venv/bin/python -m experiments.genesis.wheel_leg_infantry.tasks.locomotion.train \
+  --config config_stand_up -e stand_up -B 4096
+
+.venv/bin/python -m experiments.genesis.wheel_leg_infantry.tasks.locomotion.eval \
+  -e stand_up
+```
+
+评估沿用保存的复位姿态和静止指令范围，键盘命令需等站稳后生效。
+
+### 配置复位姿态
+
+直接在 `config_stand_up.py` 顶部设置 `RESET_POSE`，默认指向同目录 `reset_pos.json`。可改为其他 JSON 路径或 `"default"`（0.22 m 默认站姿）：
+
+```python
+# 使用自己的趴伏姿态（相对路径以启动目录为基准）
+RESET_POSE = Path("/path/to/reset_pos.json")
+
+# 或使用默认站姿
+RESET_POSE = "default"
+```
+
+JSON 字段与 Genesis Viewer 的 Quaternion 模式一致：`floating_base_x/y/z` 为机身位置（m），`floating_base_qw/qx/qy/qz` 为四元数（wxyz），其余字段为关节名；转动关节为 rad、滑动关节为 m。必须提供机身坐标和四个驱动关节，可包含被动关节及轮子；初始速度为零。四元数归一化后转为内部 RPY（度）范围，快照数值嵌入实验配置，恢复和评估不再读取源 JSON。
+
+显式复位姿态覆盖所有阶段的复位位置、姿态和速度范围，防止课程覆盖快照。地形自身的出生点规则仍生效，z 为相对地面高度。切回 `default` 会清除快照的被动关节复位值。动作零点仍由 `default_joint_pos` 决定，不随复位姿态改变。起身配置的腿动作限幅为 ±2、轮动作限幅为 ±2，轮速缩放为 35，保留虚拟腿摆角 ±30° 和上杆夹角约束。
+
+### 起身辅助奖励
+
+`reward_cfg` 中新增两项连续误差代价，配合负权重让策略倾向于收腿、将腿摆正；只在每回合的起身阶段计算（含成功当拍），站稳后归零：
+
+| 配置 | 默认值 | 含义 |
+| --- | --- | --- |
+| `stand_up_leg_length_target` | 0.14 m | 腿长超过该值才惩罚，低于目标不再鼓励收缩 |
+| `stand_up_leg_length_sigma` | 0.10 m | 长度误差归一化尺度 |
+| `stand_up_leg_angle_sigma` | 0.5 rad | 腿角误差归一化尺度 |
+| `reward_scales.stand_up_leg_length` | -10.0 | 左右腿超长误差平方均值的权重 |
+| `reward_scales.stand_up_leg_vertical` | -10.0 | 左右腿摆角误差平方均值的权重 |
+
+腿角零点是相对机身向下，机身相对世界竖直由 `base_balance` 约束。连续奖励乘 dt；每回合一次的 `stand_up_success` 奖励默认 500，不乘 dt。成功后起身辅助项归零，其余站立奖励继续计算。
+
+回合时长和倾倒终止阈值在 `env_cfg` 中设置；机身触地不终止，求解错误仍终止，超时仍复位。日志记录 `stand_up_success` 和 `stand_up_duration_s`。起身阶段的动力学随机化和传感器噪声强度均为 0。
+
+可用 `--load-weights CHECKPOINT_PATH` 加载已有策略并从第 0 迭代启动新课程。续训默认使用保存的课程和复位姿态；要应用当前配置文件中的修改，使用 `--resume-config current --config config_stand_up`（保留已训练迭代数）。若要重新经历完整起身课程，应使用 `--load-weights`。
+
+当前可选预设为 `plane`、`stairs`、`platform_ridge`、`trapezoidal_wave`。`stairs` 使用固定箱体楼梯。
 
 Actor 的动作历史按整块并列排列：`actions[21:27]`、`last_actions[27:33]`，随后是 `commands[33:36]` 和 ToF 历史。
 `step(a_t)` 返回的两块分别为裁剪后的 `a_t` 和 `a_(t-1)`，不再施加位置/轮速单位缩放。

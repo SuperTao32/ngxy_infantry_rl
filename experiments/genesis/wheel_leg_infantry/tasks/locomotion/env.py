@@ -30,6 +30,7 @@ from ...terrains.registry import TERRAIN_REGISTRY
 from ...terrains.curriculum import TerrainCourse, merge_terrain_config, terrain_course_configs
 from .rewards import LocomotionRewards
 from .config_common import validate_high_base_height_velocity_limits
+from .stand_up import StandUpPhase
 from .tracking_gate import DEFAULT_TRACKING_GATE_CFG, merge_tracking_gate_config, smooth_gate
 from .velocity_estimator import (
     complementary_forward_velocity_update,
@@ -105,6 +106,10 @@ class LocomotionEnv(LocomotionRewards):
         self.resample_step = self.env_cfg["resampling_time_s"] / self.dt
         self.simulate_action_latency = env_cfg["simulate_action_latency"]
         self.max_episode_length = math.ceil(env_cfg["episode_length_s"] / self.dt)
+        self.stand_up = (
+            StandUpPhase(env_cfg["stand_up"], num_envs, self.dt, self.device)
+            if env_cfg.get("stand_up") else None
+        )
 
         # IMU配置
         self.imu_cfg = self.sensor_noise.imu_options(obs_cfg.get("imu", {}))
@@ -177,13 +182,19 @@ class LocomotionEnv(LocomotionRewards):
         self.max_leg_length = self.leg_upper_link_length * math.sin(half_separation) + math.sqrt(
             max(self.leg_lower_link_length**2 - (self.leg_upper_link_length * math.cos(half_separation)) ** 2, 0.0)
         )
-        # 初始关节位置、腿长和腿角
-        self.init_joint_pos = torch.tensor(
+        # 动作零点与复位姿态分开：起身任务还需要还原被动关节和轮子的角度。
+        self.reset_joint_pos = dict(self.env_cfg["default_joint_pos"])
+        self.reset_joint_pos.update(self.env_cfg.get("reset_joint_pos", {}))
+        self.default_joint_pos = torch.tensor(
             [self.env_cfg["default_joint_pos"][name] for name in joint_names],
             dtype=gs.tc_float,
             device=self.device,
         )
-        self.default_joint_pos = self.init_joint_pos.clone()
+        self.init_joint_pos = torch.tensor(
+            [self.reset_joint_pos[name] for name in joint_names],
+            dtype=gs.tc_float,
+            device=self.device,
+        )
         self.init_leg_length = compute_leg_length(
             self.init_joint_pos,
             self.leg_front_joint_indices,
@@ -416,11 +427,14 @@ class LocomotionEnv(LocomotionRewards):
             setattr(self, f"gas_spring_{name}", value)
 
         # 初始化joint和dof的初始位置
+        unknown_reset_joints = self.reset_joint_pos.keys() - {joint.name for joint in self.robot.joints if joint.n_qs == 1}
+        if unknown_reset_joints:
+            raise ValueError(f"Reset positions require named scalar joints: {sorted(unknown_reset_joints)}")
         init_dof_pos_list = []
         for joint in self.robot.joints[1:]:
             if joint.n_qs == 0:
                 continue
-            init_pos = self.env_cfg["default_joint_pos"].get(joint.name, 0.0)
+            init_pos = self.reset_joint_pos.get(joint.name, 0.0)
             init_dof_pos_list.append(init_pos)
 
         self.init_dof_pos = torch.tensor(init_dof_pos_list, dtype=gs.tc_float, device=self.device)
@@ -561,6 +575,11 @@ class LocomotionEnv(LocomotionRewards):
             raise ValueError("tilt_termination_duration_s must be positive")
         if self.base_contact_termination_duration_s is not None and self.base_contact_termination_duration_s <= 0.0:
             raise ValueError("base_contact_termination_duration_s must be positive")
+        for name in ("stand_up_leg_length_target", "stand_up_leg_length_sigma", "stand_up_leg_angle_sigma"):
+            if name in self.reward_cfg:
+                value = float(self.reward_cfg[name])
+                if not math.isfinite(value) or value <= 0.0:
+                    raise ValueError(f"{name} must be finite and positive")
         if torch.any(self.joint_force_limit <= 0.0) or torch.any(self.wheel_force_limit <= 0.0):
             raise ValueError("joint_force_limit and wheel_force_limit must be positive")
 
@@ -698,6 +717,8 @@ class LocomotionEnv(LocomotionRewards):
         )
         self._update_tracking_gate()
         self._update_task_state()
+        if self.stand_up is not None:
+            self.stand_up.update(self)
 
         ########### 判断终止 ###########
         tilt_out = self._tilt_failure()
@@ -747,7 +768,11 @@ class LocomotionEnv(LocomotionRewards):
         self._record_task_outcomes()
 
         ########### 重采样指令 ###########
-        self._resample_commands(self.episode_length_buf % self.resample_step == 0)
+        resample_commands = self.episode_length_buf % self.resample_step == 0
+        if self.stand_up is not None:
+            # 本拍奖励仍使用起身命令；新行走命令只出现在下一拍观测中。
+            resample_commands |= self.stand_up.just_completed
+        self._resample_commands(resample_commands)
 
         # 先完成旧地形上的动作和奖励，再切换并返回新地形的 reset 观测。
         # 将切换作为截断交给 runner，避免 GAE 跨越不同地形的回合。
@@ -756,7 +781,8 @@ class LocomotionEnv(LocomotionRewards):
             time_out |= ~self.terminated_buf
 
         ########### 计算timeout ###########
-        self.extras["time_outs"] = time_out.to(dtype=gs.tc_float)
+        # 失败与截断同拍发生时按失败处理，不对终止状态 bootstrap。
+        self.extras["time_outs"] = (time_out & ~self.terminated_buf).to(dtype=gs.tc_float)
 
         ########### 重置环境（如果需要）###########
         self._reset_idx(self.reset_buf)
@@ -978,6 +1004,12 @@ class LocomotionEnv(LocomotionRewards):
                 for value in self.episode_metric_sums.values():
                     value.zero_()
 
+        if self.stand_up is not None:
+            if env_idx is not None:
+                self.extras["episode"]["stand_up_success"] = (~self.stand_up.active[env_idx]).to(gs.tc_float)
+                self.extras["episode"]["stand_up_duration_s"] = self.stand_up.elapsed_steps[env_idx] * self.dt
+            self.stand_up.reset(env_idx)
+
         # 重选指令
         self._resample_commands(env_idx)
 
@@ -1082,6 +1114,9 @@ class LocomotionEnv(LocomotionRewards):
             standing = torch.rand_like(commands[:, 0]) < standing_probability
             commands[:, :2].masked_fill_(standing[:, None], 0.0)
         return commands
+        if getattr(self, "stand_up", None) is not None:
+            self.stand_up.enforce_commands(self.commands)
+        return
 
     # ============ 控制与状态更新：控制发生在 scene.step 前，状态更新发生在其后 ============
     def _apply_gas_spring_compensation(self):
@@ -1229,6 +1264,9 @@ class LocomotionEnv(LocomotionRewards):
 
     def _update_observations(self):
         """按固定顺序组装 actor 观测及包含仿真真值的 critic 观测。"""
+        if getattr(self, "stand_up", None) is not None:
+            # 评估键盘也必须先完成起身，策略始终看到实际执行的任务命令。
+            self.stand_up.enforce_commands(self.commands)
         # 字典插入顺序就是策略输入的拼接顺序；调整顺序或维度后旧模型将不再兼容。
         self.obs_components = {
             "imu_ang_vel": self.imu_ang_vel * self.obs_scales["ang_vel"],  # 3
@@ -1355,13 +1393,13 @@ class LocomotionEnv(LocomotionRewards):
         self.terrain_reward_scales = normalized
 
     def _apply_reward_scales(self, values):
-        """应用原始奖励权重；除死亡奖励外，运行时权重统一乘以 dt。"""
+        """连续奖励乘 dt；死亡和单次起身成功事件直接使用配置权重。"""
         for name, raw_scale in values.items():
             reward_function = getattr(self, "_reward_" + name)
             raw_scale = float(raw_scale)
             self.raw_reward_scales[name] = raw_scale
             self.reward_cfg["reward_scales"][name] = raw_scale
-            self.reward_scales[name] = raw_scale if name == "death" else raw_scale * self.dt
+            self.reward_scales[name] = raw_scale if name in {"death", "stand_up_success"} else raw_scale * self.dt
             self.reward_functions[name] = reward_function
             if name not in self.episode_sums:
                 self.episode_sums[name] = torch.zeros((self.num_envs,), dtype=gs.tc_float, device=gs.device)
