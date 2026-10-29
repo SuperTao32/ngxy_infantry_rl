@@ -224,7 +224,7 @@ class JumpEnv(JumpRewards, LocomotionEnv):
     # ============ 每轮生命周期：teacher 预热 → jump 采集 → 统计结算 ============
 
     def prepare_locomotion_warmup(self, command_ranges=None):
-        """重置物理环境并采样固定 teacher command；返回 38D teacher 观测。"""
+        """重置物理环境并采样固定 teacher command；返回 36D teacher 观测。"""
         # teacher step 不推进 global_step，因此用已完成的 jump 步数在 warmup 前
         # 切换课程，保证新阶段 command 当轮生效，而不是到 jump 第一拍才更新。
         iteration = self.global_step // self.steps_per_iteration
@@ -729,7 +729,7 @@ class JumpEnv(JumpRewards, LocomotionEnv):
     # ============ 观测：teacher 公共前缀、actor 输入与 critic 真值 ============
 
     def get_locomotion_observations(self):
-        """返回 jump actor 的 38 维 locomotion 公共前缀。"""
+        """返回 jump actor 的 36 维 locomotion 公共前缀。"""
         self._update_observations()
         names = tuple(name for name, _ in LOCOMOTION_POLICY_LAYOUT)
         if tuple(self.obs_components)[:len(names)] != names:
@@ -762,12 +762,6 @@ class JumpEnv(JumpRewards, LocomotionEnv):
         return {
             "jump_phase": self.phase_features,  # 6
             "jump_mode": self.jump_mode_one_hot,  # 3
-        }
-
-    def _get_landing_privileged_observation_components(self):
-        # Critic 读取本回合是否已落地的锁存状态；actor 不读取接触真值。
-        return {
-            "privileged_jump_landed": self.has_landed.unsqueeze(-1).to(dtype=gs.tc_float),
         }
 
     def _get_task_privileged_observation_components(self):

@@ -56,6 +56,11 @@ class MultiTerrainEnv(MultiTerrainRewards, LocomotionEnv):
 
     def _initialize_task_buffers(self):
         # 所有任务共用：分组、进度、计时、回合结果。
+        threshold = self.obs_cfg.get("critic_task_one_hot_vx_threshold", 0.5)
+        if (isinstance(threshold, bool) or not isinstance(threshold, (int, float))
+                or not math.isfinite(threshold) or threshold < 0):
+            raise ValueError("critic_task_one_hot_vx_threshold must be finite and nonnegative, in m/s")
+        self.task_one_hot_vx_threshold = threshold
         self.task_ids = self.terrain.fixed_types
         # task_ids 使用当前任务子集的局部编号；观测始终使用完整 TASK_NAMES 编码。
         self.task_one_hot_table = torch.eye(len(TASK_NAMES), device=self.device, dtype=self.base_pos.dtype)[
@@ -108,13 +113,9 @@ class MultiTerrainEnv(MultiTerrainRewards, LocomotionEnv):
         self.parking = ParkingCurriculum(self, evaluation=(getattr(self, "evaluation", False)
                                                            and not getattr(self, "parking_evaluation", False)))
         if self.parking.enabled:
-            offset = self.parking.config["post_spawn_offset_m"]
             for i, (track, stage) in enumerate(zip(self.terrain.tracks, self.terrain.stages)):
                 if track.kind == "locomotion":
                     continue
-                minimum = self.wheel_radius + stage["success"]["wheel_clearance_m"]
-                if not minimum < offset < self.intermittent.post_brake_limit[i].item() - track.obstacle_end * track.direction:
-                    raise ValueError(f"{track.kind}: parking post_spawn_offset_m leaves insufficient post-stop space")
                 approach = self.intermittent.tables["approach_speed_m_s"][i].item()
                 if min(approach, stage["commands"]["lin_vel_range"][1]) <= self.parking.config["required_speed_m_s"]:
                     raise ValueError(f"{track.kind}: parking approach command must exceed required_speed_m_s")
@@ -127,19 +128,9 @@ class MultiTerrainEnv(MultiTerrainRewards, LocomotionEnv):
         return result
 
     def _sample_base_reset_state(self, env_ids):
-        state = list(super()._sample_base_reset_state(env_ids))
-        qpos, position, _, _, _, _, ground, centers, tiles = state
-        self.parking.select(self, env_ids, tiles)
-        post = self.parking.post[env_ids]
-        if post.any():
-            # 地形后练习从末沿后的平坦区域出发；z 按实际地面重新计算。
-            offset = self.parking.config["post_spawn_offset_m"]
-            position[post, 0] = centers[post, 0] + self.tables["obstacle_end"][tiles[post]] + self.tables["direction"][tiles[post]] * offset
-            new_ground = self.terrain.height_at(position[:, :2])
-            position[post, 2] += new_ground[post] - ground[post]
-            ground[post] = new_ground[post]
-            qpos[:, :3] = position
-        return tuple(state)
+        state = super()._sample_base_reset_state(env_ids)
+        self.parking.select(self, env_ids, state[-1])
+        return state
 
     def _value(self, name):
         return self.tables[name][self.terrain_tile_index]
@@ -148,13 +139,9 @@ class MultiTerrainEnv(MultiTerrainRewards, LocomotionEnv):
         # 旧 run 的保存配置没有此字段，保留原 critic 输入维度以支持完整续训。
         components = {}
         if self.obs_cfg.get("critic_task_one_hot", False):
-            components["privileged_task_one_hot"] = self.task_one_hot_table[self.task_ids]
-        if self.obs_cfg.get("critic_stop_phase", False):
-            state = self.intermittent
-            # 观测对应下一拍命令，不能使用结算上一拍奖励的 reward_paused。
-            components["privileged_stop_phase"] = torch.stack((
-                state.enabled & (state.phase == state.PRE_STOP),
-                state.enabled & (state.phase == state.POST_STOP)), dim=-1).to(self.base_pos.dtype)
+            # 使用当前原始命令（m/s），停车指令生效时立即清空地形掩码。
+            active = self.commands[:, 0] > self.task_one_hot_vx_threshold
+            components["privileged_task_one_hot"] = self.task_one_hot_table[self.task_ids] * active[:, None]
         return components
 
     def _task_progress_position(self, wheels):
@@ -577,7 +564,7 @@ class MultiTerrainEnv(MultiTerrainRewards, LocomotionEnv):
             passed |= ((self.terrain_tile_index == i) & ~self.terminated_buf & self._episode_timeout()
                        & (mse <= limits).all(dim=1))
         drills = ids[self.parking.drill[ids]]
-        self.parking.observe(self.terrain_tile_index[drills], self.parking.post[drills], passed[drills])
+        self.parking.observe(self.terrain_tile_index[drills], passed[drills])
         # 停车达标不是跨越成功；不能让简单的停车回合推动地形难度升级。
         crossing_ids = ids[~self.parking.drill[ids]]
         rows = torch.stack((self.terrain_tile_index[crossing_ids], self.terrain.assignment_epoch[crossing_ids],
@@ -608,12 +595,11 @@ class MultiTerrainEnv(MultiTerrainRewards, LocomotionEnv):
                         tile = self.terrain.lookup[i, self.terrain.controller.levels[i]]
                         prefix = f"task/{name}/parking_"
                         metrics[prefix + "unlocked"] = self.parking.unlocked[tile].float().item()
-                        for side, label in enumerate(("pre", "post")):
-                            metrics[prefix + label + "_window_rate"] = self.parking.rates[tile, side].item()
-                            metrics[prefix + label + "_window_count"] = self.parking.counts[tile, side].item()
-                            selected = mask & self.parking.drill & (self.parking.post == bool(side))
-                            if selected.any():
-                                metrics[prefix + label + "_success"] = self.outcome_success[selected].float()
+                        metrics[prefix + "pre_window_rate"] = self.parking.rates[tile].item()
+                        metrics[prefix + "pre_window_count"] = self.parking.counts[tile].item()
+                        selected = mask & self.parking.drill
+                        if selected.any():
+                            metrics[prefix + "pre_success"] = self.outcome_success[selected].float()
                     metrics[f"task/{name}/failure"] = self.terminated_buf[mask].float()
                     metrics[f"task/{name}/duration_s"] = self.task_steps[mask] * self.dt
                     if name != "locomotion":
@@ -628,7 +614,6 @@ class MultiTerrainEnv(MultiTerrainRewards, LocomotionEnv):
                             prefix = f"task/{name}/intermittent_"
                             metrics[prefix + "success"] = self.outcome_success[intermittent].float()
                             metrics[prefix + "pre_stop_completed"] = (state.completed_stops[intermittent] >= 1).float()
-                            metrics[prefix + "post_stop_completed"] = (state.completed_stops[intermittent] >= 2).float()
                             metrics[prefix + "stop_failure"] = state.failed[intermittent].float()
                             metrics[prefix + "max_stop_drift_m"] = state.max_stop_drift[intermittent]
                     if name == "stairs_up":

@@ -38,7 +38,7 @@ def main(argv=None):
                         help="terrain LEVELS difficulty; default: maximum configured difficulty")
     parser.add_argument("--intermittent", action=argparse.BooleanOptionalAction, default=None,
                         help="force intermittent traversal on/off (default: use saved episode probability)")
-    parser.add_argument("--parking-only", action="store_true", help="evaluate pre/post parking exercises without crossing terrain")
+    parser.add_argument("--parking-only", action="store_true", help="evaluate pre-terrain parking without crossing terrain")
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--headless", action="store_true")
     parser.add_argument("--steps", type=int, default=3000)
@@ -88,7 +88,7 @@ def main(argv=None):
     wins = episodes = 0
     mode_wins = dict(ordinary=0, intermittent=0)
     mode_episodes = dict(ordinary=0, intermittent=0)
-    parking_wins, parking_episodes = dict(pre=0, post=0), dict(pre=0, post=0)
+    parking_wins = parking_episodes = 0
     with torch.no_grad():
         for _ in range(args.steps):
             if not args.headless and not env.scene.viewer.is_alive():
@@ -98,13 +98,11 @@ def main(argv=None):
                 metrics = info["episode"]
                 prefix = f"task/{args.task}/"
                 if args.parking_only:
-                    side = "post" if prefix + "parking_post_success" in metrics else "pre"
-                    won = int(metrics[prefix + f"parking_{side}_success"].item())
-                    parking_wins[side] += won
-                    parking_episodes[side] += 1
-                    print(f"[eval] {args.task}/level_{difficulty}: parking_{side} success={won} "
-                          f"pre={parking_wins['pre']}/{parking_episodes['pre']} "
-                          f"post={parking_wins['post']}/{parking_episodes['post']}")
+                    won = int(metrics[prefix + "parking_pre_success"].item())
+                    parking_wins += won
+                    parking_episodes += 1
+                    print(f"[eval] {args.task}/level_{difficulty}: parking_pre success={won} "
+                          f"pre={parking_wins}/{parking_episodes}")
                     continue
                 # step 已自动 reset；从本回合的结算指标读取模式，不能读取下一回合的状态。
                 mode = "intermittent" if prefix + "intermittent_success" in metrics else "ordinary"
@@ -117,7 +115,7 @@ def main(argv=None):
                 if mode == "intermittent":
                     detail = " " + " ".join(
                         f"{key}={metrics[prefix + 'intermittent_' + key].item():g}"
-                        for key in ("pre_stop_completed", "post_stop_completed", "stop_failure", "max_stop_drift_m"))
+                        for key in ("pre_stop_completed", "stop_failure", "max_stop_drift_m"))
                 print(f"[eval] {args.task}/level_{difficulty}: mode={mode} success={wins}/{episodes} "
                       f"ordinary={mode_wins['ordinary']}/{mode_episodes['ordinary']} "
                       f"intermittent={mode_wins['intermittent']}/{mode_episodes['intermittent']}{detail}")

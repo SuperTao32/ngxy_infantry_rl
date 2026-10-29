@@ -26,7 +26,7 @@ def validate_locomotion_source(source_configs: Mapping) -> None:
     obs_cfg = source_configs["obs_cfg"]
     if resolve_tof_cfg(obs_cfg.get("tof"))["include_in_observation"]:
         raise ValueError(
-            "jump requires a 38-dimensional locomotion teacher without ToF observations; "
+            "jump requires a 36-dimensional locomotion teacher without ToF observations; "
             "train locomotion with tof.include_in_observation=False"
         )
     command_cfg = source_configs["command_cfg"]
@@ -61,7 +61,6 @@ def validate_locomotion_source(source_configs: Mapping) -> None:
         "wheel_vel",
         "base_height",
         "leg_length",
-        "leg_angle",
     }
     missing_obs_scales = required_obs_scales.difference(obs_cfg.get("obs_scales", {}))
     if missing_obs_scales:

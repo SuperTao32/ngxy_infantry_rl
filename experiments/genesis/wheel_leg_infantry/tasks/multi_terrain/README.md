@@ -62,17 +62,23 @@ TensorBoard 的任务指标和 checkpoint 的课程窗口来自 rank 0，续训�
 ## 默认任务与配比
 
 新训练默认启用 `obs_cfg["critic_task_one_hot"]`，仅在 critic 观测末尾追加 8 维任务 one-hot，actor 输入不变。
+共享的机身分区接触与实际离地高度默认再提供 7D，规则见 [locomotion 观测说明](../locomotion/README.md)。
+默认 3 帧 ToF 时 critic 为 80D，关闭 ToF 时为 68D；任务 one-hot 始终位于末尾。
+独立的落地特权观测已移除，包含该通道的旧 critic/优化器不能直接加载。
+`--load-weights` 的 8D 地形编码迁移要求来源和目标的机身观测开关一致，不会自动迁移新增的机身 7D。
+仅当当前原始 `command vx > obs_cfg["critic_task_one_hot_vx_threshold"]` 时，当前任务对应位为 1；
+当前配置阈值为 **0.499 m/s**，等于阈值、零速及负向命令时 8 位全部为 0，不使用实际速度或速度绝对值判断。
 编码顺序固定为 `locomotion, stairs_down, stairs_up, slope_up, slope_down, square_wave, platform_ridge_down, platform_ridge_up`；
 禁用部分任务或单任务评估时仍使用相同的 8 维编码，课程重新分配任务后随环境 reset 更新。
 旧 run 的保存配置没有该字段时，续训和评估保留旧观测维度。
 通过 `--load-weights` 迁移旧默认 MLP 权重到新训练时，critic 第一层新增的 8 列权重置零，保留初始 value。
 旧 checkpoint 要启用此功能应使用 `--load-weights` 开始新 run；完整 `--resume` 要求模型和优化器维度一致。
 
-新训练还启用 `obs_cfg["critic_stop_phase"]`，在 task one-hot 后追加两维
-`[pre_stop, post_stop]`：地形前停车为 `[1,0]`，地形后停车为 `[0,1]`，接近、跨越和重新起步为 `[0,0]`。
-这两位表示下一拍命令对应的阶段，不是“已经停稳”；只进入 critic，actor 和部署输入维度不变。
-旧配置缺少该字段时不追加观测。`--load-weights` 支持旧多地形 critic 追加 2 列、旧平地 critic
-追加 8+2 列，新增第一层权重为零，保留原初始价值输出及已有归一化统计；完整续训仍严格匹配维度。
+Critic 不再追加前/后停车阶段标记，旧存档中的 `critic_stop_phase` 字段也不生效。
+`--load-weights` 支持基础观测布局相同的平地 critic 补齐 8 列地形编码（新增权重为零），
+并同步扩展归一化统计；完整续训仍严格匹配维度。
+所有任务已移除左右腿角观测，包含腿角的旧 actor/critic checkpoint 不能直接加载，需要重新训练。
+不能将少两维解释为删除末尾停车标记，因为腿角原本位于动作历史之前。
 
 ### 先停车，成功率达标后跨越
 
@@ -81,36 +87,32 @@ TensorBoard 的任务指标和 checkpoint 的课程窗口来自 rank 0，续训�
 ```python
 parking_curriculum=dict(
     enabled=True,
-    window_episodes=100,       # 每个地形、每个难度、每侧至少 100 次完整练习
-    success_threshold=0.9,    # 前/后停车两侧都达到门槛才解锁跨越
+    window_episodes=100,       # 每个地形、每个难度至少 100 次完整练习
+    success_threshold=0.9,    # 地形前停车达到门槛后解锁跨越
     replay_probability=0.2,  # 解锁后仍保留 20% 独立停车练习
-    post_move_time_s=1.0,    # 地形后先行驶再停车，短平台按剩余空间提前制动
-    post_spawn_offset_m=0.4, # 地形后出生的 base 到末沿的水平 x 距离
     required_speed_m_s=0.2, # 实际水平速度曾达到此值才能进入练习的制动阶段
 )
 ```
 
 每个已分配到环境的地形从自己的最低配置难度开始。未解锁时，该难度的所有回合都是停车练习：
-随机一半在地形前接近并停车，一半直接出生在地形后的安全区域，行驶后停车。
+所有练习均从地形前接近并停车。
 保留实际地形、ToF 和高度命令，停车门限、连续保持时间、漂移约束和超时沿用该地形的 `intermittent` 配置。
-每次仅完成一个停车阶段就成功结束，失败/超时也计入该侧分母；从未实际行驶的策略不能靠原地站立达标。
+每次停稳达标就成功结束，失败/超时也计入成功率分母；从未实际行驶的策略不能靠原地站立达标。
 独立练习的行驶速度上限沿用各地形的 `intermittent.approach_speed_m_s`（当前通常为 0.5 m/s），
 同时受该回合采样速度限制；门槛证明的是这个练习速度分布下的停车能力。
-解锁后完整通行中较高速度的地形后停车仍需学习和评估，不能把低速练习达标视为所有速度都能停稳。
-地形后出生高度按当地地面重新计算。较短的上行凸台平台会根据剩余空间提前发出零速命令。
 
-前、后两侧分别统计完整回合。在 PPO 采样轮次边界合并所有 GPU 的数量与成功数，
-某侧累计至少 `window_episodes` 次后结算整个批次，更新该侧成功率并清空计数。
-两侧最近已结算窗口都达标后，解锁该地形、该难度；解锁只影响下一次 reset，不改变进行中的练习。
-解锁后 80% 回合按原配置练通行（其中仍按 `intermittent.probability` 抽取前后停车的完整通行），20% 保留独立停车。
+在 PPO 采样轮次边界合并所有 GPU 的练习数量与成功数，
+累计至少 `window_episodes` 次后结算整个批次，更新成功率并清空计数。
+窗口成功率达标后，解锁该地形、该难度；解锁只影响下一次 reset，不改变进行中的练习。
+解锁后 80% 回合按原配置练通行（其中仍按 `intermittent.probability` 抽取地形前停车的完整通行），20% 保留独立停车。
 解锁状态锁存，地形升到尚未通过的新难度时需要重新达标；退回已经通过的难度时沿用其状态。
 各地形独立解锁，不必等待其他地形。全局按迭代数安排的任务配额/随机化仍生效，但不能绕过停车门槛。
 
 独立停车期间不发放通行进度、通关及上台阶动作引导奖励，沿用原有零速、平衡等奖励和 `intermittent_stop` 事件奖励。
 停车成功不进入通关难度课程的样本，防止简单停车把地形难度推高。
-`task/<任务>/parking_pre_success`、`parking_post_success` 是本批练习结果，
-`parking_pre_window_rate` / `parking_post_window_rate` 是最近结算窗口成功率，
-`parking_pre_window_count` / `parking_post_window_count` 是尚未结算的计数，`parking_unlocked` 表示当前难度是否解锁。
+`task/<任务>/parking_pre_success` 是本批练习结果，
+`parking_pre_window_rate` 是最近结算窗口成功率，
+`parking_pre_window_count` 是尚未结算的计数，`parking_unlocked` 表示当前难度是否解锁。
 原 `task/<任务>/success` 和普通/间断通行统计仅记录非停车练习回合。
 
 从已有平地 locomotion 权重开始多地形停车课程（优化器、课程从头开始，源 run 保留）：
@@ -121,10 +123,11 @@ parking_curriculum=dict(
   --load-weights logs/locomotion_v6/version_0002/model_6000.pt
 ```
 
-从此平地模型迁移时，critic 第一层补齐 8 维地形 one-hot 和 2 维停车阶段，新增权重为零。
-也兼容从旧多地形模型迁移（仅补齐 2 维停车阶段），但训练起点不要求使用旧多地形模型。
+从此平地模型迁移时，critic 第一层仅补齐 8 维地形 one-hot，新增权重为零。
+也可从基础观测布局相同的多地形模型迁移。
 多卡启动方式同上面的 `torch.distributed.run`。每轮所有 worker 都参与停车统计合并，包括没有结束回合的 worker。
-Checkpoint 同时保存两侧窗口、成功率和解锁状态；新 run 使用 `--resume` 可完整恢复。
+Checkpoint 保存地形前停车的窗口、成功率和解锁状态；同配置的新 run 使用 `--resume` 可完整恢复。
+旧版双侧停车配置和课程快照不再兼容，请使用 `--load-weights` 新建训练。
 旧 run 直接 `--resume` 仍读取旧配置，不会自动启用此课程；旧模型启用 critic 扩维应使用 `--load-weights`，不能完整恢复旧优化器。
 
 可独立评估地形附近停车，适合对比旧/新模型；评估不会自动解锁为跨越：
@@ -134,7 +137,7 @@ Checkpoint 同时保存两侧窗口、成功率和解锁状态；新 run 使用 
   -e multi_terrain_parking --task stairs_up --difficulty 0 --parking-only --headless --steps 10000
 ```
 
-普通 eval 仍测试完整通行，不受训练时停车门槛限制。`--parking-only` 分别打印前/后停车成功数和试验数，
+普通 eval 仍测试完整通行，不受训练时停车门槛限制。`--parking-only` 打印地形前停车成功数和试验数，
 不可与 `--no-intermittent` 或 `--task locomotion` 合用。
 
 配置入口：`config.py` 的 `get_cfgs()`，最终保存在 `env_cfg["multi_terrain"]["tasks"]`。
@@ -179,27 +182,19 @@ intermittent=_intermittent_cfg(
     approach_speed_m_s=1.0,                  # 接近阶段速度上限
     crossing_speed_m_s=2.0,                  # 间断模式所有运动阶段的速度上限
     pre_stop_distance_range_m=[0.3, 0.4],    # 最大前冲后希望保留的轮心到第一沿的距离
-    post_stop_distance_range_m=[0.25, 0.35], # 最后沿后发出零速指令的轮心距离
     braking_distance_scale=1.25,             # 实测最大轮心前冲乘数
-    braking_distance_margin_m=0.05,          # 额外提前量，同时作为沿后回退余量
+    braking_distance_margin_m=0.05,          # 制动额外提前量
     braking_time_margin_s=0.5,               # 实测时间之外的额外宽限
-    hold_duration_range_s=[0.5, 1.5],         # 连续停稳时长，本回合两次停车共用
+    hold_duration_range_s=[0.5, 1.5],         # 地形前连续停稳时长
     stop_timeout_s=4.0,                      # 每次停车总时限下限，预测需要更久时自动增加
     max_braking_distance_m=1.1,              # 收到零指令到首次停稳的最大机身位移，硬上限
     stop_position_tolerance_m=0.15,          # 首次停稳后相对固定位置的最大漂移
     stop_lin_vel_m_s=0.08,                   # 世界水平速度的停稳门限
     stop_ang_vel_rad_s=0.15,                 # 三轴角速度模长的停稳门限
     edge_margin_m=0.2,                      # 边缘前轮子外缘的最小余量
-    restart_distance_m=0.5,                  # 第二次停车后必须重新前进的距离
-    extra_episode_time_s=6.0,                # 为慢速接近/再次起步增加的运动时间
+    extra_episode_time_s=6.0,                # 为慢速接近增加的运动时间
 ),
 ```
-
-`platform_ridge_up` 的末端平台仅长 1.2 m，扣除边界余量后约 0.95 m 可用。
-该任务间断模式的 `crossing_speed_m_s=0.5`（接近、通过、重新起步均生效），
-沿后触发距离为 0.26～0.28 m、最大机身制动位移为 0.3 m、停稳漂移上限为 0.1 m、
-重新起步距离为 0.2 m。距离预算合计 0.88 m，配置仍检查所有难度的地面空间。
-普通通关回合不应用这些速度限制。
 
 制动标定来自 `logs/locomotion_v6/version_0002/braking_eval/20261024_164833_149169`，
 对应 `model_6100.pt`。16 次平地试验均停稳，关闭随机化、每个组合仅一次：
@@ -227,9 +222,7 @@ intermittent=_intermittent_cfg(
 例如实际约 1 m/s、`dt=0.01 s` 时，默认约在第一沿前 0.76～0.90 m 发 stop。
 新参数中的 0.3～0.4 m 是预留距离，已包含轮半径与边缘安全余量，不能再次作为固定触发点。
 停车总时限为 `max(stop_timeout_s, 预测停车时间 - 0.5 + 本回合停留时间 + braking_time_margin_s)`，
-发出 stop 时冻结；默认标定范围内最长约 4.62 s。沿后仍须双轮离开障碍并接地，
-触发距离至少为 `轮半径 + wheel_clearance_m + braking_distance_margin_m`，给小幅回退留空间。
-沿后受地形约束不能任意提前，短平台通过降低间断模式速度控制制动距离。
+发出 stop 时冻结；默认标定范围内最长约 4.62 s。
 
 也可在 `curriculum.overrides[level]["intermittent"]` 中按难度覆盖比例或参数。
 比例是回合抽样概率，不是严格的环境配额或训练时间占比；间断回合通常更长。
@@ -239,17 +232,15 @@ intermittent=_intermittent_cfg(
 
 1. **接近**：保持本回合机身高度，前进指令不超过任务采样速度、`approach_speed_m_s` 和 `crossing_speed_m_s`。
 2. **边缘前停留**：任一轮心进入预测的沿前触发距离后，线速度和偏航速度设为零；双轮必须留在第一障碍沿前。
-3. **通过地形**：连续停稳达标后恢复正向速度，受 `crossing_speed_m_s` 限制。
-4. **通过后停车**：双轮越过最后障碍沿、满足轮子余量且接地，并到达抽样的沿后距离，再给零速度指令。
-5. **重新起步**：再次连续停稳后恢复行驶；实际前进至少 `restart_distance_m` 且满足原通关条件，才结束回合。
+3. **通过地形**：连续停稳达标后恢复正向速度，受 `crossing_speed_m_s` 限制；满足原通关条件即结束回合。
 
 台阶/坡面入口使用真实几何起点；平台凸台下行入口是凸台前沿，上行入口是第一平台前沿。
-组合地形在整个障碍之前和之后各停一次，不要求在每个中间边缘停车。
-沿前距离取更靠近入口的轮心，沿后距离取更靠近末沿的轮心，支持斜向接近。
-`predictive_braking=False` 时沿前距离仍是旧版的固定触发距离；新模式的沿前距离是最大前冲后的预留距离。沿后距离始终是发出停车指令的位置。
+组合地形只在整个障碍之前停一次，不要求在每个中间边缘停车。
+沿前距离取更靠近入口的轮心，支持斜向接近。
+`predictive_braking=False` 时沿前距离仍是旧版的固定触发距离；新模式的沿前距离是最大前冲后的预留距离。
 
 停稳需要同时满足速度门限、双轮接地、机身未触地和位置约束；任一条件不满足会清零连续停稳计时。
-边缘前越沿、停车位移越界或停车超时判为失败；两次停车不能靠等待时间或提前到终点跳过。
+边缘前越沿、停车位移越界或停车超时判为失败；地形前停车不能靠等待时间或提前到终点跳过。
 制动完成后固定停留位置，后续振荡不会重新选取锚点，避免靠缓慢漂移不断移动停车位置。
 
 停车期间暂停停滞计时，屏蔽前进/通关及上台阶动作引导奖励，保留平衡、碰撞和零速跟踪约束。
@@ -258,21 +249,19 @@ intermittent=_intermittent_cfg(
 回合时限为原时限 + `extra_episode_time_s` + 已实际消耗的停车时间；每次停车仍受独立、进入停车时冻结的总时限限制。
 
 TensorBoard 在 `task/<任务名>/` 下分别记录 `ordinary_success`、`intermittent_success`、
-`intermittent_fraction`、`intermittent_pre_stop_completed`、`intermittent_post_stop_completed`、
+`intermittent_fraction`、`intermittent_pre_stop_completed`、
 `intermittent_stop_failure` 和 `intermittent_max_stop_drift_m`。最后一项不包含首次停稳之前的制动距离。
 任务成功率课程统计两种模式的完整回合结果。
 
 状态机使用训练地形真值安排命令，不增加 actor 观测维度，不要求部署端提供阶段编号。
-新配置通过 `critic_stop_phase` 给 critic 追加前/后停车标记；旧配置保留原 critic 维度。
+Critic 仅保留按 `critic_task_one_hot_vx_threshold` 速度命令阈值激活的地形编码，不追加停车阶段标记。
 缺少 `intermittent` 的旧配置默认关闭。**旧 run 直接 `--resume` 会继续使用旧保存配置**；
 缺少 `predictive_braking` 的已有间断配置也继续使用固定距离。启用新参数需使用 `--resume --resume-config current`，或用 `--load-weights` 新建训练。
 
 回归检查（不启动训练）：
 
 ```bash
-.venv/bin/python -m unittest discover -s tests/genesis -p test_intermittent.py -v
-# 另含八个环境、全部任务最低难度的 CPU 短仿真；关闭 ToF 和随机化。
-NGXY_INTERMITTENT_SMOKE=1 .venv/bin/python -m unittest discover -s tests/genesis -p test_intermittent.py -v
+.venv/bin/python -m unittest tests.genesis.test_pre_parking -v
 ```
 
 ## 独立课程、奖励与命令
@@ -644,7 +633,7 @@ TensorBoard 的 `task/<name>/...` 分别记录环境占比、当前难度（`dif
 .venv/bin/python -m experiments.genesis.wheel_leg_infantry.tasks.multi_terrain.eval \
   -e multi_terrain_v1 --task slope_down --headless --steps 3000
 
-# 全部回合采用间断通行：障碍前停车、通行、障碍后停车，再重新起步。
+# 全部回合采用间断通行：障碍前停车，然后通行至终点。
 .venv/bin/python -m experiments.genesis.wheel_leg_infantry.tasks.multi_terrain.eval \
   -e multi_terrain_v1 --task stairs_up --intermittent
 
@@ -663,6 +652,6 @@ NGXY_MULTI_TERRAIN_SMOKE=1 .venv/bin/python -m unittest \
 显式开关优先于 `curriculum.overrides` 中的间断比例。旧存档没有 `intermittent` 配置时，
 `--intermittent` 使用当前对应地形的停车参数；已有停车参数保持存档值。
 `locomotion` 不支持 `--intermittent`。评估输出总成功数、普通/间断各自成功数，
-间断回合额外输出两次停稳是否完成、停车失败和最大停稳漂移距离。
+间断回合额外输出地形前停稳是否完成、停车失败和最大停稳漂移距离。
 
 课程和奖励是初始训练配置，各地形最终等级的成功率需要训练后验证。

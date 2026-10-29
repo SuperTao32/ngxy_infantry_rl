@@ -17,6 +17,7 @@ import torch
 from tensordict import TensorDict
 
 from ...core.curriculum import CurriculumManager
+from ...core.base_contact import BaseContactRegions
 from ...core.dynamics_randomization import DynamicsRandomizationManager, MOTOR_NAMES, SPRING_NAMES
 from ...core.randomization_config import normalize_randomization_config
 from ...core.sensor_randomization import SensorRandomizationManager
@@ -84,6 +85,11 @@ class LocomotionEnv(LocomotionRewards):
 
         # 观测、奖励和指令配置
         self.obs_scales: dict[str, float] = obs_cfg["obs_scales"]
+        if obs_cfg.get("critic_base_contact", False):
+            for name, value in (("base_normal_force", self.obs_scales["base_normal_force"]),
+                                ("base_contact_force_clip", obs_cfg["base_contact_force_clip"])):
+                if not math.isfinite(value) or value <= 0:
+                    raise ValueError(f"{name} must be positive and finite")
         self.commands_scale = self._build_commands_scale()
         self.commands_limit = self._build_command_limits()
 
@@ -442,7 +448,6 @@ class LocomotionEnv(LocomotionRewards):
         for name, value in self.sensor_noise.measurements.items():
             setattr(self, "measured_" + name, value)
         self.measured_leg_length = torch.empty((self.num_envs, 2), dtype=gs.tc_float, device=gs.device)
-        self.measured_leg_angle = torch.empty_like(self.measured_leg_length)
         self.leg_length = torch.empty((self.num_envs, 2), dtype=gs.tc_float, device=gs.device)
         self.leg_angle = torch.empty((self.num_envs, 2), dtype=gs.tc_float, device=gs.device)
         self.gas_spring_force = torch.empty((self.num_envs, 2), dtype=gs.tc_float, device=gs.device)
@@ -470,7 +475,15 @@ class LocomotionEnv(LocomotionRewards):
 
         # 接触状态
         self.wheel_contact = torch.zeros((self.num_envs, 2), dtype=gs.tc_float, device=gs.device)
+        self.wheel_normal_force = torch.zeros((self.num_envs, 2, 3), dtype=gs.tc_float, device=gs.device)
+        self.wheel_tangential_force = torch.zeros_like(self.wheel_normal_force)
         self.base_contact = torch.zeros((self.num_envs,), dtype=gs.tc_float, device=gs.device)
+        self.base_contact_regions = (
+            BaseContactRegions(self.robot.get_link(base_link_name), self.num_envs,
+                               device=self.device, dtype=gs.tc_float,
+                               force_threshold=self.base_contact_force_threshold)
+            if self.obs_cfg.get("critic_base_contact", False) else None
+        )
         self.previous_both_wheels_contact = torch.zeros((self.num_envs,), dtype=torch.bool, device=gs.device)
 
         # 奖励门控、着陆事件和终止计数
@@ -784,6 +797,9 @@ class LocomotionEnv(LocomotionRewards):
             self.extras.pop("episode", None)
             return
 
+        if self.base_contact_regions is not None:
+            self.base_contact_regions.reset(env_idx)
+
         finished_episode_lengths = None
         if env_idx is not None and env_idx.any():
             finished_episode_lengths = self.episode_length_buf[env_idx].clone().clamp_min(1).to(gs.tc_float)
@@ -857,6 +873,8 @@ class LocomotionEnv(LocomotionRewards):
             self.wheel_vel.zero_()
             self.gas_spring_force.zero_()
             self.wheel_contact.zero_()
+            self.wheel_normal_force.zero_()
+            self.wheel_tangential_force.zero_()
             self.base_contact.zero_()
             self.alive_gate.zero_()
             self.previous_both_wheels_contact.zero_()
@@ -901,6 +919,8 @@ class LocomotionEnv(LocomotionRewards):
             self.wheel_vel.masked_fill_(env_idx[:, None], 0.0)
             self.gas_spring_force.masked_fill_(env_idx[:, None], 0.0)
             self.wheel_contact.masked_fill_(env_idx[:, None], 0.0)
+            self.wheel_normal_force.masked_fill_(env_idx[:, None, None], 0.0)
+            self.wheel_tangential_force.masked_fill_(env_idx[:, None, None], 0.0)
             self.base_contact.masked_fill_(env_idx, 0.0)
             self.alive_gate.masked_fill_(env_idx, 0.0)
             self.previous_both_wheels_contact.masked_fill_(env_idx, False)
@@ -1095,11 +1115,6 @@ class LocomotionEnv(LocomotionRewards):
             self.leg_upper_link_length,
             self.leg_lower_link_length,
         )
-        self.measured_leg_angle[selected] = compute_leg_angle(
-            measured_pos,
-            self.leg_front_joint_indices,
-            self.leg_rear_joint_indices,
-        )
 
     def _update_velocity_estimator(self):
         """更新前向速度估计供诊断；不作为 actor 或 critic 的输入。"""
@@ -1135,11 +1150,35 @@ class LocomotionEnv(LocomotionRewards):
             )
         )
 
+    def _update_wheel_contact_forces(self, contacts=None):
+        """逐接触点分解法向/切向力，再按轮求和并转到机身坐标系，单位 N。"""
+        if contacts is None:
+            contacts = self.robot.get_contacts(exclude_self_contact=True)
+        normal = contacts["normal"]
+        normal_squared = normal.square().sum(dim=-1, keepdim=True).clamp_min(1e-12)
+        base_quat_inv = inv_quat(self.base_quat)
+        for side, link in enumerate(self.wheel_links_idx):
+            # Genesis 接触索引为全场景编号，轮子索引为机器人局部编号。
+            is_a = contacts["link_a"] == self.robot.link_start + link
+            is_b = contacts["link_b"] == self.robot.link_start + link
+            valid = contacts["valid_mask"] & (is_a | is_b)
+            force = torch.where(is_a[..., None], contacts["force_a"], contacts["force_b"])
+            normal_force = (force * normal).sum(dim=-1, keepdim=True) * normal / normal_squared
+            tangential_force = force - normal_force
+            self.wheel_normal_force[:, side] = transform_by_quat(
+                torch.where(valid[..., None], normal_force, 0.0).sum(dim=1), base_quat_inv)
+            self.wheel_tangential_force[:, side] = transform_by_quat(
+                torch.where(valid[..., None], tangential_force, 0.0).sum(dim=1), base_quat_inv)
+
     def _update_wheel_contact(self):
         """更新轮子/基座接触、存活门控和落地事件。"""
         all_contact_forces = self.robot.get_links_net_contact_force()
         contact_forces = all_contact_forces[:, self.wheel_links_idx, :]
         self.wheel_contact.copy_((torch.linalg.vector_norm(contact_forces, dim=-1) > self.wheel_contact_force_threshold).to(dtype=gs.tc_float))
+        contacts = self.robot.get_contacts(exclude_self_contact=True)
+        self._update_wheel_contact_forces(contacts)
+        if self.base_contact_regions is not None:
+            self.base_contact_regions.update(contacts, self.base_pos, self.base_quat)
         base_contact_force = torch.linalg.vector_norm(all_contact_forces[:, self.base_link_idx, :], dim=-1)
         self.base_contact.copy_((base_contact_force > self.base_contact_force_threshold).to(dtype=gs.tc_float))
         both_wheels_contact = torch.all(self.wheel_contact > 0.5, dim=1)
@@ -1199,7 +1238,6 @@ class LocomotionEnv(LocomotionRewards):
             "joint_vel": self.measured_joint_vel * self.obs_scales["joint_vel"],
             "wheel_vel": self.measured_wheel_vel * self.obs_scales["wheel_vel"],
             "leg_length": self.measured_leg_length * self.obs_scales["leg_length"],  # 2
-            "leg_angle": self.measured_leg_angle * self.obs_scales["leg_angle"],  # 2
             "actions": self.actions,
             "last_actions": self.last_actions,  # 6，与 actions 同顺序的前一拍裁剪动作
             **self._get_command_observation_components(),
@@ -1216,14 +1254,13 @@ class LocomotionEnv(LocomotionRewards):
             "joint_vel": self.joint_vel * self.obs_scales["joint_vel"],
             "wheel_vel": self.wheel_vel * self.obs_scales["wheel_vel"],
             "leg_length": self.leg_length * self.obs_scales["leg_length"],
-            "leg_angle": self.leg_angle * self.obs_scales["leg_angle"],
             **({"tof_distance": self.true_tof_history.observation()} if self.tof_cfg["include_in_observation"] else {}),
             "privileged_base_lin_vel": self.base_lin_vel * self.obs_scales["lin_vel"] ,  # 3
             # 仿真接触真值只提供给 critic，actor/实机接口不依赖它。
-            "privileged_wheel_contact": self.wheel_contact,  # 2: left, right
+            "privileged_wheel_normal_force": self.wheel_normal_force.flatten(1) * self.obs_scales["normal_force"],  # 6: 左右轮 xyz，机身系。
+            "privileged_wheel_tangential_force": self.wheel_tangential_force.flatten(1) * self.obs_scales["tangential_force"],  # 6: 左右轮 xyz，机身系。
             "privileged_wheel_slip": self.wheel_slip.active.to(dtype=self.obs_buf.dtype), # 2: left, right
-            "privileged_base_contact": self.base_contact.unsqueeze(-1),  # 1
-            **self._get_landing_privileged_observation_components(),
+            **self._get_base_privileged_observation_components(),
             # 旧配置缺少此开关时保留原维度；事件状态与本步使用的摩擦同步。
             **self._get_task_privileged_observation_components(),
         }
@@ -1560,14 +1597,21 @@ class LocomotionEnv(LocomotionRewards):
         """返回基础命令观测；子任务可保留该前缀并追加独立命令。"""
         return {"commands": self.commands * self.commands_scale}
 
-    def _get_landing_privileged_observation_components(self):
-        return {
-            "privileged_landing_phase": (self.landing_penalty_steps_left.unsqueeze(-1).to(dtype=gs.tc_float) / self.landing_penalty_steps),
-        }
-
     def _get_task_observation_components(self):
         """任务扩展点：追加 actor 可部署观测，默认不改变 locomotion 契约。"""
         return {}
+
+    def _get_base_privileged_observation_components(self):
+        components = {}
+        if self.obs_cfg.get("critic_base_contact", False):
+            components["privileged_base_region_contact"] = self.base_contact_regions.contact
+            components["privileged_base_region_normal_force"] = (
+                self.base_contact_regions.normal_force * self.obs_scales["base_normal_force"]
+            ).clamp(0., self.obs_cfg["base_contact_force_clip"])
+        if self.obs_cfg.get("critic_base_height", False):
+            # base 原点的世界 z 减去当前位置地表 z；不是命令高度或腿长。
+            components["privileged_base_height"] = self.base_height.unsqueeze(-1) * self.obs_scales["base_height"]
+        return components
 
     def _get_task_privileged_observation_components(self):
         """任务扩展点：追加仅供 critic 使用的仿真真值。"""

@@ -200,7 +200,13 @@ def _get_obs_cfg(locomotion_obs_cfg: Mapping):
     obs_cfg = deepcopy(dict(locomotion_obs_cfg))
     # jump 不使用 ToF，也不为无用的测距创建传感器；不修改来源 locomotion 配置。
     obs_cfg["tof"] = {"enabled": False, "include_in_observation": False}
+    # 新建 jump 配置时，旧 teacher 缺失的 critic 开关使用新默认值；
+    # 直接加载旧 jump 快照仍由 validate_configs 按缺省关闭解释。
+    obs_cfg.setdefault("critic_base_contact", True)
+    obs_cfg.setdefault("critic_base_height", True)
+    obs_cfg.setdefault("base_contact_force_clip", 5.0)
     obs_cfg.setdefault("obs_scales", {})
+    obs_cfg["obs_scales"].setdefault("base_normal_force", 1.0 / 400.0)
     obs_cfg["obs_scales"].update(
         {
             "jump_base_height": 1.0 / 0.40,  # 缩放 base 原点相对起跳面的高度。
@@ -211,9 +217,14 @@ def _get_obs_cfg(locomotion_obs_cfg: Mapping):
     # 保留 locomotion 前缀和缩放；jump 的第三项为按时间变化的目标 base 到轮底距离。
     obs_cfg["locomotion_policy_obs_dim"] = layout_dim(LOCOMOTION_POLICY_LAYOUT)
     obs_cfg["num_policy_obs"] = layout_dim(JUMP_POLICY_LAYOUT)
-    # critic 追加基础真值 9D、落地状态 1D、jump 真值 7D、距离/落稳进度 2D，以及可选打滑 2D。
-    obs_cfg["num_critic_obs"] = obs_cfg["num_policy_obs"] + 19 + 2 * bool(obs_cfg.get("critic_wheel_slip", False))
+    # critic 追加基座速度 3D、轮子力 12D、打滑 2D、jump 真值 9D，
+    # 再按开关追加机身分区接触 6D 与相对当前位置地面的高度 1D。
+    obs_cfg["num_critic_obs"] = obs_cfg["num_policy_obs"] + 26 + _base_privileged_dim(obs_cfg)
     return obs_cfg
+
+
+def _base_privileged_dim(obs_cfg):
+    return 6 * bool(obs_cfg.get("critic_base_contact", False)) + bool(obs_cfg.get("critic_base_height", False))
 
 
 def _get_reward_cfg():
@@ -450,6 +461,6 @@ def validate_configs(env_cfg, obs_cfg, curriculum_cfg=None):
     expected_policy = layout_dim(JUMP_POLICY_LAYOUT)
     if resolve_tof_cfg(obs_cfg.get("tof"))["include_in_observation"]:
         raise ValueError("jump does not support ToF observations; set tof.include_in_observation=False")
-    expected_critic = expected_policy + 19 + 2 * bool(obs_cfg.get("critic_wheel_slip", False))
+    expected_critic = expected_policy + 26 + _base_privileged_dim(obs_cfg)
     if obs_cfg["num_policy_obs"] != expected_policy or obs_cfg["num_critic_obs"] != expected_critic:
-        raise ValueError("jump_modes observation dimensions must include 3D mode and 2D privileged state")
+        raise ValueError(f"jump observation dimensions must be policy={expected_policy}, critic={expected_critic}")

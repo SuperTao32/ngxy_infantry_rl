@@ -12,9 +12,13 @@ TASK_NAMES = ("locomotion", "stairs_down", "stairs_up", "slope_up", "slope_down"
 
 def _intermittent_cfg(probability, **overrides):
     """各地形按回合抽样；距离、时长等可在对应 task 中覆盖。"""
-    return {**deepcopy(INTERMITTENT_DEFAULTS), "probability": probability,
-            "predictive_braking": True, "max_braking_distance_m": 1.1,
-            "post_stop_distance_range_m": [0.25, 0.35], **overrides}
+    return {
+        **deepcopy(INTERMITTENT_DEFAULTS),
+        "probability": probability,
+        "predictive_braking": True,
+        "max_braking_distance_m": 1.1,
+        **overrides,
+    }
 
 
 def _get_curriculum_cfg():
@@ -633,15 +637,7 @@ def get_cfgs():
         resampling_time_s=10.0,
         terrain=dict(preset="platform_ridge_up", tile_size=[16.0, 6.0]),
         traversal=dict(landing_length=0.8),
-        # 末端平台仅长 1.2 m，停车和重新起步使用更紧凑的距离。
-        intermittent=_intermittent_cfg(
-            probability=0.3,
-            post_stop_distance_range_m=[0.26, 0.28],
-            crossing_speed_m_s=0.5,
-            max_braking_distance_m=0.3,
-            stop_position_tolerance_m=0.1,
-            restart_distance_m=0.2,
-        ),
+        intermittent=_intermittent_cfg(probability=0.3),
         termination=dict(
             episode_length_s=15.0,
             termination_if_roll_greater_than=45.0,
@@ -677,13 +673,18 @@ def get_cfgs():
     )
 
     env["multi_terrain"] = dict(
-        tasks=tasks, level_catalog=level_catalog(),
-        parking_curriculum=dict(enabled=True, window_episodes=100, success_threshold=0.9,
-                                replay_probability=0.2, post_move_time_s=1.0,
-                                post_spawn_offset_m=0.4, required_speed_m_s=0.2),
+        tasks=tasks,
+        level_catalog=level_catalog(),
+        parking_curriculum=dict(
+            enabled=True,
+            window_episodes=100,
+            success_threshold=0.9,
+            replay_probability=0.2,
+            required_speed_m_s=0.2,
+        ),
     )
     obs["critic_task_one_hot"] = True
-    obs["critic_stop_phase"] = True
+    obs["critic_task_one_hot_vx_threshold"] = 0.499  # m/s；仅 command vx 严格大于阈值时提供地形编码。
     env.update(
         episode_length_s=25.0,
         resampling_time_s=0.01,

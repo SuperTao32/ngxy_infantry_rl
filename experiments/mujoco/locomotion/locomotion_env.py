@@ -8,7 +8,7 @@ import torch
 from tensordict import TensorDict
 
 from experiments.genesis.wheel_leg_infantry.core.kinematics import (
-    compute_leg_angle, compute_leg_length, constrain_leg_targets,
+    compute_leg_length, constrain_leg_targets,
 )
 from experiments.genesis.wheel_leg_infantry.core.tof import ToFHistory, ToFSamplingClock, resolve_tof_cfg
 from experiments.genesis.wheel_leg_infantry.core.sensor_randomization import SensorRandomizationManager
@@ -142,15 +142,14 @@ class MujocoLocomotionEnv:
             "imu_ang_vel": self.gyro * s["ang_vel"],
             "imu_lin_acc": self.acc * s.get("lin_acc", 1 / 9.81),
             "projected_gravity": self.gravity,
-            "commands": self.commands * tensor([s["lin_vel"], s["ang_vel"], s["base_height"]]),
             "joint_pos_offset": (q - self.default) * s["joint_pos"],
             "joint_vel": tensor(self.data.qvel[self.jd]) * s["joint_vel"],
             "wheel_vel": tensor(self.data.qvel[self.wd]) * s["wheel_vel"],
             "leg_length": compute_leg_length(q, self.front, self.rear, self.cfg.get("leg_upper_link_length", .21),
                                              self.cfg.get("leg_lower_link_length", .25)) * s["leg_length"],
-            "leg_angle": compute_leg_angle(q, self.front, self.rear) * s["leg_angle"],
             "actions": self.actions,
             "last_actions": self.last_actions,
+            "commands": self.commands * tensor([s["lin_vel"], s["ang_vel"], s["base_height"]]),
         }
         if self.tof_cfg["include_in_observation"]:
             self.components["tof_distance"] = self.tof_history.observation()

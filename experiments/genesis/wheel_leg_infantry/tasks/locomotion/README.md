@@ -3,16 +3,49 @@
 本目录只维护经典行走训练：速度和高度跟踪、姿态保持、静止站立及随机化课程。
 多地形通关任务统一位于 [`../multi_terrain/`](../multi_terrain/README.md)。
 
-Actor 的动作历史按整块并列排列：`actions[26:32]`、`last_actions[32:38]`，随后是 ToF 历史。
+Actor 的动作历史按整块并列排列：`actions[21:27]`、`last_actions[27:33]`，随后是 `commands[33:36]` 和 ToF 历史。
 `step(a_t)` 返回的两块分别为裁剪后的 `a_t` 和 `a_(t-1)`，不再施加位置/轮速单位缩放。
 历史仅在接收新动作时推进；重复读取或组装观测不推进历史，reset 将两块清零。
 开启动作延迟时，本步使用 `a_(t-1)`；关闭延迟仍保留同样的两拍观测。
-默认 3 帧、4 个 ToF，actor 为 `38 + 4 × 3 = 50` 维；关闭 ToF 观测时为 38 维。
+默认 3 帧、4 个 ToF，actor 为 `36 + 4 × 3 = 48` 维；关闭 ToF 观测时为 36 维。
+所有任务的 actor 和 critic 均不再输入左右腿角 `leg_angle`，保留 `leg_length`；内部腿角仍用于奖励和控制约束。
 Critic 包含相同动作历史。旧 checkpoint 不做输入适配，需要重新训练。
 
 Critic 的传感器通道使用无噪声真值：IMU 使用 `read_ground_truth()`，关节位置/速度、轮速和
 腿部几何量使用仿真状态，ToF 使用标称安装位姿的独立无噪声历史（不含安装误差、偏置和白噪声）。
 Actor 继续使用传感器测量值。两者保持相同的通道顺序、缩放和采样节奏，critic 的特权信息继续保留。
+Critic 使用 `privileged_wheel_normal_force` 和 `privileged_wheel_tangential_force` 替代二值 `privileged_wheel_contact`。
+每组 6 维，顺序为左轮 xyz、右轮 xyz，均为机身坐标系的力向量。
+内部力保留 N；输入 Critic 时分别乘 `obs_scales["normal_force"] = 1/250`、
+`obs_scales["tangential_force"] = 1/200`，不截断。同一种力的左右轮及 xyz 共用系数，保留向量方向。
+法向参考值取整车重量约 250 N；切向参考值依据旧多地形策略在当前环境的约 102 万条每轮样本，
+四组最低/最高难度、随机化强度 0/0.6 工况的力模长 P99 为 178–200 N。
+这是初始尺度估计，包含失败回合，未覆盖专门 jump 动作；后续策略的力分布可能不同。
+每个外部接触点按实际接触法线分解 `F_normal = (F·n)n/(n·n)`、`F_tangent = F - F_normal`，
+再按轮分别求和；适用于坡面、台阶立面和多个接触点，不把世界 z 分量直接视为法向力。自碰撞不计入这些力。
+奖励和落地/离地判定仍使用原二值 `wheel_contact`。全量及局部 reset 会清空对应接触力。
+该修改适用于继承共享环境的 locomotion、multi_terrain 和 jump；Critic 相比二值接触观测增加 10 维。
+机身触地标志 `base_contact` 仅用于内部奖励、终止及任务状态判定，不再单独输入 Critic。
+
+新训练默认启用 `obs_cfg["critic_base_contact"]` 与 `obs_cfg["critic_base_height"]`，
+在轮子打滑状态之后、任务特权信息之前追加 7 维：
+
+| Critic 通道 | 维度 | 含义 |
+| --- | --- | --- |
+| `privileged_base_region_contact` | 3 | 底部、前侧、后侧的接触标志；分区法向力总量超过 `base_contact_force_threshold`（默认 5 N）为 1 |
+| `privileged_base_region_normal_force` | 3 | 同一顺序的逐接触点法向力大小之和，乘 `obs_scales["base_normal_force"] = 1/400`，限幅到 `[0, base_contact_force_clip]`（默认 5） |
+| `privileged_base_height` | 1 | `base_pos.z - terrain_height`，乘 `obs_scales["base_height"]`；表示 base 原点到当前位置地表的竖直距离 |
+
+分区直接使用当前 box 碰撞体的偏移、旋转和尺寸，不修改碰撞模型。
+接触点转换到碰撞体局部坐标后按最近面分类；棱边 1 mm 内的并列面按接触法线消歧，每点只计一次。
+底部、前侧、后侧按机体系 `-z / +x / -x` 定义，左右侧与顶部不计入这三组；完整 `base_contact` 仍覆盖整机身。
+法向力按每点 `abs(F·n)/||n||` 累加，避免不同接触点的力互相抵消；自碰撞不参与统计。
+当前分区实现要求 baselink 使用 box 碰撞几何；更换为其他形状需同步扩展分区算法。
+全量及局部 reset 清空对应分区接触，actor 输入保持原接口。
+
+上述两个开关缺省关闭；启用时增加 7 维。当前已移除独立的落地特权观测，所有任务的 critic 均减少 1 维，
+包含该落地通道的旧 critic/优化器不能直接加载到新布局；
+原 actor 仍可单独复用。多地形的 8 维任务编码补齐只适用于基础观测开关一致的模型，不会自动迁移这 7 维。
 
 ## 文件职责
 
@@ -86,11 +119,11 @@ Genesis 的接触摩擦取双方较大值。事件期间，所有地形实体在
 Genesis 的有效摩擦下限为 0.01。
 `env.wheel_slip.diagnostics()` 返回左右轮事件状态、倍率和倒计时，评估控制器诊断会打印状态。
 
-新配置默认启用 `obs_cfg["critic_wheel_slip"]`，在 critic 落地状态之后、任务特权信息之前
+新配置默认启用 `obs_cfg["critic_wheel_slip"]`，在 critic 轮子接触力之后、机身特权信息之前
 加入 `privileged_wheel_slip` 两维，顺序为左轮、右轮：打滑事件激活为 `1.0`，否则为 `0.0`。
 该标志表示低摩擦随机化事件，不是由轮速与地速估计的实际滑移；actor 输入保持不变。
-默认 locomotion critic 为 62 维，关闭 ToF 时为 50 维。旧配置缺少此开关时保留原维度，
-可继续加载原 checkpoint；启用新增观测后，旧 critic 权重不能直接加载。
+当前默认 locomotion critic 为 72 维，关闭 ToF 时为 60 维；关闭机身分区接触与高度通道时分别为 65/53 维。
+移除腿角改变了输入维度和后续通道位置，包含腿角的旧 actor/critic checkpoint 不能直接加载，需要重新训练。
 
 `config_locomotion.py` 的课程先练站立，再逐步扩大速度、转向和高度范围，最后增加随机化。
 默认地面为 plane；`--terrain` 可指定单一测试地形，仍使用 locomotion 的跟踪目标和奖励。

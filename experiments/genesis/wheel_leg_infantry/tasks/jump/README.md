@@ -8,10 +8,14 @@
 | step_20cm | `[0, 1, 0]` | 0.20 m |
 | step_40cm | `[0, 0, 1]` | 0.40 m |
 
-actor 为 47D，最后 3D 是任务 mode。locomotion teacher 读取前 38D（包含 actions 和 last_actions）。
-critic 为 68D，额外可见边缘距离、落稳进度及左右轮二值打滑事件状态；actor 不读取位置、台阶距离或 ToF。
+actor 为 45D，最后 3D 是任务 mode。locomotion teacher 读取前 36D（包含 actions 和 last_actions，不含腿角）。
+critic 默认为 78D，额外可见左右轮法向/切向力向量、边缘距离、落稳进度及左右轮二值打滑事件状态；actor 不读取位置、台阶距离或 ToF。
+其中新增 7D 为底部/前侧/后侧接触标志及法向力（各 3D）、相对当前位置地表的实际 base 高度（1D），
+配置和分区规则见 [locomotion 观测说明](../locomotion/README.md)。原有 `privileged_jump_base_height` 仍表示相对起跳面的高度。
+关闭或缺省 `critic_base_contact` / `critic_base_height` 时 critic 为 71D。
+独立的落地特权观测已移除；包含该通道的旧 critic/优化器不能直接加载，旧 jump 配置的维度校验也会拒绝该布局。
 训练 warmup teacher 时，将 locomotion 的 `tof.include_in_observation` 设为 `False`；
-使用重新训练的 38D teacher。包含 ToF 观测的 teacher 会在加载前被拒绝。
+使用重新训练的 36D teacher。包含 ToF 观测的 teacher 会在加载前被拒绝。
 速度估计已从观测中删除；旧输入维度的 checkpoint 不能直接加载，需重新训练 locomotion teacher 和 jump。
 动作空间保持原来的 4 个腿关节 + 2 个轮子。
 

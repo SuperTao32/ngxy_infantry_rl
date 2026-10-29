@@ -9,17 +9,16 @@ LOCOMOTION_POLICY_LAYOUT: tuple[tuple[str, int], ...] = (
     ("imu_ang_vel", 3),
     ("imu_lin_acc", 3),
     ("projected_gravity", 3),
-    ("commands", 3),
     ("joint_pos_offset", 4),
     ("joint_vel", 4),
     ("wheel_vel", 2),
     ("leg_length", 2),
-    ("leg_angle", 2),
     ("actions", 6),
     ("last_actions", 6),
+    ("commands", 3),
 )
 
-# 前 38 维的顺序和缩放与关闭 ToF 观测的 locomotion 一致，可按前缀复制权重。
+# 前 36 维的顺序和缩放与关闭 ToF 观测的 locomotion 一致，可按前缀复制权重。
 # warmup teacher 的 commands[:, 2] 为目标 base 离地高度。
 # jump 时第三项为目标 base 到左右轮底的平均世界竖直距离，由模式和计时器生成。
 JUMP_POLICY_LAYOUT = LOCOMOTION_POLICY_LAYOUT + (

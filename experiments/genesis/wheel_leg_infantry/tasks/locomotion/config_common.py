@@ -82,13 +82,17 @@ def get_env_cfg() -> dict:
 def get_obs_cfg() -> dict:
     return {
         "critic_wheel_slip": True,  # 左右轮打滑事件标志，打滑为 1，否则为 0。
+        # 旧快照缺省关闭；新训练追加底部/前侧/后侧接触 6D 与实际离地高度 1D。
+        "critic_base_contact": True,
+        "critic_base_height": True,
+        "base_contact_force_clip": 5.0,  # 对缩放后的分区法向力限幅。
         # actor 使用 IMU、轮速等真机观测
         "imu": {
             "link_name": "base_link",
             "pos_offset": [0.0, 0.0, 0.0],
         },
         # actions / last_actions 各 6D，整块并列，位于 ToF 前。
-        # True: (38 + 4 * history_frames)D actor；False: 38D actor，供 jump warmup。
+        # True: (36 + 4 * history_frames)D actor；False: 36D actor，供 jump warmup。
         "tof": default_tof_cfg(
             include_in_observation=True,
             history_frames=3,
@@ -107,7 +111,10 @@ def get_obs_cfg() -> dict:
             "wheel_vel": 1.0 / 50.0,
             "base_height": 1.0 / 0.35,
             "leg_length": 1.0 / 0.35,
-            "leg_angle": 1.0, 
+            "leg_angle": 1.0,  # 仅供 jump 腿角奖励缩放，不进入观测。
+            "normal_force": 1.0 / 400.0,  # 每轮法向合力
+            "base_normal_force": 1.0 / 400.0,  # 每个机身分区的法向力大小之和。
+            "tangential_force": 1.0 / 200.0,  # 每轮切向合力
         },
     }
 
