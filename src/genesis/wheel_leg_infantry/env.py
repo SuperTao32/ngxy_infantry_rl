@@ -537,6 +537,8 @@ class WheelLegInfantryEnv(TaskConfiguration):
         """执行一个控制步，返回观测、奖励、重置标志和附加统计。"""
         # 课程在 rollout 最后一拍结算后切换，下一拍动作使用新任务的观测和 GRU 状态。
         self.global_step += 1
+        # 快照动作所用观测的可训练状态；before_observations 可能在本步末更新 jump 信号。
+        self.extras["ppo_train_mask"] = self.task_manager.training_mask()
 
         ########### 执行动作 ###########
         # 接收下一拍动作时再推进历史；重复读取/组装观测不能改变两拍动作。
@@ -750,7 +752,7 @@ class WheelLegInfantryEnv(TaskConfiguration):
     # ============ 回合重置与命令 ============
     def _reset_training_step(self):
         if not self.evaluation:
-            self.task_manager.advance_progress(self.training_iteration)
+            self.task_manager.advance_progress(self.training_iteration, self.extras.get("ppo_train_mask"))
         if self.evaluation or self.global_step % self.steps_per_iteration:
             self._reset_idx(self.reset_buf)
             return

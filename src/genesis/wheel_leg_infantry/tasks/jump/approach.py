@@ -4,26 +4,13 @@ import math
 
 import torch
 
-from ...rewards import CommonRewards
 from .geometry import trigger_distance
-from .rewards import JumpRewards
 
 
 class JumpApproach:
-    _reward_approach_tracking_lin_vel = JumpRewards._reward_tracking_lin_vel
-    _reward_approach_tracking_ang_vel = JumpRewards._reward_tracking_ang_vel
-    _reward_approach_base_balance = JumpRewards._reward_base_balance
-    _reward_approach_base_height = CommonRewards._reward_base_height
-    _reward_approach_wheel_airborne = CommonRewards._reward_wheel_airborne
-    _reward_approach_base_contact = CommonRewards._reward_base_contact
-    _reward_approach_leg_symmetry = CommonRewards._reward_leg_symmetry
-    _reward_approach_action_rate = JumpRewards._reward_action_rate
-
     def _initialize_approach_buffers(self):
         cfg = self.approach_cfg
         for name, value in cfg.items():
-            if name == "reward_scales":
-                continue
             if not math.isfinite(value) or (name not in {"spawn_x_m", "spawn_y_m"} and value <= 0):
                 raise ValueError(f"jump_approach.{name} must be finite and positive (spawn coordinates may be negative)")
         if cfg["stable_time_s"] >= cfg["timeout_s"]:
@@ -54,8 +41,8 @@ class JumpApproach:
         self.approach_timed_out.logical_or_(approaching & (self.episode_length_buf >= self.approach_timeout_steps))
 
     def before_observations(self):
-        # 先结算加速动作的奖励，再移动并发布带 t=0 jump 编码的新观测。
-        # 任务和 GRU 轨迹持续，不制造 done，不丢弃加速阶段的 PPO 样本。
+        # 加速仅运行策略推理；移动后发布带 t=0 jump 编码的新观测。
+        # 不制造物理 done，保留 GRU 隐状态；从下一拍动作开始采集 PPO 样本。
         ready = (self.mask & ~self.jump_active & ~self.reset_buf & ~self.approach_timed_out
                  & (self.approach_ready_steps >= self.approach_stable_steps))
         if ready.any():

@@ -1,18 +1,24 @@
 """将 rsl_rl actor checkpoint 导出为适合实机部署的 ONNX。
 
-- 从 checkpoint 读取 actor_state_dict，并用 cfgs.pkl 重建 MLPModel。
+- 从 checkpoint 读取 actor_state_dict，并用 cfgs.pkl 重建 RNNModel / MLPModel。
 - 使用 actor.as_onnx() 导出确定性策略。
-- 导出后执行 ONNX 结构检查，并用 ONNX Runtime 与 PyTorch 做数值对比。
+- 保留观测归一化；循环策略显式输入、输出隐状态。
+- 导出后执行 ONNX 结构检查，并用 ONNX Runtime 与 PyTorch 做单步及连续多步数值对比。
+
+默认 GRU 部署接口：obs [1, obs_dim]、h_in [num_layers, 1, hidden_dim]
+→ actions [1, num_actions]、h_out [num_layers, 1, hidden_dim]。
+首次推理及回合重置时将 h_in 清零，之后每步将 h_out 作为下一步的 h_in。
+LSTM 还需同样传递 c_in / c_out；MLP 仅有 obs / actions。
 
 示例：
 
     # 直接指定 checkpoint
     python tools/export_onnx.py \
-        --checkpoint logs/infantry_jump_v6/version_0006/model_2000.pt
+        --checkpoint logs/locomotion_only/version_0002/model_200.pt
 
     # 按实验名和版本定位 checkpoint
     python tools/export_onnx.py \
-        --exp-name infantry_jump_v6 --log-root logs --version 6
+        --exp-name locomotion_only --log-root logs --version 2
 
     # 指定输出文件
     python tools/export_onnx.py \
@@ -24,6 +30,7 @@ from __future__ import annotations
 import argparse
 import sys
 import warnings
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -37,8 +44,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from rsl_rl.models import MLPModel  # noqa: E402
-from experiments.genesis.wheel_leg_infantry.tools.run_utils import (  # noqa: E402
+from rsl_rl.models import MLPModel, RNNModel  # noqa: E402
+from src.genesis.wheel_leg_infantry.tools.run_utils import (  # noqa: E402
     load_run_configs,
     resolve_checkpoint,
     resolve_run_dir,
@@ -53,7 +60,20 @@ class ActorSpec:
     num_actions: int
     hidden_dims: list[int]
     activation: str
-    distribution_cfg: dict[str, Any]
+    distribution_cfg: dict[str, Any] | None
+    model_class: str
+    obs_normalization: bool
+    rnn_type: str = "lstm"
+    rnn_hidden_dim: int = 256
+    rnn_num_layers: int = 1
+
+
+@dataclass(frozen=True)
+class ReferenceCase:
+    inputs: tuple[torch.Tensor, ...]
+    outputs: tuple[torch.Tensor, ...]
+    # 连续步骤须使用 ONNX 自己的上一时刻输出，验证状态反馈后的累积误差。
+    carry_state: bool = False
 
 
 def load_actor_state_dict(checkpoint_path: Path) -> dict[str, torch.Tensor]:
@@ -71,7 +91,13 @@ def load_actor_state_dict(checkpoint_path: Path) -> dict[str, torch.Tensor]:
 
 
 def infer_obs_dim(state_dict: dict[str, torch.Tensor]) -> int:
-    """从第一层 Linear 权重推断 policy observation 维度。"""
+    """从 RNN 的输入权重或 MLP 第一层权重推断观测维度。"""
+    rnn_weight = state_dict.get("rnn.rnn.weight_ih_l0")
+    if rnn_weight is not None:
+        if rnn_weight.ndim != 2:
+            raise ValueError(f"RNN 输入权重应为二维，实际 shape={tuple(rnn_weight.shape)}")
+        return int(rnn_weight.shape[1])
+
     linear_layers: list[tuple[int, torch.Tensor]] = []
 
     for key, value in state_dict.items():
@@ -111,9 +137,12 @@ def build_actor_spec(
     actor_cfg = train_cfg["actor"]
 
     model_class = actor_cfg.get("class_name", "MLPModel")
-    if model_class != "MLPModel":
+    # TrajectoryRNNModel 只改变带 masks 的训练路径，部署推理与 RNNModel 相同。
+    if model_class == "src.genesis.wheel_leg_infantry.trajectory_ppo:TrajectoryRNNModel":
+        model_class = "RNNModel"
+    if model_class not in {"MLPModel", "RNNModel"}:
         raise NotImplementedError(
-            f"当前导出脚本只支持 MLPModel，实际为 {model_class!r}"
+            f"当前导出脚本支持 MLPModel / RNNModel，实际为 {model_class!r}"
         )
 
     actor_obs_group = train_cfg.get("obs_groups", {}).get("actor", ["policy"])
@@ -125,7 +154,7 @@ def build_actor_spec(
 
     obs_dim = infer_obs_dim(state_dict)
 
-    # 防止拿错 cfgs.pkl：配置中的观测维度应与 checkpoint 第一层完全一致。
+    # 防止拿错 cfgs.pkl：配置中的观测维度应与 checkpoint 输入层完全一致。
     cfg_obs_dim = configs.get("obs_cfg", {}).get("num_policy_obs")
     if cfg_obs_dim is not None and int(cfg_obs_dim) != obs_dim:
         raise ValueError(
@@ -139,7 +168,12 @@ def build_actor_spec(
         num_actions=int(env_cfg["num_actions"]),
         hidden_dims=list(actor_cfg["hidden_dims"]),
         activation=str(actor_cfg["activation"]),
-        distribution_cfg=dict(actor_cfg["distribution_cfg"]),
+        distribution_cfg=deepcopy(actor_cfg.get("distribution_cfg")),
+        model_class=model_class,
+        obs_normalization=bool(actor_cfg.get("obs_normalization", False)),
+        rnn_type=str(actor_cfg.get("rnn_type", "lstm")),
+        rnn_hidden_dim=int(actor_cfg.get("rnn_hidden_dim", 256)),
+        rnn_num_layers=int(actor_cfg.get("rnn_num_layers", 1)),
     )
 
 
@@ -150,14 +184,26 @@ def build_actor(spec: ActorSpec) -> MLPModel:
         batch_size=[1],
     )
 
-    return MLPModel(
+    model_class = RNNModel if spec.model_class == "RNNModel" else MLPModel
+    recurrent_kwargs = {}
+    if spec.model_class == "RNNModel":
+        recurrent_kwargs = dict(
+            rnn_type=spec.rnn_type,
+            rnn_hidden_dim=spec.rnn_hidden_dim,
+            rnn_num_layers=spec.rnn_num_layers,
+        )
+
+    return model_class(
         dummy_obs,
         {"actor": ["policy"]},
         "actor",
         spec.num_actions,
         hidden_dims=spec.hidden_dims,
         activation=spec.activation,
-        distribution_cfg=spec.distribution_cfg,
+        obs_normalization=spec.obs_normalization,
+        # rsl_rl 会 pop class_name，避免修改可重复使用的 spec。
+        distribution_cfg=deepcopy(spec.distribution_cfg),
+        **recurrent_kwargs,
     )
 
 
@@ -192,35 +238,63 @@ def load_checkpoint_and_config(
     return checkpoint_path, load_run_configs(run_dir)
 
 
-def make_reference_inputs(obs_dim: int) -> dict[str, torch.Tensor]:
-    """生成固定的测试输入，用于 PyTorch / ONNX 数值一致性检查。"""
+def make_reference_inputs(onnx_model: torch.nn.Module) -> dict[str, tuple[torch.Tensor, ...]]:
+    """生成固定观测和隐状态，覆盖零状态及非零状态。"""
     generator = torch.Generator().manual_seed(0)
+    dummy_inputs = onnx_model.get_dummy_inputs()
+
+    def random_inputs(scale: float) -> tuple[torch.Tensor, ...]:
+        return tuple(
+            (torch.rand(x.shape, generator=generator) * 2.0 - 1.0) * scale
+            for x in dummy_inputs
+        )
 
     return {
-        "zero": torch.zeros(1, obs_dim, dtype=torch.float32),
-        "small": torch.rand(1, obs_dim, generator=generator) * 0.2 - 0.1,
-        "unit": torch.rand(1, obs_dim, generator=generator) * 2.0 - 1.0,
+        "zero": dummy_inputs,
+        "small": random_inputs(0.1),
+        "unit": random_inputs(1.0),
     }
+
+
+def tensor_outputs(result: Any) -> tuple[torch.Tensor, ...]:
+    """统一 MLP 的 Tensor 和 RNN 的 tuple；GRU 尾部的 None 不属于 ONNX 输出。"""
+    if isinstance(result, torch.Tensor):
+        return (result,)
+    return tuple(value for value in result if value is not None)
 
 
 def get_reference_outputs(
     onnx_model: torch.nn.Module,
-    inputs: dict[str, torch.Tensor],
-) -> dict[str, tuple[torch.Tensor, torch.Tensor]]:
+    inputs: dict[str, tuple[torch.Tensor, ...]],
+) -> dict[str, ReferenceCase]:
     """先用 PyTorch 运行一次，作为 ONNX Runtime 的参考结果。"""
-    references: dict[str, tuple[torch.Tensor, torch.Tensor]] = {}
+    references: dict[str, ReferenceCase] = {}
+
+    def record(name: str, args: tuple[torch.Tensor, ...], *, carry_state: bool = False) -> tuple[torch.Tensor, ...]:
+        outputs = tuple(y.detach().cpu() for y in tensor_outputs(onnx_model(*args)))
+        if len(outputs) != len(onnx_model.output_names):
+            raise RuntimeError("PyTorch 输出数量与 ONNX output_names 不一致")
+        references[name] = ReferenceCase(args, outputs, carry_state)
+        actions = outputs[0]
+        print(
+            f"[verify] torch {name:7s}: "
+            f"shape={tuple(actions.shape)}, "
+            f"min={actions.min().item():+.6f}, "
+            f"max={actions.max().item():+.6f}"
+        )
+        return outputs
 
     with torch.inference_mode():
-        for name, x in inputs.items():
-            y = onnx_model(x).detach().cpu()
-            references[name] = (x, y)
+        for name, args in inputs.items():
+            record(name, args)
 
-            print(
-                f"[verify] torch {name:5s}: "
-                f"shape={tuple(y.shape)}, "
-                f"min={y.min().item():+.6f}, "
-                f"max={y.max().item():+.6f}"
-            )
+        if onnx_model.is_recurrent:
+            generator = torch.Generator().manual_seed(1)
+            obs, *states = onnx_model.get_dummy_inputs()
+            for step in range(8):
+                obs = torch.rand(obs.shape, generator=generator) * 2.0 - 1.0
+                outputs = record(f"step_{step}", (obs, *states), carry_state=step > 0)
+                states = outputs[1:]
 
     return references
 
@@ -253,7 +327,9 @@ def export_onnx(
 
 def verify_onnx(
     output_path: Path,
-    references: dict[str, tuple[torch.Tensor, torch.Tensor]],
+    references: dict[str, ReferenceCase],
+    input_names: list[str],
+    output_names: list[str],
 ) -> None:
     """检查 ONNX 合法性，并验证其输出与 PyTorch 一致。"""
     import onnx
@@ -283,39 +359,40 @@ def verify_onnx(
         providers=["CPUExecutionProvider"],
     )
 
-    if len(session.get_inputs()) != 1 or len(session.get_outputs()) != 1:
+    actual_inputs = [value.name for value in session.get_inputs()]
+    actual_outputs = [value.name for value in session.get_outputs()]
+    if actual_inputs != input_names or actual_outputs != output_names:
         raise RuntimeError(
-            "当前部署模型应当只有一个输入和一个输出，"
-            f"实际 inputs={len(session.get_inputs())}, "
-            f"outputs={len(session.get_outputs())}"
+            "ONNX 接口与 actor 不一致，"
+            f"预期 inputs={input_names}, outputs={output_names}；"
+            f"实际 inputs={actual_inputs}, outputs={actual_outputs}"
         )
 
-    input_name = session.get_inputs()[0].name
-
-    for name, (x, expected) in references.items():
-        result = session.run(None, {input_name: x.numpy()})[0]
-        actual = torch.from_numpy(result)
-
-        # 不只是打印误差；超出容差直接报错，避免错误模型进入实机部署。
-        torch.testing.assert_close(
-            actual,
-            expected,
-            rtol=1e-4,
-            atol=1e-5,
-        )
-
-        max_diff = (actual - expected).abs().max().item()
-        print(
-            f"[verify] onnx  {name:5s}: "
-            f"shape={tuple(actual.shape)}, max|diff|={max_diff:.3e}"
-        )
+    previous_outputs = None
+    for name, case in references.items():
+        values = [value.numpy() for value in case.inputs]
+        if case.carry_state:
+            if previous_outputs is None:
+                raise RuntimeError("连续校验缺少上一时刻的 ONNX 隐状态")
+            values[1:] = previous_outputs[1:]
+        results = session.run(output_names, dict(zip(input_names, values, strict=True)))
+        for output_name, result, expected in zip(output_names, results, case.outputs, strict=True):
+            actual = torch.from_numpy(result)
+            # 动作和所有隐状态都须满足容差。
+            torch.testing.assert_close(actual, expected, rtol=1e-4, atol=1e-5)
+            max_diff = (actual - expected).abs().max().item()
+            print(
+                f"[verify] onnx  {name:7s} {output_name:7s}: "
+                f"shape={tuple(actual.shape)}, max|diff|={max_diff:.3e}"
+            )
+        previous_outputs = results
 
     print("[verify] PyTorch 与 ONNX 数值一致。")
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="将 rsl_rl MLP actor checkpoint 导出为 ONNX。"
+        description="将 rsl_rl RNN / MLP actor checkpoint 导出为 ONNX（含归一化及循环隐状态）。"
     )
 
     source = parser.add_mutually_exclusive_group(required=True)
@@ -358,12 +435,16 @@ def main() -> None:
 
     print(
         "[export] actor: "
+        f"model={spec.model_class}, "
         f"obs_dim={spec.obs_dim}, "
         f"num_actions={spec.num_actions}, "
         f"hidden_dims={spec.hidden_dims}, "
         f"activation={spec.activation}, "
-        f"distribution={spec.distribution_cfg.get('class_name')}"
+        f"obs_normalization={spec.obs_normalization}, "
+        f"distribution={(spec.distribution_cfg or {}).get('class_name')}"
     )
+    if spec.model_class == "RNNModel":
+        print(f"[export] {spec.rnn_type}: hidden_dim={spec.rnn_hidden_dim}, num_layers={spec.rnn_num_layers}")
 
     actor = build_actor(spec)
     actor.load_state_dict(state_dict, strict=True)
@@ -373,7 +454,7 @@ def main() -> None:
     # as_onnx() 负责把训练时的分布策略转换成确定性部署输出。
     onnx_model = actor.as_onnx(verbose=args.verbose).to("cpu").eval()
 
-    test_inputs = make_reference_inputs(spec.obs_dim)
+    test_inputs = make_reference_inputs(onnx_model)
     references = get_reference_outputs(onnx_model, test_inputs)
 
     output_path = (
@@ -390,7 +471,11 @@ def main() -> None:
     )
     print(f"[export] 已导出: {output_path}")
 
-    verify_onnx(output_path, references)
+    verify_onnx(output_path, references, onnx_model.input_names, onnx_model.output_names)
+    if spec.model_class == "RNNModel":
+        print("[deploy] 每步将 h_out 传回 h_in；首次推理及回合重置时清零隐状态。")
+        if spec.rnn_type == "lstm":
+            print("[deploy] LSTM 同时需要将 c_out 传回 c_in，并在重置时清零。")
     print("[done] ONNX 导出与验证全部完成。")
 
 

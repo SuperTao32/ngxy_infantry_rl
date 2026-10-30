@@ -29,7 +29,7 @@ class JumpRewards:
         return self.jump_landing_gate * torch.exp(-torch.square(error) / self.reward_cfg["height_reference_sigma"])
 
     def _reward_tracking_lin_vel(self):
-        """全程只跟踪进入 jump 时锁存的前向线速度，不约束侧向速度。"""
+        """跳跃全程只跟踪前向线速度命令，不约束侧向速度。"""
         error = torch.square(self.base_lin_vel[:, 0] - self.commands[:, 0])
         return torch.exp(-error / self.reward_cfg["reference_forward_velocity_sigma"])
 

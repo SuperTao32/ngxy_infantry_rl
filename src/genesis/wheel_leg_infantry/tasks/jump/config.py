@@ -44,16 +44,6 @@ def get_approach_cfg():
         "max_yaw_deg": 5.0,
         "stable_time_s": 0.15,
         "timeout_s": 5.0,
-        "reward_scales": {
-            "tracking_lin_vel": 5.0,
-            "tracking_ang_vel": 5.0,
-            "base_balance": -10.0,
-            "base_height": -50.0,
-            "wheel_airborne": -10.0,
-            "base_contact": -10.0,
-            "leg_symmetry": -5.0,
-            "action_rate": -0.01,
-        },
     }
 
 
@@ -66,7 +56,7 @@ def _get_termination_cfg():
             # 过倾、撞台阶立面、错误落台中的任一项，立即提前终止。
             "on_invalid": True,
         },
-        # 默认 jump 的 10° 过倾会先通过 on_invalid 立即终止。
+        # 默认 jump 的 20° 过倾会先通过 on_invalid 立即终止。
         "termination_if_roll_greater_than": 90.0, 
         "termination_if_pitch_greater_than": 90.0,  
         "tilt_termination_duration_s": 3.0, 
@@ -82,19 +72,19 @@ def _get_jump_modes_cfg(episode_length_s: float):
     base_to_wheel_bottom_trajectories = {
         "flat": [
             [0.00, 0.22],
-            [0.20, 0.60],
+            [0.20, 0.38],
             [0.30, 0.20],
             [episode_length_s, 0.22],
         ],
         "step_20cm": [
             [0.00, 0.22],
-            [0.20, 0.40],
+            [0.20, 0.38],
             [0.30, 0.20],
             [episode_length_s, 0.22],
         ],
         "step_40cm": [
             [0.00, 0.22],
-            [0.20, 0.70],
+            [0.20, 0.38],
             [0.30, 0.20],
             [episode_length_s, 0.22],
         ],
@@ -137,7 +127,7 @@ def _get_jump_modes_cfg(episode_length_s: float):
 
 
 def _get_reward_cfg():
-    """奖励形状参数、各阶段权重及禁用的 locomotion 奖励。"""
+    """奖励形状参数、共享奖励及各阶段权重。"""
     return {
         # 落地 base 到轮底距离跟踪：容差单位 m，指数分母 sigma 单位 m²。
         "height_reference_tolerance_m": 0.02,
@@ -152,41 +142,44 @@ def _get_reward_cfg():
         "reference_forward_velocity_sigma": 0.25,
         "zero_yaw_rate_sigma": 0.02,
         "reward_scales": {
-            # 复用 locomotion 的无门控奖励，在起跳、腾空和落地全程生效。
+            # 助跑不结算奖励；共享奖励在 jump 信号更新后的起跳、腾空和落地生效。
             "base_balance": -5.0,
-            "leg_symmetry": -50.0,
-            "leg_symmetry_bonus": 10.0,
-            # 全程追踪切换时的前向速度，同时保持 yaw 角速度为零。
-            "tracking_lin_vel": 5.0,
-            "tracking_ang_vel": 10.0,
-            "action_rate": -0.001,
+            "leg_symmetry": -5.0,
+            "leg_symmetry_bonus": 1.0,
+            # jump 全程追踪前向速度命令，同时保持 yaw 角速度为零。
+            # 此处函数返回 exp(-error / sigma)，与 locomotion 的平方误差项符号不同。
+            "tracking_lin_vel": 2.0,
+            "tracking_ang_vel": 2.0,
+            "joint_vel": -0.005,
+            "wheel_action_rate": -1.0,
+            "leg_action_rate": -0.1,
             # 实测腿长达到 upper_links_min_angle 对应限位后，惩罚继续伸腿的目标角差平方。
-            "leg_extension_at_limit": -100.0,
-            "base_contact": -1.0,  # 碰撞期间逐步惩罚，仍乘 dt，不直接判失败。
-            "death": -100.0,
-            "jump_invalid": -200.0,
-            # 起跳与峰值高度
-            "takeoff_event": 200.0,
-            "flight_height_shortfall": -2000.0,
-            "flight_peak_height": 5000.0,
-            "takeoff_upward_velocity": 2000.0,
-            "takeoff_vertical_velocity": 3000.0,
+            "leg_extension_at_limit": -5.0,
+            "base_contact": -10.0,  # 碰撞期间逐步惩罚，仍乘 dt，不直接判失败。
+            "death": -100.0,  # 与 locomotion 一致，不乘 dt。
+            "jump_invalid": -10.0,
+            # 一次性奖励仍乘 dt：默认 0.01 s 下，合格起跳 +1、达标峰值累计 +3。
+            "takeoff_event": 100.0,
+            "flight_height_shortfall": -300.0,
+            "flight_peak_height": 300.0,
+            # 持续项按每秒计，避免起跳速度和超高收益压过落稳成功。
+            "takeoff_upward_velocity": 10.0,
+            "takeoff_vertical_velocity": 100.0,
             # 腾空
-            "flight_airtime": 10.0,
-            "flight_balance": 5.0,
-            "flight_height_progress": 80.0,
+            "flight_airtime": 1.0,
+            "flight_balance": 2.0,
+            "flight_height_progress": 5.0,
             "flight_height_tracking": 0.0,
-            "flight_wheel_clearance": 1500.0,
+            "flight_wheel_clearance": 10.0,
             # 落地
-            "landing_vertical_velocity": -1.0,
-            "soft_landing": 1.0,
-            "landing_stability": 1.0,
-            "landing_airborne": -1.0,  # 首次触地后双轮离地期间逐步惩罚。
-            "target_landing": 30.0,
-            "base_to_wheel_bottom_distance_tracking": 20.0,
+            "landing_vertical_velocity": -20.0,  # 2 m/s 触地的事件惩罚为 -0.8。
+            "soft_landing": 100.0,  # 单次上限 +1。
+            "landing_stability": 5.0,
+            "landing_airborne": -10.0,  # 首次触地后双轮离地期间逐步惩罚。
+            "base_to_wheel_bottom_distance_tracking": 5.0,
             # 任务结果
-            "task_success": 5000.0,  # 事件奖励沿用框架的 dt 缩放。
-            "task_failure": -500.0,
+            "task_success": 1500.0,  # dt=0.01 时单次 +15，作为主要正向收益。
+            "task_failure": -1000.0,  # dt=0.01 时单次 -10；异常终止另有 death。
         },
     }
 
@@ -211,29 +204,26 @@ def _get_curriculum_cfg():
             },
             {
                 "name": "step_40cm",
-                "start_iteration": 300,
+                "start_iteration": 1500,
                 "targets": {
                     "terrain": {"platform_enabled": [True, True, True]},
                     "reward_scales": {
-                        "base_contact": -200.0, 
-                        "landing_airborne": -200.0,
-                        "base_balance": -30.0,
-                        "leg_symmetry": -20.0,
-                        "leg_symmetry_bonus": 10.0,
-                        "tracking_lin_vel": 10.0,
-                        "tracking_ang_vel": 30.0,
-                        # 落地
-                        "soft_landing": 1000.0,
-                        "landing_stability": 1000.0,
-                        "leg_extension_at_limit": -200.0,
-                        "flight_wheel_clearance": 500.0,
-                        "landing_vertical_velocity": -100.0,
+                        "base_contact": -15.0,
+                        "landing_airborne": -15.0,
+                        "base_balance": -10.0,
+                        "flight_peak_height": 200.0,
+                        "takeoff_upward_velocity": 5.0,
+                        "flight_height_progress": 3.0,
+                        "soft_landing": 150.0,
+                        "landing_stability": 8.0,
+                        "leg_extension_at_limit": -10.0,
+                        "landing_vertical_velocity": -30.0,
                     },
                 },
             },
             {
                 "name": "mixed_jump",
-                "start_iteration": 600,
+                "start_iteration": 3000,
                 "targets": {
                     "terrain": {
                         "mode_probabilities": [1 / 5, 1 / 5, 3 / 5],
@@ -241,27 +231,16 @@ def _get_curriculum_cfg():
                     },
                     "command_ranges": {"lin_vel_range": [1.0, 3.0]},
                     "reward_scales": {
-                        "base_balance": -30.0,
-                        "leg_symmetry": -20.0,
-                        "leg_symmetry_bonus": 10.0,
-                        "tracking_lin_vel": 10.0,
-                        "tracking_ang_vel": 20.0,
-                        # 落地
-                        "soft_landing": 2000.0,
-                        "landing_stability": 2000.0,
-                        "action_rate": -0.07,
-                        # 按 [平地, 20 cm, 40 cm] 指定权重，仅提高 40 cm 任务。
-                        "flight_airtime": [20.0, 5.0, 20.0],
-                        "flight_peak_height": [100.0, 0.0, 2000.0],
-                        "takeoff_vertical_velocity": [200.0, 200.0, 2000.0],
-                        "takeoff_upward_velocity": [0.0, 0.0, 1000.0],
-                        "flight_height_progress": [0.0, 0.0, 100.0],
-                        "flight_height_tracking": [1000.0, 500.0, 0.0],
-                        "flight_height_shortfall": -100.0,
-                        "leg_extension_at_limit": -300.0,
-                        "flight_wheel_clearance": 100.0,
-                        "flight_balance": 100.0,
-                        "task_failure": -5000.0,
+                        "landing_stability": 10.0,
+                        "wheel_action_rate": -1.5,
+                        # 按 [平地, 20 cm, 40 cm] 指定权重，保留各模式的跳高信号。
+                        "flight_airtime": [0.5, 0.5, 1.0],
+                        "flight_peak_height": [150.0, 100.0, 200.0],
+                        "takeoff_vertical_velocity": [50.0, 50.0, 100.0],
+                        "takeoff_upward_velocity": [0.0, 0.0, 3.0],
+                        "flight_height_progress": [0.0, 0.0, 2.0],
+                        "flight_height_tracking": [2.0, 2.0, 0.0],
+                        "flight_wheel_clearance": [5.0, 5.0, 10.0],
                     },
                 },
             },

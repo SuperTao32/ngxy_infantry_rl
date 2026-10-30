@@ -19,11 +19,11 @@ from .rewards import JumpRewards
 class JumpTask(JumpApproach, JumpRewards, JumpBuffers, Task):
     def __init__(self, env, name, config, env_ids):
         self.approach_cfg = {**get_approach_cfg(), **config["env_cfg"].get("jump_approach", {})}
+        self.approach_cfg.pop("reward_scales", None)  # 兼容旧存档，助跑奖励配置不再使用。
         self.task_cfg = config["env_cfg"]["jump_modes"]
         self.phase_durations = validate_phase_durations(config["env_cfg"]["jump_phase_durations_s"])
         self.phase_cycle_s = sum(self.phase_durations)
         super().__init__(env, name, config, env_ids)
-        self._apply_reward_scales({"approach_" + name: value for name, value in self.approach_cfg["reward_scales"].items()})
 
     def _initialize_task_buffers(self):
         super()._initialize_task_buffers()
@@ -222,9 +222,19 @@ class JumpTask(JumpApproach, JumpRewards, JumpBuffers, Task):
         scale = self.reward_scales[name]
         # 每次结算按当前模式索引，reset 重新分配任务后立即使用对应权重。
         scale = scale[self.jump_mode] if isinstance(scale, torch.Tensor) else scale
-        if name in {"death", "task_failure"}:
-            return scale
-        return scale * (~self.jump_active if name.startswith("approach_") else self.jump_active)
+        # 助跑仅推理，不发奖励；旧配置中的助跑专用项也不参与 jump。
+        if name in {"base_height", "wheel_airborne"}:
+            return scale * torch.zeros_like(self.jump_active)
+        return scale * self.jump_active
+
+    def compute_rewards(self):
+        active = self.mask & self.jump_active
+        if not active.any():
+            return
+        for name, function in self.reward_functions.items():
+            values = torch.where(active, function() * self._get_reward_scale(name), 0.)
+            self.env.reward_buf.add_(values)
+            self.episode_sums[name].add_(values)
 
     def _apply_reward_scales(self, values):
         """标量对所有任务生效；三元素列表按平地、20 cm、40 cm 分别设置。"""

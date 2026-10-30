@@ -2,6 +2,7 @@
 
 import argparse
 from copy import deepcopy
+from pathlib import Path
 
 from .config import env_kwargs, get_cfgs, select_tasks
 from .tools.distributed import training_workers
@@ -33,10 +34,20 @@ def main(argv=None):
     parser.add_argument("--cpu", action="store_true")
     parser.add_argument("--log-root", default="logs")
     add_resume_arguments(parser)
+    parser.add_argument(
+        "--load-weight", type=Path, metavar="CHECKPOINT",
+        help="load actor/critic weights into a new run using current config; reset optimizer, iteration and curricula",
+    )
     add_randomization_arguments(parser, evaluation=False)
     args = parser.parse_args(argv)
     if args.num_envs < 1 or args.max_iterations < 1:
         parser.error("--num-envs and --max-iterations must be positive")
+    if args.load_weight is not None:
+        if args.resume is not None:
+            parser.error("--load-weight and --resume are mutually exclusive")
+        args.load_weight = args.load_weight.expanduser().resolve()
+        if not args.load_weight.is_file():
+            parser.error(f"Checkpoint does not exist: {args.load_weight}")
     if args.resume is None and (args.checkpoint is not None or args.resume_config != "saved"):
         parser.error("--checkpoint and --resume-config require --resume")
     if args.resume is not None and args.resume_config == "saved" and (args.tasks or args.task_weights):
@@ -108,6 +119,8 @@ def _train(args, parser, workers):
     arguments = {**vars(args), **workers.metadata(args.num_envs, args.seed)}
     if plan:
         arguments["resume_from"] = str(plan.checkpoint_path.resolve())
+    if args.load_weight is not None:
+        arguments["load_weight_from"] = str(args.load_weight)
     workers.primary(save_run_artifacts, run_dir, configs, arguments)
     print(f"[train] one GRU policy; tasks={dict(zip(tasks, counts))}; run={run_dir}")
     gs.init(backend=gs.cpu if args.cpu else gs.gpu, precision="32", logging_level="warning", seed=args.seed + workers.rank, performance_mode=True)
@@ -127,6 +140,13 @@ def _train(args, parser, workers):
             remaining = restore_training_state(runner, env, plan, args.max_iterations)
             resumed_counts = {name: len(task.env_ids) for name, task in env.task_manager.tasks.items()}
             print(f"[resume] iteration={runner.current_learning_iteration}; tasks={resumed_counts}")
+        elif args.load_weight is not None:
+            runner.load(
+                str(args.load_weight),
+                load_cfg=dict(actor=True, critic=True, optimizer=False, iteration=False, rnd=False),
+                map_location=runner.device,
+            )
+            print(f"[load-weight] checkpoint={args.load_weight}; iteration=0; optimizer and task curricula start fresh")
         runner.learn(num_learning_iterations=remaining, init_at_random_ep_len=False)
     finally:
         gs.destroy()

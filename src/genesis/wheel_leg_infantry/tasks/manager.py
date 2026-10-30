@@ -150,9 +150,24 @@ class TaskManager:
                 task.set_env_ids(ids)
         return changed
 
-    def advance_progress(self, iteration):
-        for name, task in self.tasks.items():
-            self.progress[name].advance(len(task.env_ids), world_size=self.world_size, iteration=iteration)
+    def training_mask(self):
+        valid = torch.ones(self.env.num_envs, dtype=torch.bool, device=self.env.device)
+        jump = self.tasks.get("jump")
+        if jump is not None:
+            valid &= ~jump.mask | jump.jump_active
+        return valid
+
+    def advance_progress(self, iteration, train_mask=None):
+        if train_mask is None:
+            for name, task in self.tasks.items():
+                self.progress[name].advance(len(task.env_ids), world_size=self.world_size, iteration=iteration)
+            return
+        counts = torch.stack([train_mask[task.env_ids].sum() for task in self.tasks.values()])
+        # 异步助跑使各 rank 的有效样本数不同，必须汇总实测数量而非乘 world_size。
+        if self.world_size > 1:
+            dist.all_reduce(counts, op=dist.ReduceOp.SUM)
+        for name, count in zip(self.tasks, counts.tolist()):
+            self.progress[name].advance(count, world_size=1, iteration=iteration)
 
     def update_curricula(self, *, force=False):
         for name, task in self.tasks.items():

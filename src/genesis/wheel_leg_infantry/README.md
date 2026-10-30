@@ -1,13 +1,13 @@
 # Wheel Leg Infantry：单策略多任务框架
 
-四个任务在一个 `WheelLegInfantryEnv`、一个 Genesis Scene 和一份 PPO rollout 中训练同一 actor/critic。默认权重为 `locomotion:recovery:jump:multi_terrain = 1:1:0:0`；各任务的回合可以独立结束，GRU 按各环境的 done 重置。
+四个任务在一个 `WheelLegInfantryEnv`、一个 Genesis Scene 和一份 PPO rollout 中训练同一 actor/critic。默认权重为 `locomotion:recovery:jump:multi_terrain = 2:0:1:0`；各任务的回合可以独立结束，GRU 按各环境的 done 重置。
 
 ## 入口
 
 从仓库根目录执行：
 
 ```bash
-# 默认混合平地与起身任务，训练一个 policy
+# 默认按 2:1 混合平地行走与跳跃任务，训练一个 policy
 uv run --locked python -m src.genesis.wheel_leg_infantry.train \
   -e infantry -B 8192 --max-iterations 10000
 
@@ -18,6 +18,11 @@ uv run --locked python -m src.genesis.wheel_leg_infantry.train \
 # 使用保存配置、优化器和任务课程续训；总目标轮数语义
 uv run --locked python -m src.genesis.wheel_leg_infantry.train \
   -e infantry --resume --max-iterations 20000
+
+# 只加载权重，按当前配置开启新实验；优化器和课程从头开始
+uv run --locked python -m src.genesis.wheel_leg_infantry.train \
+  -e infantry_finetune --load-weight logs/infantry/version_0000/model_3000.pt \
+  --tasks locomotion jump --task-weights locomotion=2 jump=1 --max-iterations 10000
 
 # 使用当前配置续训单任务实验
 uv run --locked python -m src.genesis.wheel_leg_infantry.train \
@@ -33,6 +38,8 @@ uv run --locked python -m src.genesis.wheel_leg_infantry.eval \
 ```
 
 训练默认构建全部任务，零权重任务暂不采样，可由后续课程启用。`--tasks` 支持多个名称并限制可分配的任务集合；若只选择初始权重为零的任务，需要同时用 `--task-weights` 设置正权重。每个正权重任务至少分配一个环境，所有权重不能同时为零；multi_terrain 的正配额还需容纳其内部课程。`--task-weights` 覆盖初始比例，后续仍遵循配置中的阶段分配。
+
+`--load-weight CHECKPOINT` 加载 actor/critic 的完整模型状态，包括 GRU 权重、动作分布参数及观测归一化统计；使用当前配置创建新版本，优化器、全局迭代数、任务课程和 GRU 隐状态重新初始化。可自由选择任务集合及权重，网络结构与观测/动作维度须兼容源 checkpoint；不需要源目录中的 `cfgs.pkl`。此模式的 `--max-iterations` 为从第 0 轮开始的训练轮数，不能与 `--resume`、`--checkpoint` 或 `--resume-config current` 同用，来源路径记录到 `run_metadata.json`。
 
 续训默认使用 `--resume-config saved`，保留已保存的任务集合与权重，不接受 `--tasks` / `--task-weights`。使用 `--resume-config current` 时可通过这些参数选择当前配置中的任务和初始权重，并在保留 checkpoint 全部任务的基础上新增任务。已有任务保留课程进度及专属状态，新增任务使用当前配置初始化，独立课程从 0 开始；策略、优化器和全局迭代数继续恢复，网络结构需兼容 checkpoint。全局课程立即应用恢复轮次所属阶段：例如从 `model_3000.pt` 恢复，从 3001 轮继续；若该阶段权重为 locomotion=1、recovery=0.5，环境约按 2:1 分配。新增任务在实际分到环境后才推进独立课程。`--max-iterations` 表示总目标轮数，须大于 checkpoint 的已完成轮数。
 
@@ -87,7 +94,7 @@ uv run --locked torchrun --standalone --nproc_per_node=2 \
 | `env.py` | 统一场景、控制、传感器、任务调度与重置；`_update_observations()` 显式列出全部观测 |
 | `train.py` / `eval.py` | 多任务训练/恢复与连续交互仿真 |
 | `tools/interactive_env.py` / `interactive_viewer.py` | 部署命令、固定场景、连续仿真与键盘诊断 |
-| `policy_runner.py` | 一份 PPO actor/critic，保存和恢复任务课程 |
+| `policy_runner.py` / `trajectory_ppo.py` | 一份 PPO actor/critic，过滤助跑样本，保存和恢复任务课程 |
 | `tasks/task_config.py` | 共享命令采样、reset 状态采样与配置更新 |
 | `tasks/base.py` / `manager.py` | 任务协议、动态环境分配、采样进度和 hook 调度 |
 | `tasks/<name>/config.py` | 各任务独立声明的命令、奖励参数、重置、终止和课程覆盖项 |
@@ -121,7 +128,7 @@ kp、kd、力矩限幅及动作缩放由所有任务共用，任务 reset、课�
 
 环境基准由根配置的 `TASK_CURRICULUM_REFERENCE_ENVS` 声明，当前为每任务 8192 个环境；参考步数默认使用 `train_cfg["num_steps_per_env"]`（当前为 24），无需另外维护步数常量。各任务的 `curriculum_cfg` 仍可显式设置 `reference_num_envs` / `reference_steps_per_iteration`。例如单卡 `-B 8192` 等分两个任务时，每个任务每全局轮推进 0.5 轮课程；分到 8192 个环境时推进一轮，零配额时暂停。首次分到环境前不累计样本，暂停后重新分配会继续已有进度；小数样本进度与折算基准跨 checkpoint 保留，续训不重新解释历史进度。多地形内部的按成功率升级课程仍由真实完成的回合驱动。
 
-任务组件读取共享物理状态，写公共 buffer 时使用自己的 `mask`。奖励只累加本任务的行，所有行随后进入同一 RSL-RL rollout 和 PPO 更新。任务内部可以保留独立课程，但不各自建立训练循环。
+任务组件读取共享物理状态，写公共 buffer 时使用自己的 `mask`。奖励只累加本任务的行，训练共用一份 RSL-RL rollout 和 PPO。jump 助跑行通过动作执行前快照的 `ppo_train_mask` 排除；训练批次只包含其他任务及 jump 信号更新后的连续轨迹，助跑不参与奖励、GAE、观测归一化或跳跃课程样本计数。整批无有效样本时跳过优化器更新。任务内部可以保留独立课程，但不各自建立训练循环。
 
 `env.py::_reset_idx()` 将 `None` 转换成全量 mask，后续全量和局部 reset 共用机器人、物理状态、传感器、任务 buffer 和命令的重置路径。`None` 用于初始化或手动 reset，不生成结束回合日志；显式布尔 mask 会先保存结束回合统计，再清零对应行。
 
@@ -149,4 +156,4 @@ TensorBoard 以 `locomotion/`、`recovery/`、`jump/`、`multi_terrain/` 为独�
 
 actor 包含 IMU、重力方向、关节/轮测量、6D actions、六维命令、ToF 与六维跳跃阶段编码。命令依次为缩放后的前向速度、偏航速度、高度目标，以及未缩放的三维 jump 模式 one-hot；非 jump 环境的模式为零。critic 再追加速度、接触等仿真真值，以及 baselink 原点的世界坐标 z（不扣除地形高度）。默认 ToF 配置下 actor 为 51D、critic 为 75D；选择任务子集不会改变网络输入维度。
 
-jump 从空旷跑道静止出生，使用同一策略加速；连续达速并站稳后保留物理状态移到指定起跳距离，再发送跳跃编码并开始独立计时。加速与跳跃均参与 PPO rollout，分别结算行走和跳跃奖励。加速容差/超时、起跳距离表、恢复姿态、各任务比例与奖励在对应配置中调整。
+jump 从空旷跑道静止出生，使用同一策略推理加速；连续达速并站稳后保留物理状态移到指定起跳距离，再发送跳跃编码并开始独立计时。助跑不发奖励、不参与 PPO 更新；跳跃编码更新后产生的轨迹进入 PPO，GRU 保留切换时的隐状态，训练不回放助跑过程。加速容差/超时、起跳距离表、恢复姿态、各任务比例与奖励在对应配置中调整。

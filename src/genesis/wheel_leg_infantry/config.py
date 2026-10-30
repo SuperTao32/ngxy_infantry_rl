@@ -15,9 +15,9 @@ from .terrains import default_terrain_cfg
 # 任务分配与课程基准
 # 权重为 0 时暂不分配环境，后续可通过 get_curriculum_cfg() 的阶段权重启用。
 TASK_WEIGHTS = {
-    "locomotion": 1.0,
+    "locomotion": 2.0,
     "recovery": 0.0,
-    "jump": 0.0,
+    "jump": 1.0,
     "multi_terrain": 0.0,
 }
 # 每个任务可通过 curriculum_cfg.reference_num_envs 单独覆盖。
@@ -240,15 +240,10 @@ def get_curriculum_cfg() -> dict:
                 "start_iteration": 3000,
                 "targets": {
                     # 只填写需要改变的权重；空字典继承上一阶段的分配。
-                    "task_weights": {
-                        "locomotion": 1.0,
-                        "recovery": 0.5,
-                        "jump": 0.0,
-                        "multi_terrain": 0.0,
-                    },
-                    "domain_rand": {"strength": 0.0},
-                    "sensor_noise": {"strength": 0.0},
-                    "wheel_slip": {"strength": 0.0},
+                    "task_weights": {},
+                    "domain_rand": {"strength": 0.4},
+                    "sensor_noise": {"strength": 0.4},
+                    "wheel_slip": {"strength": 0.4},
                 },
             },
             {
@@ -256,9 +251,9 @@ def get_curriculum_cfg() -> dict:
                 "start_iteration": 7000,
                 "targets": {
                     "task_weights": {},
-                    "domain_rand": {"strength": 0.0},
-                    "sensor_noise": {"strength": 0.0},
-                    "wheel_slip": {"strength": 0.0},
+                    "domain_rand": {"strength": 0.7},
+                    "sensor_noise": {"strength": 0.7},
+                    "wheel_slip": {"strength": 0.7},
                 },
             },
         ],
