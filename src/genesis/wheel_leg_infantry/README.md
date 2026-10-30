@@ -26,6 +26,15 @@ uv run --locked python -m src.genesis.wheel_leg_infantry.eval \
 
 训练和评估共用 `--tasks`、`--log-root`、`--seed`、`--cpu` 及随机化开关。`--tasks` 支持多个名称；训练默认全部开启。每个开启任务需要正权重且至少一个环境；multi_terrain 的内部子任务还需足够的环境配额。默认评估开启 viewer，`--no-vis` 关闭；`--output results.json` 保存汇总。
 
+交互控制 command 时添加 `--keyboard`，并在 viewer 窗口中按键：
+
+```bash
+uv run --locked python -m src.genesis.wheel_leg_infantry.eval \
+  -e infantry --tasks locomotion -B 1 --keyboard --steps 100000
+```
+
+↑/↓ 每次增减前向速度 0.5 m/s，←/→ 每次增减偏航速度 0.5 rad/s；PageUp/PageDown 每次增减目标高度 0.05 m；空格将速度和转向清零，Enter 对准机器人。命令限幅使用 0 号机器人所属任务在 checkpoint 时的课程范围，所有并行环境共用同一键盘输入，建议用单任务评估。每次策略推理前重新写入命令并刷新观测，自动 reset 后仍保持键盘目标。`--keyboard` 需要 viewer；不传时保持自动采样命令。
+
 多卡入口仍是同一个模块，每卡环境数由 `-B` 指定：
 
 ```bash

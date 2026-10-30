@@ -178,7 +178,7 @@ def get_curriculum_cfg() -> dict:
     }
 
 
-TASK_WEIGHTS = {"locomotion": 1.0, "recovery": 0.0, "jump": 0.0, "multi_terrain": 0.0}
+TASK_WEIGHTS = {"locomotion": 1.0, "recovery": 1.0, "jump": 0.0, "multi_terrain": 0.0}
 # 任务可以覆盖回合和重置参数；机器人、动作和随机化参数只在根配置声明。
 TASK_ENV_FIELDS = {
     "episode_length_s", "resampling_time_s", "termination_if_roll_greater_than",
@@ -213,7 +213,7 @@ def get_train_cfg(exp_name: str) -> dict:
         },
         "obs_groups": {"actor": ["policy"], "critic": ["critic"]},
         "num_steps_per_env": 24,
-        "save_interval": 500,
+        "save_interval": 100,
         "max_iterations": 10000,
         "seed": 42,
         "clip_actions": None,

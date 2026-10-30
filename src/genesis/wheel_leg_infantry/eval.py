@@ -35,12 +35,16 @@ def main(argv=None):
     parser.add_argument("--steps", type=int, default=3000)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--vis", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--keyboard", action="store_true",
+                        help="control commands with viewer keys (requires --vis)")
     parser.add_argument("--cpu", action="store_true")
     parser.add_argument("--output", type=Path)
     add_randomization_arguments(parser, evaluation=True)
     args = parser.parse_args(argv)
     if args.num_envs < 1 or args.steps < 1:
         parser.error("--num-envs and --steps must be positive")
+    if args.keyboard and not args.vis:
+        parser.error("--keyboard requires --vis")
     run_dir = resolve_run_dir(args.log_root, args.exp_name, args.version, require_checkpoint=True)
     checkpoint = resolve_checkpoint(run_dir, args.checkpoint)
     configs = deepcopy(load_run_configs(run_dir))
@@ -77,7 +81,23 @@ def main(argv=None):
         with torch.inference_mode():
             policy.reset()
             obs = env.reset()
+            keyboard = None
+            if args.keyboard:
+                from .tools.interactive_viewer import KeyboardCommand
+                keyboard = KeyboardCommand(env)
+                print("[eval] keyboard: Up/Down=vx (+/-0.5 m/s), Left/Right=wz (+/-0.5 rad/s), "
+                      "PageUp/PageDown=height (+/-0.05 m), Space=stop, Enter=focus robot")
+                print(f"[eval] command limits (env 0 task: {keyboard.task.name}): {keyboard.command_ranges}")
             for _ in range(args.steps):
+                if args.vis and not env.scene.viewer.is_alive():
+                    break
+                if keyboard is not None:
+                    # Resampling/reset may replace commands inside step(). Refresh
+                    # both actor and critic observations before every inference.
+                    keyboard.write_to_env()
+                    env._update_observations()
+                    obs = env.get_observations()
+                    keyboard.update_caption()
                 obs, rewards, dones, extras = env.step(policy(obs))
                 policy.reset(dones)
                 returns += rewards

@@ -18,7 +18,7 @@ def main(argv=None):
     parser.add_argument("--max-iterations", "--max_iterations", type=int, default=10000)
     parser.add_argument("--tasks", nargs="+", choices=TASK_NAMES)
     parser.add_argument("--task-weights", nargs="+", metavar="NAME=WEIGHT")
-    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--seed", type=int, default=32)
     parser.add_argument("-v", "--vis", action="store_true")
     parser.add_argument("--cpu", action="store_true")
     parser.add_argument("--log-root", default="logs")

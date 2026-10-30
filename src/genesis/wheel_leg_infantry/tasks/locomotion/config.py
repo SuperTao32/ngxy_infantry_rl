@@ -73,7 +73,7 @@ def _curriculum_cfg() -> dict:
             },
             {
                 "name": "locomotion",
-                "start_iteration": 500,
+                "start_iteration": 1000,
                 "targets": {
                     "standing_reward": {"tracking_sigma": 0.10},
                     "reset_ranges": {

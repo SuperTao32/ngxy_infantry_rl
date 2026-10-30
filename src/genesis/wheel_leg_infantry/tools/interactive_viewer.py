@@ -51,6 +51,11 @@ class KeyboardCommand:
 
     def __init__(self, env):
         self.env = env
+        # The viewer follows env 0. Shared defaults have zero velocity ranges;
+        # use its task's ranges after the checkpoint curriculum was restored.
+        self.task = next(task for task in env.task_manager.tasks.values() if bool(task.mask[0]))
+        self.command_ranges = {key: tuple(self.task.command_cfg[key]) for key in
+                               ("lin_vel_range", "ang_vel_range", "base_height_range")}
         self.lin_vel = 0.0
         self.ang_vel = 0.0
         self.height_target = float(env.commands[0, 2].item())
@@ -89,15 +94,15 @@ class KeyboardCommand:
         )
 
     def _change_lin(self, amount):
-        lower, upper = self.env.command_cfg["lin_vel_range"]
+        lower, upper = self.command_ranges["lin_vel_range"]
         self.lin_vel = min(max(self.lin_vel + amount, lower), upper)
 
     def _change_ang(self, amount):
-        lower, upper = self.env.command_cfg["ang_vel_range"]
+        lower, upper = self.command_ranges["ang_vel_range"]
         self.ang_vel = min(max(self.ang_vel + amount, lower), upper)
 
     def _change_height(self, amount):
-        lower, upper = self.env.command_cfg["base_height_range"]
+        lower, upper = self.command_ranges["base_height_range"]
         self.height_target = min(max(self.height_target + amount, lower), upper)
 
     def stop(self):
@@ -143,7 +148,8 @@ class KeyboardCommand:
         obs = env.obs_buf[0]
         pd = env.get_pd_diagnostics()
         slip_text, slip_color = self._wheel_slip_caption()
-        terrain_type = env.terrain.tile_type(env.terrain_tile_index[0].item())
+        terrain = self.task.terrain
+        terrain_type = terrain.tile_type(self.task.terrain_tile_index[0].item())
         text = (
             f"command  vx={self.lin_vel:+.2f} m/s  wz={self.ang_vel:+.2f} rad/s  " f"height={self.height_target:.3f} m",
             f"state    vx_true={env.base_lin_vel[0, 0].item():+.2f} m/s  "
@@ -151,13 +157,14 @@ class KeyboardCommand:
             slip_text,
             f"pose     z={env.base_pos[0, 2].item():.3f} m  ground={env.terrain_height[0].item():.3f} m  "
             f"height={env.base_height[0].item():.3f} m",
-            f"terrain  preset={env.terrain.preset}  patch={terrain_type}  "
+            f"terrain  task={self.task.name}  preset={terrain.preset}  patch={terrain_type}  "
             f"roll={env.base_euler[0, 0].item():+.1f} deg  pitch={env.base_euler[0, 1].item():+.1f} deg",
             f"legs     left={env.leg_length[0, 0].item():.3f} m  right={env.leg_length[0, 1].item():.3f} m",
             f"obs      n={obs.numel()}  min={obs.min().item():+.2f}  max={obs.max().item():+.2f}  " f"mean={obs.mean().item():+.2f}",
             *tof_overlay_lines(env),
             f"joint Kd       {format_tensor(pd['joint_kd'], precision=2)}",
             f"joint -Kd*qdot {format_tensor(pd['joint_kd_damping'], precision=2)}",
+            "keys  Up/Down=vx  Left/Right=wz  PgUp/PgDn=height  Space=stop  Enter=focus",
         )
         self.diagnostics_overlay.update(text, colors={2: slip_color})
 
