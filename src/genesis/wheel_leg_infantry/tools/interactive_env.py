@@ -1,6 +1,7 @@
 """连续运行的部署式仿真：用户命令驱动行为，不运行训练任务回合。"""
 
 import math
+from copy import deepcopy
 
 import genesis as gs
 import torch
@@ -14,10 +15,17 @@ from ..tasks.jump.phase import phase_encoding, validate_phase_durations
 
 
 class InteractiveEnv(WheelLegInfantryEnv):
-    def __init__(self, num_envs, *, control_configs, **kwargs):
+    def __init__(self, num_envs, *, control_configs, recovery_reset_configs=None, **kwargs):
         if num_envs != 1 or not kwargs.get("evaluation"):
             raise ValueError("InteractiveEnv requires one evaluation robot")
         self.control_configs = control_configs
+        # Inject already-parsed configurations; pose files/providers belong to
+        # the configuration layer, not the simulation or viewer callbacks.
+        if recovery_reset_configs is None:
+            recovery_reset_configs = [control_configs["recovery"]["env_cfg"]]
+        if not recovery_reset_configs:
+            raise ValueError("recovery_reset_configs must contain at least one pose")
+        self.recovery_reset_configs = deepcopy(recovery_reset_configs)
         self.control_mode = "drive"
         self.drive_command = (0.0, 0.0, 0.22)
         self.jump_mode = 0
@@ -86,13 +94,19 @@ class InteractiveEnv(WheelLegInfantryEnv):
         self._write_commands()
         print(f"[eval] jump: {MODE_NAMES[mode]}")
 
-    def request_recovery(self):
-        self.return_to_drive()
+    def request_recovery(self, reset_cfg=None):
+        """随机（或显式指定）复位姿态后起身；调用方须同步重置策略历史。"""
+        label = "explicit"
+        if reset_cfg is None:
+            index = int(torch.randint(len(self.recovery_reset_configs), (1,), device=self.device).item())
+            reset_cfg = self.recovery_reset_configs[index]
+            label = f"{index + 1}/{len(self.recovery_reset_configs)}"
+        self.reset(pose_cfg=reset_cfg)
         self.control_mode = "recovery"
         self.recovery.reset()
         self.drive_command = (0.0, 0.0, self.recovery.config["height"])
         self._write_commands()
-        print("[eval] recovery requested at current pose")
+        print(f"[eval] recovery: reset pose {label}")
 
     def return_to_drive(self):
         if self.control_mode == "jump" and self._normal_motor_params is not None:
@@ -102,12 +116,26 @@ class InteractiveEnv(WheelLegInfantryEnv):
         self.jump_mode_one_hot.zero_()
         self.jump_phase.zero_()
 
-    def reset(self):
-        # Only startup and the explicit reset key use this path. Behavior
-        # requests never reset qpos, velocities, sensors, action, or GRU state.
+    def reset(self, *, pose_cfg=None):
+        """共用物理/传感器复位路径；临时姿态不覆盖正常出生配置。"""
         self.return_to_drive()
         self.drive_command = (0.0, 0.0, 0.22)
-        return super().reset()
+        if pose_cfg is None:
+            return super().reset()
+        task = self.task_manager.tasks["locomotion"]
+        original_cfg, original_dof_pos = task.env_cfg, task.init_dof_pos
+        range_keys = ("base_init_pos_range", "base_init_rpy_offset_range_deg",
+                      "base_init_lin_vel_range", "base_init_ang_vel_range")
+        task.env_cfg = deepcopy(original_cfg)
+        try:
+            task._apply_reset_ranges({key: pose_cfg[key] for key in range_keys if key in pose_cfg})
+            task.env_cfg["reset_joint_pos"] = deepcopy(pose_cfg.get("reset_joint_pos", {}))
+            task.bind_buffers()
+            return super().reset()
+        finally:
+            task.env_cfg = original_cfg
+            task._apply_reset_ranges({key: original_cfg[key] for key in range_keys})
+            task.init_dof_pos = original_dof_pos
 
     def _write_commands(self):
         self.commands[:] = self.commands.new_tensor(self.drive_command)

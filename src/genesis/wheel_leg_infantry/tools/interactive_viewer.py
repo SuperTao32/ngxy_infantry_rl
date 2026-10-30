@@ -122,6 +122,8 @@ class KeyboardCommand:
                 self.lin_vel = self.ang_vel = 0.0
                 self.height_target = self.env.recovery.config["height"]
                 self.env.request_recovery()
+                self.env.focus_viewer()
+                reset_policy = True
             elif action == "drive":
                 self.env.return_to_drive()
             elif action == "reset":
@@ -222,7 +224,7 @@ class KeyboardCommand:
             f"joint -Kd*qdot {format_tensor(pd['joint_kd_damping'], precision=2)}",
             "keys  Up/Down=vx  Left/Right=wz  PgUp/PgDn=height  Space=stop  Enter=focus",
             f"control  {env.control_mode.upper()} | J=jump ({MODE_NAMES[self.selected_jump_mode]})  "
-            "1/2/3=select jump  R=recover  L=drive  Backspace=reset",
+            "1/2/3=select jump  R=random reset/recover  L=drive  Backspace=upright reset",
         )
         self.diagnostics_overlay.update(text, colors={2: slip_color})
 

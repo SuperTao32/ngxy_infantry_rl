@@ -8,6 +8,7 @@ from pathlib import Path
 from .config import env_kwargs
 from .robust.randomization_config import add_randomization_arguments, apply_randomization_arguments
 from .tasks.manager import task_configs
+from .tasks.recovery.config import get_recovery_reset_cfgs
 from .terrains import TERRAIN_PRESETS, default_terrain_cfg, resolve_terrain_cfg
 from .tools.run_utils import load_run_configs, resolve_checkpoint, resolve_run_dir
 
@@ -93,6 +94,7 @@ def main(argv=None):
     gs.init(backend=gs.cpu if args.cpu else gs.gpu, precision="32", seed=args.seed, logging_level="warning")
     try:
         env = InteractiveEnv(1, **env_kwargs(configs), control_configs=controls, evaluation=True,
+                             recovery_reset_configs=get_recovery_reset_cfgs(),
                              steps_per_iteration=configs["train_cfg"]["num_steps_per_env"], show_viewer=args.vis)
         runner = PolicyRunner(env, configs["train_cfg"], None, device=str(gs.device))
         runner.load(str(checkpoint), load_cfg=dict(actor=True, critic=True, optimizer=False, iteration=False, rnd=False),
@@ -101,7 +103,7 @@ def main(argv=None):
         print(f"[eval] checkpoint: {checkpoint}")
         print(f"[eval] terrain: {args.terrain}; drive limits: {env.command_ranges}")
         print("[eval] arrows=vx/wz, PgUp/PgDn=height, Space=stop, J=jump, 1/2/3=jump mode, "
-              "R=recover here, L=drive, Backspace=manual reset, Enter=focus")
+              "R=random pose reset/recover, L=drive, Backspace=upright reset, Enter=focus")
         with torch.inference_mode():
             policy.reset()
             obs = env.reset()

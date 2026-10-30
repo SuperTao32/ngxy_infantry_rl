@@ -7,6 +7,17 @@ from .reset_pose import get_reset_pose_cfg
 # 可改为 "default"（0.22 m 默认站姿）或其他 Viewer JSON 快照。
 RESET_POSE = Path(__file__).with_name("reset_pos.json")
 
+# 交互评估的姿态来源；可追加其他 Viewer JSON 快照或 "default"。
+# 配置层负责解析，仿真和按键层只接收数值复位配置。
+RECOVERY_RESET_POSES = (RESET_POSE,)
+
+
+def get_recovery_reset_cfgs():
+    """返回 R 键可随机采样的复位配置，不改变训练的默认复位姿态。"""
+    if not RECOVERY_RESET_POSES:
+        raise ValueError("RECOVERY_RESET_POSES must contain at least one pose")
+    return [get_reset_pose_cfg(source) for source in RECOVERY_RESET_POSES]
+
 
 def get_cfgs():
     env_cfg = {

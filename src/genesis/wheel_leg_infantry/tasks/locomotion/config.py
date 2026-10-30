@@ -140,7 +140,7 @@ def _curriculum_cfg() -> dict:
             },
             {
                 "name": "locomotion_rand",
-                "start_iteration": 4500,
+                "start_iteration": 3500,
                 "targets": {
                     "standing_reward": {"tracking_sigma": 0.02},
                     "reset_ranges": {
@@ -172,7 +172,7 @@ def _curriculum_cfg() -> dict:
             },
             {
                 "name": "full_range",
-                "start_iteration": 7000,
+                "start_iteration": 5000,
                 "targets": {
                     "reset_ranges": {
                         "base_init_pos_range": [[0.0, 0.0], [0.0, 0.0], [0.22, 0.24]],
