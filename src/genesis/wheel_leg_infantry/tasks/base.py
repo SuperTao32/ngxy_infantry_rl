@@ -10,6 +10,7 @@ import math
 import torch
 
 from .task_config import TaskConfiguration
+from ..config import validate_task_env_overrides
 from ..curriculum import CurriculumManager
 from ..rewards import CommonRewards
 from ..terrains.manager import TerrainManager
@@ -20,11 +21,13 @@ class Task(CommonRewards, TaskConfiguration):
     EPISODE_METRICS = ("base_contact",)
 
     def __init__(self, env, name, config, env_ids):
+        overrides = config["env_cfg"]
+        validate_task_env_overrides(env.env_cfg, overrides, name, evaluation=env.evaluation)
         self.env, self.name, self.env_ids = env, name, env_ids
         self.mask = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
         self.mask[env_ids] = True
         self.env_cfg = deepcopy({key: value for key, value in env.env_cfg.items() if key != "tasks"})
-        self.env_cfg.update(deepcopy(config["env_cfg"]))
+        self.env_cfg.update(deepcopy(overrides))
         self.command_cfg = deepcopy(env.command_cfg)
         self.command_cfg.update(deepcopy(config["command_cfg"]))
         self.reward_cfg = deepcopy(env.reward_cfg)
@@ -65,6 +68,15 @@ class Task(CommonRewards, TaskConfiguration):
 
     def create_terrain(self):
         return TerrainManager(self.env_cfg.get("terrain"))
+
+    def set_env_ids(self, env_ids):
+        self.env_ids = env_ids
+        self.mask.zero_()
+        self.mask[env_ids] = True
+        self._on_env_ids_changed()
+
+    def _on_env_ids_changed(self):
+        pass
 
     def bind_buffers(self):
         reset_positions = {**self.env_cfg["default_joint_pos"], **self.env_cfg.get("reset_joint_pos", {})}

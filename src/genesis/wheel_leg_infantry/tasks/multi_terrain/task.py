@@ -35,7 +35,18 @@ class MultiTerrainTask(MultiTerrainRewards, MultiTerrainBuffers, Task):
         self.curriculum.register_target("task_command_ranges", self._apply_task_command_ranges)
 
     def _apply_task_weights(self, weights):
+        self._task_weights = deepcopy(weights)
         self.terrain.set_counts(allocate_counts(self.tasks, len(self.env_ids), weights))
+
+    def _on_env_ids_changed(self):
+        self.terrain.set_env_ids(self.env_ids)
+        self._apply_task_weights(self.__dict__.get("_task_weights", {}))
+        if "traversal" in self.__dict__:
+            self.traversal.copy_(self.mask)
+            self.stairs_down_buffers.task_mask &= self.mask
+            self.stairs_up_buffers.task_mask &= self.mask
+            self.intermittent.enabled &= self.mask
+            self.parking.drill &= self.mask
 
     def _apply_task_command_ranges(self, values):
         """按任务覆盖各难度的采样范围；下一次命令重采样生效。"""

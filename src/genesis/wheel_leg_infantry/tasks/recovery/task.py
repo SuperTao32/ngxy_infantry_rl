@@ -15,6 +15,12 @@ class RecoveryTask(RecoveryRewards, Task):
     def _reset_task_buffers(self, mask):
         self.stand_up.reset(mask)
 
+    def _on_env_ids_changed(self):
+        if self.stand_up is not None:
+            self.stand_up.active &= self.mask
+            self.stand_up.was_active &= self.mask
+            self.stand_up.just_completed &= self.mask
+
     def _resample_commands(self, mask):
         super()._resample_commands(mask)
         self.stand_up.enforce_commands(self.commands)

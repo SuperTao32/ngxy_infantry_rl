@@ -6,7 +6,7 @@ from copy import deepcopy
 from .config import env_kwargs, get_cfgs, select_tasks
 from .tools.distributed import training_workers
 from .robust.randomization_config import add_randomization_arguments, apply_randomization_arguments
-from .tasks.manager import TASK_NAMES, allocate_task_counts
+from .tasks.manager import TASK_NAMES, initial_task_counts
 from .tools.run_utils import (add_resume_arguments, create_versioned_run_dir, load_run_configs,
                               resolve_resume_plan, restore_training_state, save_run_artifacts)
 
@@ -17,7 +17,7 @@ def main(argv=None):
     parser.add_argument("-B", "--num-envs", "--num_envs", type=int, default=8192)
     parser.add_argument("--max-iterations", "--max_iterations", type=int, default=10000)
     parser.add_argument("--tasks", nargs="+", choices=TASK_NAMES)
-    parser.add_argument("--task-weights", nargs="+", metavar="NAME=WEIGHT")
+    parser.add_argument("--task-weights", nargs="+", metavar="NAME=WEIGHT", help="initial task weights; zero pauses a task")
     parser.add_argument("--seed", type=int, default=32)
     parser.add_argument("-v", "--vis", action="store_true")
     parser.add_argument("--cpu", action="store_true")
@@ -58,7 +58,10 @@ def _train(args, parser, workers):
         for entry in args.task_weights or ():
             name, weight = entry.split("=", 1)
             tasks[name]["weight"] = float(weight)
-        counts = allocate_task_counts(tasks, args.num_envs)
+            for stage in configs["curriculum_cfg"].get("stages", []):
+                if stage["start_iteration"] == 0:
+                    stage.setdefault("targets", {}).setdefault("task_weights", {})[name] = float(weight)
+        counts = initial_task_counts(tasks, args.num_envs, configs["curriculum_cfg"])
     except (ValueError, KeyError) as exc:
         parser.error(str(exc))
     configs["train_cfg"]["seed"] = args.seed

@@ -19,8 +19,7 @@ def get_cfgs():
     env = dict(
         episode_length_s=duration, resampling_time_s=duration,
         jump_phase_durations_s=durations, jump_modes=modes,
-        jump_motor_params={"joint_kp": 100.0, "joint_kd": 2.0, "wheel_kd": 0.3},
-        jump_step_40cm_joint_kd=0.1, takeoff_min_airborne_time_s=0.06,
+        takeoff_min_airborne_time_s=0.06,
         **_get_termination_cfg(),
     )
     commands = dict(lin_vel_range=[1.5, 2.0], ang_vel_range=[0.0, 0.0],

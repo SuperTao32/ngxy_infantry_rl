@@ -5,7 +5,6 @@ import genesis as gs
 import torch
 
 from ...utils.kinematics import compute_mean_base_to_wheel_bottom_distance
-from ...utils.tensor_utils import as_gain_tensor
 from .terrain import JumpTerrain
 from ..base import Task
 from .buffers import JumpBuffers
@@ -27,49 +26,6 @@ class JumpTask(JumpRewards, JumpBuffers, Task):
         # Keep task and terrain configuration identical after the defensive copy.
         self.task_cfg = self.env_cfg["jump_modes"]
         return JumpTerrain(self.task_cfg)
-
-    def bind_buffers(self):
-        super().bind_buffers()
-        self._initialize_jump_motor_params()
-
-    def _initialize_jump_motor_params(self):
-        self._jump_motor_params = {}
-        counts = {
-            "joint_kp": self.num_joints,
-            "joint_kd": self.num_joints,
-            "wheel_kd": self.num_wheels,
-            "joint_force_limit": self.num_joints,
-            "wheel_force_limit": self.num_wheels,
-        }
-        for name, value in self.env_cfg.get("jump_motor_params", {}).items():
-            if name not in counts:
-                raise ValueError(f"unknown jump_motor_params key: {name}")
-            if value is None:
-                continue
-            tensor = as_gain_tensor(
-                value,
-                counts[name],
-                f"jump_motor_params.{name}",
-                device=self.device,
-            )
-            if tensor.shape != (counts[name],):
-                raise ValueError(f"jump_motor_params.{name} must be a scalar or a flat list")
-            if not torch.all(torch.isfinite(tensor)) or torch.any(tensor < 0):
-                raise ValueError(f"jump_motor_params.{name} must be finite and nonnegative")
-            if name.endswith("force_limit") and torch.any(tensor <= 0):
-                raise ValueError(f"jump_motor_params.{name} must be positive")
-            self._jump_motor_params[name] = tensor
-
-        self._step_40cm_joint_kd = None
-        value = self.env_cfg.get("jump_step_40cm_joint_kd")
-        if value is not None:
-            tensor = as_gain_tensor(value, self.num_joints, "jump_step_40cm_joint_kd", device=self.device)
-            if tensor.shape != (self.num_joints,) or not torch.all(torch.isfinite(tensor)) or torch.any(tensor < 0):
-                raise ValueError("jump_step_40cm_joint_kd must be a finite nonnegative scalar or joint list")
-            self._step_40cm_joint_kd = tensor
-            # 其余跳跃模式继承公共 kd。
-            nominal = self.domain_rand.nominal_motor_params["joint_kd"]
-            self._jump_motor_params.setdefault("joint_kd", nominal.clone())
 
     def _update_task_state(self):
         """父类 step 钩子：先更新物理阶段，再判断目标面支撑与任务成败。"""
@@ -307,13 +263,6 @@ class JumpTask(JumpRewards, JumpBuffers, Task):
         super()._reset_task_buffers(mask)
         self.trigger_distance_m[mask] = -self.base_pos[mask, 0]
         self._update_jump_commands()
-        params = dict(self._jump_motor_params)
-        if self._step_40cm_joint_kd is not None:
-            nominal = params["joint_kd"].expand(self.num_envs, -1).clone()
-            nominal[self.jump_mode == 2] = self._step_40cm_joint_kd
-            params["joint_kd"] = nominal[mask]
-        if params:
-            self.env._apply_motor_params(params, envs_idx=mask.nonzero(as_tuple=False).flatten())
 
     def _task_success(self):
         return self.task_success

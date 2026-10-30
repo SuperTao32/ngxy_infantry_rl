@@ -9,8 +9,50 @@ from typing import Any, Callable, Mapping
 TargetHandler = Callable[[Mapping[str, Any]], None]
 
 
+class TaskCurriculumProgress:
+    """用累计环境控制步折算任务课程轮数，配额变化只影响后续推进速度。"""
+
+    def __init__(self, config: Mapping[str, Any], *, steps_per_iteration: int | None = None):
+        self.reference_num_envs = config.get("reference_num_envs", 4096)
+        self.reference_steps_per_iteration = config.get("reference_steps_per_iteration", steps_per_iteration)
+        for name in ("reference_num_envs", "reference_steps_per_iteration"):
+            if type(getattr(self, name)) is not int or getattr(self, name) <= 0:
+                raise ValueError(f"task curriculum {name} must be a positive integer")
+        self.sampled_env_steps = 0
+        self.started_at_iteration = None
+
+    @property
+    def iteration(self) -> float:
+        return self.sampled_env_steps / (self.reference_num_envs * self.reference_steps_per_iteration)
+
+    def advance(self, num_envs: int, *, world_size: int, iteration: int) -> None:
+        if num_envs:
+            self.mark_allocated(iteration)
+            self.sampled_env_steps += num_envs * world_size
+
+    def mark_allocated(self, iteration: int) -> None:
+        if self.started_at_iteration is None:
+            self.started_at_iteration = iteration
+
+    def state_dict(self) -> dict[str, Any]:
+        return dict(reference_num_envs=self.reference_num_envs,
+                    reference_steps_per_iteration=self.reference_steps_per_iteration,
+                    sampled_env_steps=self.sampled_env_steps, started_at_iteration=self.started_at_iteration)
+
+    def load_state_dict(self, state: Mapping[str, Any]) -> None:
+        restored = TaskCurriculumProgress(state)
+        samples, started = state["sampled_env_steps"], state["started_at_iteration"]
+        if type(samples) is not int or samples < 0:
+            raise ValueError("sampled_env_steps must be a nonnegative integer")
+        if started is not None and (type(started) is not int or started < 0):
+            raise ValueError("started_at_iteration must be a nonnegative integer or None")
+        self.reference_num_envs = restored.reference_num_envs
+        self.reference_steps_per_iteration = restored.reference_steps_per_iteration
+        self.sampled_env_steps, self.started_at_iteration = samples, started
+
+
 class CurriculumManager:
-    """根据 PPO 训练迭代数选择阶段，并分发合并后的课程参数。
+    """根据全局 PPO 轮数或任务样本折算轮数选择阶段，分发合并后的课程参数。
 
     调度器不了解机器人和 Genesis；环境通过“目标名称 + 处理函数”注册可调项，
     因而新增课程目标时不需要修改阶段选择逻辑。
@@ -41,7 +83,7 @@ class CurriculumManager:
             raise ValueError(f"Curriculum target is already registered: {name}")
         self._target_handlers[name] = handler
 
-    def update(self, iteration: int, *, force: bool = False) -> bool:
+    def update(self, iteration: float, *, force: bool = False) -> bool:
         """检查并应用当前应进入的阶段；返回本次是否发生阶段切换。"""
         if iteration < 0:
             raise ValueError("curriculum iteration cannot be negative")

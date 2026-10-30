@@ -72,7 +72,7 @@ class WheelLegInfantryEnv(TaskConfiguration):
         randomization["dynamics"] = self.domain_rand.config
         self.sensor_noise = SensorRandomizationManager(randomization["sensors"])
         self.wheel_slip = WheelSlipRandomizer(randomization["wheel_slip"])
-        # Jump 等任务需要逐环境电机参数，统一使用 batched DOF 信息。
+        # 共享域随机化需要逐环境电机参数，统一使用 batched DOF 信息。
         self.batch_dofs_info = True
 
         # 观测、奖励和指令配置
@@ -511,6 +511,7 @@ class WheelLegInfantryEnv(TaskConfiguration):
 
     def _register_task_curriculum(self):
         self.task_manager = TaskManager(self, self.env_cfg["tasks"])
+        self.curriculum.register_target("task_weights", self.task_manager.set_weights)
         self.terrain = TrainingTerrain(self.task_manager.tasks)
 
     def _add_terrain(self):
@@ -533,12 +534,7 @@ class WheelLegInfantryEnv(TaskConfiguration):
 
     def step(self, actions):
         """执行一个控制步，返回观测、奖励、重置标志和附加统计。"""
-        # PPO runner 每采满 steps_per_iteration 个控制步完成一轮；课程只在轮次边界切换。
-        if self.global_step % self.steps_per_iteration == 0:
-            self.training_iteration = self.global_step // self.steps_per_iteration
-            if self.curriculum.update(self.training_iteration):
-                print(f"[curriculum] stage={self.curriculum.current_stage_name} iteration={self.training_iteration}")
-            self._update_task_curricula()
+        # 课程在 rollout 最后一拍结算后切换，下一拍动作使用新任务的观测和 GRU 状态。
         self.global_step += 1
 
         ########### 执行动作 ###########
@@ -634,7 +630,7 @@ class WheelLegInfantryEnv(TaskConfiguration):
         self.extras["time_outs"] = (time_out & ~self.terminated_buf).to(dtype=gs.tc_float)
 
         ########### 重置环境（如果需要）###########
-        self._reset_idx(self.reset_buf)
+        self._reset_training_step()
 
         ########### 更新观测值 ###########
         self._update_observations()
@@ -738,8 +734,9 @@ class WheelLegInfantryEnv(TaskConfiguration):
         self.training_iteration = int(iteration)
         self.global_step = self.training_iteration * self.steps_per_iteration
         self.curriculum.update(self.training_iteration, force=True)
-        for task in self.task_manager.tasks.values():
-            task.curriculum.update(self.training_iteration, force=True)
+        self.task_manager.restore_legacy_progress(self.training_iteration)
+        self.task_manager.reallocate(self.training_iteration)
+        self.task_manager.update_curricula(force=True)
         self.reset()
 
     def training_state_dict(self):
@@ -749,9 +746,30 @@ class WheelLegInfantryEnv(TaskConfiguration):
         self.task_manager.load_state_dict(state)
 
     # ============ 回合重置与命令 ============
-    def _reset_idx(self, env_idx=None):
+    def _reset_training_step(self):
+        if not self.evaluation:
+            self.task_manager.advance_progress(self.training_iteration)
+        if self.evaluation or self.global_step % self.steps_per_iteration:
+            self._reset_idx(self.reset_buf)
+            return
+
+        # 先用旧任务及课程快照真实结束回合，再改变分组；迁移不进入成功率窗口。
+        episode = self._collect_episode_metrics(self.reset_buf) if self.reset_buf.any() else {}
+        self.training_iteration = self.global_step // self.steps_per_iteration
+        if self.curriculum.update(self.training_iteration):
+            print(f"[curriculum] stage={self.curriculum.current_stage_name} iteration={self.training_iteration}")
+        changed = self.task_manager.reallocate(self.training_iteration)
+        self._update_task_curricula()
+        self.reset_buf |= changed
+        # 迁移是任务边界，不能用新任务价值对旧任务的最后一拍进行 bootstrap。
+        self.extras["time_outs"][changed] = 0.0
+        self._reset_idx(self.reset_buf, record_episode=False)
+        episode.update(self.task_manager.metrics())
+        self.extras["episode"] = episode
+
+    def _reset_idx(self, env_idx=None, *, record_episode=None):
         """统一按布尔 mask 重置；None 为手动全量重置，不记录结束回合。"""
-        record_episode = env_idx is not None
+        record_episode = env_idx is not None if record_episode is None else record_episode
         reset_mask = torch.ones(self.num_envs, dtype=torch.bool, device=self.device) if env_idx is None else env_idx
         if not reset_mask.any():
             self.extras.pop("episode", None)
@@ -890,16 +908,19 @@ class WheelLegInfantryEnv(TaskConfiguration):
 
     def _resample_commands(self, envs_mask):
         for task in self.task_manager.tasks.values():
+            if not len(task.env_ids):
+                continue
             mask = task.mask & envs_mask
             task._resample_commands(mask)
 
     # ============ 任务调度、奖励和终止 ============
     def _update_task_curricula(self):
-        for task in self.task_manager.tasks.values():
-            task.curriculum.update(self.training_iteration)
+        self.task_manager.update_curricula()
 
     def _update_tracking_gate(self):
         for name, task in self.task_manager.tasks.items():
+            if not len(task.env_ids):
+                continue
             task._update_tracking_gate()
             if name == "jump":
                 for field in ("height_gate", "attitude_gate", "tracking_gate_raw", "tracking_gate"):
@@ -910,6 +931,8 @@ class WheelLegInfantryEnv(TaskConfiguration):
 
     def _update_task_state(self):
         for task in self.task_manager.tasks.values():
+            if not len(task.env_ids):
+                continue
             task._update_task_state()
             self._copy_termination_steps(task)
 
@@ -950,9 +973,6 @@ class WheelLegInfantryEnv(TaskConfiguration):
         if jump is not None:
             constrained[jump.mask] = target_joint_pos[jump.mask]
         return constrained
-
-    def _apply_motor_params(self, params, envs_idx=None):
-        self.domain_rand.apply_motor_params(params, envs_idx)
 
     def _apply_gas_spring_compensation(self):
         """根据弹簧压缩量和速度施加预载、刚度及阻尼补偿力。"""

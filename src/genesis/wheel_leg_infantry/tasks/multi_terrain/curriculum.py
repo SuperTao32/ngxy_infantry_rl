@@ -167,8 +167,8 @@ def validate_stage(name, stage):
 
 def allocate_counts(tasks, num_envs, weights=None):
     """最大余数分配；避免静默舍弃比重过小的已启用任务。"""
-    if type(num_envs) is not int or num_envs < 1:
-        raise ValueError("num_envs must be a positive integer")
+    if type(num_envs) is not int or num_envs < 0:
+        raise ValueError("num_envs must be a nonnegative integer")
     weights = {} if weights is None else weights
     if not isinstance(weights, dict) or set(weights) - set(TASK_NAMES):
         raise ValueError("task_weights must map known task names to weights")
@@ -185,7 +185,7 @@ def allocate_counts(tasks, num_envs, weights=None):
     order = sorted(range(len(counts)), key=lambda i: quotas[i] - counts[i], reverse=True)
     for i in order[:num_envs - sum(counts)]:
         counts[i] += 1
-    if any(n == 0 and value > 0 for n, value in zip(counts, values)):
+    if num_envs and any(n == 0 and value > 0 for n, value in zip(counts, values)):
         raise ValueError("num_envs is too small for the task weights; increase it or disable tasks")
     return counts
 

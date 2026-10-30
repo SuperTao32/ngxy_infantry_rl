@@ -164,9 +164,8 @@ class DynamicsRandomizationManager:
             if self.base_mass_enabled and self.nominal_base_mass + self.config["base_mass"]["added_mass_range"][0] <= 0:
                 raise ValueError("base mass plus the minimum added mass must remain positive")
         self.nominal_motor_params = {name: motor_params[name].clone() for name in MOTOR_NAMES}
-        self.motor_nominals = {name: value.expand(num_envs, -1).clone() for name, value in self.nominal_motor_params.items()}
-        self.motor_scales = {name: torch.ones_like(value) for name, value in self.motor_nominals.items() if name in GAIN_NAMES}
-        self.motor_values = {name: value.clone() for name, value in self.motor_nominals.items()}
+        self.motor_values = {name: value.expand(num_envs, -1).clone() for name, value in self.nominal_motor_params.items()}
+        self.motor_scales = {name: torch.ones_like(self.motor_values[name]) for name in GAIN_NAMES}
         reference = motor_params["joint_kp"]
         self.env_ids = torch.arange(num_envs, device=reference.device)
         self.episode_strength = reference.new_zeros(num_envs)
@@ -307,19 +306,9 @@ class DynamicsRandomizationManager:
         """rad 偏移在动作延迟之后、几何限位之前加入；轮速目标保持原单位。"""
         return targets + self.motor_offsets if self.motor_offset_enabled else targets
 
-    def apply_motor_params(self, params, envs_idx=None):
-        """切换控制模式，保留当前随机倍率，支持部分环境交回 locomotion。"""
-        if envs_idx is not None and not self.batched_dofs:
-            raise ValueError("per-environment motor profiles require batch_dofs_info=True")
-        ids = self.env_ids if envs_idx is None else envs_idx
-        if ids.numel() == 0:
-            return
-        for name, value in params.items():
-            self.motor_nominals[name][ids] = value
-            self._write_motor_param(name, ids)
-
     def _write_motor_param(self, name, ids):
-        applied = self.motor_nominals[name][ids]
+        # 所有任务都从根配置的同一标称值采样，任务/模式切换没有电机覆盖接口。
+        applied = self.nominal_motor_params[name].expand(ids.numel(), -1)
         if name in self.motor_scales:
             applied = applied * self.motor_scales[name][ids]
         # 同时缩放 PD 增益和力矩限幅，等价于 strength * clip(PD, ±nominal_limit)。

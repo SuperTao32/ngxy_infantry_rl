@@ -13,10 +13,20 @@ from .terrains import TERRAIN_PRESETS, default_terrain_cfg, resolve_terrain_cfg
 from .tools.run_utils import load_run_configs, resolve_checkpoint, resolve_run_dir
 
 
-def prepare_evaluation(configs, iteration):
+def prepare_evaluation(configs, iteration, training_state=None):
     """冻结 checkpoint 对应课程，不随仿真步数推进。"""
-    for course in [configs["curriculum_cfg"], *(task["curriculum_cfg"] for task in configs["env_cfg"]["tasks"].values())]:
-        stages = [stage for stage in course.get("stages", []) if stage["start_iteration"] <= iteration]
+    from .curriculum import TaskCurriculumProgress
+    courses = [(configs["curriculum_cfg"], iteration)]
+    for name, task in configs["env_cfg"]["tasks"].items():
+        saved = (training_state or {}).get(name, {}).get("curriculum_progress")
+        progress = iteration
+        if saved is not None:
+            clock = TaskCurriculumProgress(saved)
+            clock.load_state_dict(saved)
+            progress = clock.iteration
+        courses.append((task["curriculum_cfg"], progress))
+    for course, progress in courses:
+        stages = [stage for stage in course.get("stages", []) if stage["start_iteration"] <= progress]
         if course.get("enabled") and stages:
             from .curriculum import _deep_update
             targets = {}
@@ -46,6 +56,8 @@ def prepare_interactive_configs(configs, terrain):
     )
     configs["env_cfg"]["terrain"] = deepcopy(terrain)
     configs["env_cfg"]["tasks"] = {"locomotion": carrier}
+    for stage in configs["curriculum_cfg"].get("stages", []):
+        stage.get("targets", {}).pop("task_weights", None)
     configs["reward_cfg"]["reward_scales"] = {}
     return controls
 
@@ -84,11 +96,17 @@ def main(argv=None):
     configs = deepcopy(load_run_configs(run_dir))
     if configs.get("framework") != "wheel_leg_infantry_multitask_v1":
         parser.error("Evaluation requires a unified multi-task GRU checkpoint")
-    prepare_evaluation(configs, int(checkpoint.stem.split("_")[-1]))
+    import torch
+    saved = torch.load(checkpoint, map_location="cpu", weights_only=False)
+    training_state = (saved.get("infos") or {}).get("infantry_tasks", {})
+    iteration = int(saved["iter"])
+    if any("curriculum_progress" in task for task in training_state.values()):
+        iteration += 1  # 新 checkpoint 在 rollout 结算后已切换到下一轮课程。
+    prepare_evaluation(configs, iteration, training_state)
+    del saved
     controls = prepare_interactive_configs(configs, terrain)
     apply_randomization_arguments(configs["env_cfg"], configs["obs_cfg"], args)
     import genesis as gs
-    import torch
     from .policy_runner import PolicyRunner
     from .tools.interactive_env import InteractiveEnv
     gs.init(backend=gs.cpu if args.cpu else gs.gpu, precision="32", seed=args.seed, logging_level="warning")

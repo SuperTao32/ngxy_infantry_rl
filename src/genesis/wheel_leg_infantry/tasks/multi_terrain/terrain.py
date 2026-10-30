@@ -82,6 +82,9 @@ class TaskTerrain(TerrainPatches):
             self.target_types[self.env_ids] = torch.repeat_interleave(
                 torch.arange(len(self.tasks), device=self.target_types.device), self.target_types.new_tensor(counts))
 
+    def set_env_ids(self, env_ids):
+        self.env_ids = env_ids
+
     def sample_spawn_tiles(self, env_ids):
         self.fixed_types[env_ids] = self.target_types[env_ids]
         types = self.fixed_types[env_ids]

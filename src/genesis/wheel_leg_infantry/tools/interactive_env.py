@@ -31,9 +31,7 @@ class InteractiveEnv(WheelLegInfantryEnv):
         self.jump_mode = 0
         self.jump_steps = 0
         self.jump_velocity = 0.0
-        self._normal_motor_params = None
         super().__init__(num_envs, **kwargs)
-        self._normal_motor_params = {key: value.clone() for key, value in self.domain_rand.motor_nominals.items()}
         self.command_ranges = {key: tuple(value) for key, value in
                                self.task_manager.tasks["locomotion"].command_cfg.items()
                                if key in ("lin_vel_range", "ang_vel_range", "base_height_range")}
@@ -85,12 +83,6 @@ class InteractiveEnv(WheelLegInfantryEnv):
         self.jump_mode = mode
         self.jump_steps = 0
         self.jump_velocity = self.drive_command[0]
-        cfg = self.control_configs["jump"]["env_cfg"]
-        params = dict(cfg.get("jump_motor_params", {}))
-        if mode == 2 and cfg.get("jump_step_40cm_joint_kd") is not None:
-            params["joint_kd"] = cfg["jump_step_40cm_joint_kd"]
-        self._apply_motor_params({key: self.commands.new_tensor(value) for key, value in params.items()
-                                  if value is not None})
         self._write_commands()
         print(f"[eval] jump: {MODE_NAMES[mode]}")
 
@@ -109,8 +101,6 @@ class InteractiveEnv(WheelLegInfantryEnv):
         print(f"[eval] recovery: reset pose {label}")
 
     def return_to_drive(self):
-        if self.control_mode == "jump" and self._normal_motor_params is not None:
-            self._apply_motor_params(self._normal_motor_params)
         self.control_mode = "drive"
         self.recovery.active.zero_()
         self.jump_mode_one_hot.zero_()
