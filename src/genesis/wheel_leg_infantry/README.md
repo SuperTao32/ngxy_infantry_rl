@@ -96,6 +96,10 @@ uv run --locked torchrun --standalone --nproc_per_node=2 \
 
 `env.py::_reset_idx()` 将 `None` 转换成全量 mask，后续全量和局部 reset 共用机器人、物理状态、传感器、任务 buffer 和命令的重置路径。`None` 用于初始化或手动 reset，不生成结束回合日志；显式布尔 mask 会先保存结束回合统计，再清零对应行。
 
+Episode 日志按 `Episode/<task>/...` 分组，每项只使用该任务本次结束的回合，保留逐回合样本供 logger 求均值。奖励项使用 `reward_<name>`，只输出当前权重非零或本回合已有累计值的奖励；各任务分别记录 `episode_duration_s` 和启用时的 `curriculum_stage`。共享随机化课程单独记录为 `Episode/shared/curriculum_stage`。
+
+逐步诊断由任务的 `EPISODE_METRICS` 声明：locomotion 和 multi_terrain 记录高度、姿态、速度跟踪 gate 与机身接触率；recovery 记录高度/姿态 gate、接触率、起身成功率和起身用时；jump 记录接触率、成功率、机身峰值高度和轮子峰值离地高度，不输出恒为 1 的 gate。`alive_gate` 与接触率互补，不重复记录。multi_terrain 的地形子任务统计也只在对应子任务有回合结束时输出。
+
 ## 网络与观测
 
 网络参照 `experiments/beni_rl/rl_cfg.py`：actor 与 critic 都使用观测归一化 → GRU（512 hidden、1 层）→ MLP（512/256/128、ELU）。actor 使用 GaussianDistribution，初始标准差 1.0；PPO 默认学习率 1e-3、rollout 长度 24。

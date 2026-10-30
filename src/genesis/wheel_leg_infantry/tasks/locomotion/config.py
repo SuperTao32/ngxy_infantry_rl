@@ -107,15 +107,9 @@ def _curriculum_cfg() -> dict:
             },
             {
                 "name": "locomotion2",
-                "start_iteration": 2500,
+                "start_iteration": 2000,
                 "targets": {
                     "standing_reward": {"tracking_sigma": 0.05},
-                    "reset_ranges": {
-                        "base_init_pos_range": [[0.0, 0.0], [0.0, 0.0], [0.22, 0.22]],
-                        "base_init_rpy_offset_range_deg": [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]],
-                        "base_init_lin_vel_range": [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]],
-                        "base_init_ang_vel_range": [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]],
-                    },
                     "command_ranges": {
                         "standing_probability": 0.1,
                         "lin_vel_range": [-2.0, 2.0],
@@ -140,7 +134,7 @@ def _curriculum_cfg() -> dict:
             },
             {
                 "name": "locomotion_rand",
-                "start_iteration": 3500,
+                "start_iteration": 3000,
                 "targets": {
                     "standing_reward": {"tracking_sigma": 0.02},
                     "reset_ranges": {
@@ -172,14 +166,8 @@ def _curriculum_cfg() -> dict:
             },
             {
                 "name": "full_range",
-                "start_iteration": 5000,
+                "start_iteration": 4000,
                 "targets": {
-                    "reset_ranges": {
-                        "base_init_pos_range": [[0.0, 0.0], [0.0, 0.0], [0.22, 0.24]],
-                        "base_init_rpy_offset_range_deg": [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]],
-                        "base_init_lin_vel_range": [[-0.5, 0.5], [0.0, 0.0], [0.0, 0.0]],
-                        "base_init_ang_vel_range": [[0.0, 0.0], [0.0, 0.0], [-1.0, 1.0]],
-                    },
                     "command_ranges": {
                         "standing_probability": 0.25,
                         "lin_vel_range": [-3.5, 3.5],

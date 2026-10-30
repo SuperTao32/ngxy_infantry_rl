@@ -12,6 +12,8 @@ from .terrain import TaskTerrain
 
 
 class MultiTerrainTask(MultiTerrainRewards, MultiTerrainBuffers, Task):
+    EPISODE_METRICS = ("height_gate", "attitude_gate", "tracking_gate", "tracking_gate_fully_open", "base_contact")
+
     EVENT_REWARDS = {"task_progress", "task_success", "death", "intermittent_stop", "stairs_up_support", "stairs_up_retract",
                      "stairs_up_takeoff", "stairs_up_landing_distance", "stairs_up_approach_lift", "stairs_up_backswing",
                      "stairs_up_forward_swing", "stairs_up_extend", "stairs_up_wheel_support"}
@@ -434,6 +436,8 @@ class MultiTerrainTask(MultiTerrainRewards, MultiTerrainBuffers, Task):
         if env_idx is not None and env_idx.any():
             for i, name in enumerate(self.tasks):
                 mask = env_idx & (self.task_ids == i)
+                if not mask.any():
+                    continue
                 metrics[f"task/{name}/env_fraction"] = (self.task_ids[self.mask] == i).float().mean().item()
                 metrics[f"task/{name}/difficulty"] = self.terrain.controller.levels[i]
                 metrics[f"task/{name}/curriculum_success_rate"] = self.terrain.controller.rates[i]

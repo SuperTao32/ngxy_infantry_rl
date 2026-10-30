@@ -4,4 +4,4 @@ from ..base import Task
 
 
 class LocomotionTask(Task):
-    pass
+    EPISODE_METRICS = ("height_gate", "attitude_gate", "tracking_gate", "tracking_gate_fully_open", "base_contact")

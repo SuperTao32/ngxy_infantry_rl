@@ -17,6 +17,7 @@ from ..terrains.manager import TerrainManager
 
 class Task(CommonRewards, TaskConfiguration):
     EVENT_REWARDS = {"death", "stand_up_success"}
+    EPISODE_METRICS = ("base_contact",)
 
     def __init__(self, env, name, config, env_ids):
         self.env, self.name, self.env_ids = env, name, env_ids
@@ -37,6 +38,9 @@ class Task(CommonRewards, TaskConfiguration):
         self.terrain_tile_index = torch.zeros(env.num_envs, dtype=torch.long, device=env.device)
         self.commands_limit = self._build_command_limits()
         self.reward_functions, self.reward_scales, self.raw_reward_scales, self.episode_sums = {}, {}, {}, {}
+        self.episode_metric_sums = {
+            name: torch.zeros(self.num_envs, device=self.device) for name in self.EPISODE_METRICS
+        }
         self.tracking_gate_cfg = {}
         self._apply_tracking_gate(self.reward_cfg.get("tracking_gate", {}))
         self.tilt_termination_duration_s = self.env_cfg["tilt_termination_duration_s"]
@@ -90,7 +94,6 @@ class Task(CommonRewards, TaskConfiguration):
             self.reward_functions[name] = function
             if name not in self.episode_sums:
                 self.episode_sums[name] = torch.zeros(self.num_envs, device=self.device)
-                self.env.episode_sums[f"{self.name}/{name}"] = self.episode_sums[name]
 
     def _get_reward_scale(self, name):
         return self.reward_scales[name]
@@ -102,6 +105,32 @@ class Task(CommonRewards, TaskConfiguration):
             values = torch.where(self.mask, values, 0.0)
             self.env.reward_buf.add_(values)
             self.episode_sums[name].add_(values)
+
+    def update_episode_metrics(self):
+        for name, total in self.episode_metric_sums.items():
+            values = (self.tracking_gate_raw >= 0.95).to(total.dtype) if name == "tracking_gate_fully_open" else getattr(self, name)
+            total.add_(torch.where(self.mask, values, 0.0))
+
+    def collect_episode_metrics(self, mask):
+        """在 reset 前快照本任务的回合；逐回合返回，交由 logger 按样本求均值。"""
+        metrics = {}
+        for name, total in self.episode_sums.items():
+            # 多地形权重可逐环境不同；课程关闭的奖励仍保留本回合已累计的值。
+            selected = mask & ((self._get_reward_scale(name) != 0) | (total != 0))
+            if selected.any():
+                metrics["reward_" + name] = total[selected]
+        lengths = self.episode_length_buf[mask].clamp_min(1)
+        for name, total in self.episode_metric_sums.items():
+            metrics["metric_" + name] = total[mask] / lengths
+        metrics["episode_duration_s"] = lengths * self.dt
+        if self.curriculum.enabled:
+            metrics["curriculum_stage"] = torch.full_like(lengths, self.curriculum.current_stage_index, dtype=torch.float32)
+        metrics.update(self.episode_metrics(mask))
+        return metrics
+
+    def clear_episode_sums(self, mask):
+        for total in (*self.episode_sums.values(), *self.episode_metric_sums.values()):
+            total[mask] = 0.0
 
     def _apply_terrain(self, values):
         self._apply_terrain_curriculum(values)

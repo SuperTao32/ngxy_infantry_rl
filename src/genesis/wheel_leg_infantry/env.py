@@ -227,17 +227,6 @@ class WheelLegInfantryEnv(TaskConfiguration):
         # 验证以上配置合法
         self._validate_configuration()
 
-        # 奖励函数与 episode 统计
-        self.reward_functions, self.episode_sums = {}, {}
-        self.episode_metric_sums = {
-            "height_gate": torch.zeros((self.num_envs,), dtype=gs.tc_float, device=self.device),
-            "attitude_gate": torch.zeros((self.num_envs,), dtype=gs.tc_float, device=self.device),
-            "tracking_gate": torch.zeros((self.num_envs,), dtype=gs.tc_float, device=self.device),
-            "tracking_gate_fully_open": torch.zeros((self.num_envs,), dtype=gs.tc_float, device=self.device),
-            "alive_gate": torch.zeros((self.num_envs,), dtype=gs.tc_float, device=self.device),
-            "base_contact": torch.zeros((self.num_envs,), dtype=gs.tc_float, device=self.device),
-        }
-
         # 课程注册及第 0 阶段配置
         self.global_step = 0
         self.training_iteration = 0
@@ -631,12 +620,7 @@ class WheelLegInfantryEnv(TaskConfiguration):
         ########### 计算奖励 ###########
         self.reward_buf.zero_()
         self._compute_rewards()
-        self.episode_metric_sums["height_gate"] += self.height_gate
-        self.episode_metric_sums["attitude_gate"] += self.attitude_gate
-        self.episode_metric_sums["tracking_gate"] += self.tracking_gate
-        self.episode_metric_sums["alive_gate"] += self.alive_gate
-        self.episode_metric_sums["base_contact"] += self.base_contact
-        self.episode_metric_sums["tracking_gate_fully_open"] += (self.tracking_gate_raw >= 0.95).to(dtype=gs.tc_float)
+        self.task_manager.call("update_episode_metrics")
 
         # 在指令重采样和阶段强制截断前评估真实结束回合。
         self._record_task_outcomes()
@@ -775,14 +759,7 @@ class WheelLegInfantryEnv(TaskConfiguration):
         reset_env_ids = reset_mask.nonzero(as_tuple=False).flatten()
 
         # 在状态清零前保存结束回合的统计；手动 reset 不产生 episode 日志。
-        metrics = {}
-        finished_episode_lengths = None
-        if record_episode:
-            finished_episode_lengths = self.episode_length_buf[reset_env_ids].clone().clamp_min(1).to(gs.tc_float)
-            for name, task in self.task_manager.tasks.items():
-                mask = reset_mask & task.mask
-                if mask.any():
-                    metrics.update({f"{name}/{key}": value for key, value in task.episode_metrics(mask).items()})
+        episode = self._collect_episode_metrics(reset_mask) if record_episode else None
 
         self.base_contact_regions.reset(reset_mask)
         (
@@ -860,25 +837,24 @@ class WheelLegInfantryEnv(TaskConfiguration):
                 self.true_tof_history.reset(self.true_tof_distances, reset_env_ids)
 
         if record_episode:
-            episode = {}
-            for key, value in self.episode_sums.items():
-                selected = self._episode_reward_mask(key, reset_mask)
-                if selected.any():
-                    episode["reward_" + key] = value[selected]
-            for key, value in self.episode_metric_sums.items():
-                episode["metric_" + key] = value[reset_env_ids] / finished_episode_lengths
-            if self.curriculum.enabled:
-                episode["curriculum_stage"] = torch.full_like(self.reward_buf[reset_env_ids], float(self.curriculum.current_stage_index))
-            episode["episode_duration_s"] = finished_episode_lengths * self.dt
             self.extras["episode"] = episode
         else:
             self.extras.pop("episode", None)
-        for value in (*self.episode_sums.values(), *self.episode_metric_sums.values()):
-            value[reset_env_ids] = 0.0
+        self.task_manager.call("clear_episode_sums", reset_mask)
 
         self._resample_commands(reset_mask)
-        if metrics:
-            self.extras.setdefault("episode", {}).update(metrics)
+
+    def _collect_episode_metrics(self, reset_mask):
+        episode = {}
+        for name, task in self.task_manager.tasks.items():
+            mask = reset_mask & task.mask
+            if mask.any():
+                episode.update({f"Episode/{name}/{key}": value for key, value in task.collect_episode_metrics(mask).items()})
+        if self.curriculum.enabled:
+            episode["Episode/shared/curriculum_stage"] = torch.full_like(
+                self.reward_buf[reset_mask], float(self.curriculum.current_stage_index),
+            )
+        return episode
 
     def _sample_base_reset_state(self, env_ids):
         result = None
@@ -916,10 +892,6 @@ class WheelLegInfantryEnv(TaskConfiguration):
         for task in self.task_manager.tasks.values():
             mask = task.mask & envs_mask
             task._resample_commands(mask)
-
-    def _episode_reward_mask(self, name, mask):
-        task = self.task_manager.tasks.get(name.split("/", 1)[0])
-        return mask if task is None else mask & task.mask
 
     # ============ 任务调度、奖励和终止 ============
     def _update_task_curricula(self):

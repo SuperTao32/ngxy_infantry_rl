@@ -6,6 +6,8 @@ from .buffers import RecoveryBuffers
 
 
 class RecoveryTask(RecoveryRewards, Task):
+    EPISODE_METRICS = ("height_gate", "attitude_gate", "base_contact")
+
     def _initialize_task_buffers(self):
         self.stand_up = RecoveryBuffers(self.env_cfg["stand_up"], self.num_envs, self.dt, self.device)
         self.stand_up.active &= self.mask
