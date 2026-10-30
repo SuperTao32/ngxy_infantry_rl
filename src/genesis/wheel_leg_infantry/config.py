@@ -12,7 +12,6 @@ from .sensors.tof import default_tof_cfg
 from .tasks.manager import TASK_NAMES, task_configs
 from .terrains import default_terrain_cfg
 
-
 # 任务分配与课程基准
 # 权重为 0 时暂不分配环境，后续可通过 get_curriculum_cfg() 的阶段权重启用。
 TASK_WEIGHTS = {
@@ -49,7 +48,6 @@ def get_train_cfg(exp_name: str) -> dict:
         },
         "critic": dict(model),
         "obs_groups": {"actor": ["policy"], "critic": ["critic"]},
-
         # PPO 更新。
         "algorithm": {
             "class_name": "PPO",
@@ -71,7 +69,6 @@ def get_train_cfg(exp_name: str) -> dict:
         "max_iterations": 10000,
         "seed": 42,
         "clip_actions": None,
-
         # 日志与 checkpoint。
         "experiment_name": exp_name,
         "run_name": exp_name,
@@ -109,7 +106,6 @@ def get_env_cfg() -> dict:
         "wheel_link_names": ["left_wheel_link", "right_wheel_link"],
         "spring_names": ["left_spring2_joint", "right_spring2_joint"],
         "base_link_name": "base_link",
-
         # 机器人几何与物理参数。
         "wheel_radius": 0.06,
         "gravity_magnitude": 9.81,
@@ -122,7 +118,6 @@ def get_env_cfg() -> dict:
         "gas_spring_stiffness": 0.0,
         "gas_spring_damping": 0.0,
         "gas_spring_max_compression": 0.06,
-
         # 所有任务共用的电机参数与动作映射。
         "joint_kp": 50.0,
         "joint_kd": 2.0,
@@ -133,15 +128,12 @@ def get_env_cfg() -> dict:
         "wheel_vel_scale": 30.0,
         # 固定一拍动作延迟；不属于 domain_rand。
         "simulate_action_latency": True,
-
         # 场景与共享域随机化；eval 可通过 --terrain 选择地形。
         "terrain": default_terrain_cfg("plane"),
         "randomization": default_randomization_cfg(dynamics_enabled=True, sensors_enabled=True),
-
         # 接触判定阈值。
         "wheel_contact_force_threshold": 1.0,
         "base_contact_force_threshold": 5.0,
-
         # 回合、命令重采样与终止默认值；各任务可独立覆盖。
         "episode_length_s": 100.0,
         "resampling_time_s": 10.0,
@@ -150,7 +142,6 @@ def get_env_cfg() -> dict:
         "termination_if_pitch_greater_than": 90.0,
         "tilt_termination_duration_s": 3.20,
         "base_contact_termination_duration_s": 5.0,
-
         # 默认重置范围；各任务可独立覆盖。
         # 从 0.22 m 起步只保留很小的落地行程，避免策略还没输出就先自由落体。
         "base_init_pos_range": [[0.0, 0.0], [0.0, 0.0], [0.22, 0.22]],
@@ -179,10 +170,8 @@ def get_obs_cfg() -> dict:
             forward_reference_distance_m=1.0,
             downward_reference_distance_m=0.25,
         ),
-
         # 机身底部/前侧/后侧接触及对应法向力固定加入 critic，共 6D。
         "base_contact_force_clip": 5.0,  # 对缩放后的分区法向力限幅。
-
         # 共享观测缩放。
         "obs_scales": {
             "lin_vel": 1.0 / 3.5,
@@ -237,7 +226,7 @@ def get_curriculum_cfg() -> dict:
         "enabled": True,
         "stages": [
             {
-                "name": "warmup",
+                "name": "locomotion",
                 "start_iteration": 0,
                 "targets": {
                     "task_weights": dict(TASK_WEIGHTS),
@@ -247,14 +236,19 @@ def get_curriculum_cfg() -> dict:
                 },
             },
             {
-                "name": "randomization",
+                "name": "recovery",
                 "start_iteration": 3000,
                 "targets": {
                     # 只填写需要改变的权重；空字典继承上一阶段的分配。
-                    "task_weights": {},
-                    "domain_rand": {"strength": 0.4},
-                    "sensor_noise": {"strength": 0.4},
-                    "wheel_slip": {"strength": 0.4},
+                    "task_weights": {
+                        "locomotion": 1.0,
+                        "recovery": 0.5,
+                        "jump": 0.0,
+                        "multi_terrain": 0.0,
+                    },
+                    "domain_rand": {"strength": 0.0},
+                    "sensor_noise": {"strength": 0.0},
+                    "wheel_slip": {"strength": 0.0},
                 },
             },
             {
@@ -262,9 +256,9 @@ def get_curriculum_cfg() -> dict:
                 "start_iteration": 7000,
                 "targets": {
                     "task_weights": {},
-                    "domain_rand": {"strength": 1.0},
-                    "sensor_noise": {"strength": 1.0},
-                    "wheel_slip": {"strength": 1.0},
+                    "domain_rand": {"strength": 0.0},
+                    "sensor_noise": {"strength": 0.0},
+                    "wheel_slip": {"strength": 0.0},
                 },
             },
         ],
@@ -324,6 +318,7 @@ def get_cfgs(exp_name):
     env["tasks"] = tasks
     env["control_dt"] = 0.01
     return {
+        "framework": "wheel_leg_infantry_multitask_v1",
         "env_cfg": env,
         "obs_cfg": get_obs_cfg(),
         "reward_cfg": get_reward_cfg(),
@@ -345,9 +340,7 @@ def select_tasks(configs, names):
     for stage in configs["curriculum_cfg"].get("stages", []):
         targets = stage.get("targets", {})
         if "task_weights" in targets:
-            targets["task_weights"] = {
-                name: weight for name, weight in targets["task_weights"].items() if name in names
-            }
+            targets["task_weights"] = {name: weight for name, weight in targets["task_weights"].items() if name in names}
 
 
 def env_kwargs(configs):

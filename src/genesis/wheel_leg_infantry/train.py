@@ -7,8 +7,14 @@ from .config import env_kwargs, get_cfgs, select_tasks
 from .tools.distributed import training_workers
 from .robust.randomization_config import add_randomization_arguments, apply_randomization_arguments
 from .tasks.manager import TASK_NAMES, initial_task_counts
-from .tools.run_utils import (add_resume_arguments, create_versioned_run_dir, load_run_configs,
-                              resolve_resume_plan, restore_training_state, save_run_artifacts)
+from .tools.run_utils import (
+    add_resume_arguments,
+    create_versioned_run_dir,
+    load_run_configs,
+    resolve_resume_plan,
+    restore_training_state,
+    save_run_artifacts,
+)
 
 
 def main(argv=None):
@@ -18,6 +24,10 @@ def main(argv=None):
     parser.add_argument("--max-iterations", "--max_iterations", type=int, default=10000)
     parser.add_argument("--tasks", nargs="+", choices=TASK_NAMES)
     parser.add_argument("--task-weights", nargs="+", metavar="NAME=WEIGHT", help="initial task weights; zero pauses a task")
+    parser.add_argument(
+        "--recovery-poses", nargs="+", metavar="PATH", help="recovery JSON files or collection directories; default: auto-discover reset_pos"
+    )
+    parser.add_argument("--recovery-dynamic-probability", type=float, help="dynamic recovery reset probability in [0, 1] (new runs default: 0.2)")
     parser.add_argument("--seed", type=int, default=32)
     parser.add_argument("-v", "--vis", action="store_true")
     parser.add_argument("--cpu", action="store_true")
@@ -29,12 +39,36 @@ def main(argv=None):
         parser.error("--num-envs and --max-iterations must be positive")
     if args.resume is None and (args.checkpoint is not None or args.resume_config != "saved"):
         parser.error("--checkpoint and --resume-config require --resume")
-    if args.resume is not None and (args.tasks or args.task_weights):
-        parser.error("Full resume keeps its saved task set and weights; edit config.py for a new run")
+    if args.resume is not None and args.resume_config == "saved" and (args.tasks or args.task_weights):
+        parser.error("--tasks and --task-weights require --resume-config current when resuming")
     with training_workers() as workers:
         if args.cpu and workers.distributed:
             parser.error("Distributed training requires GPUs")
         _train(args, parser, workers)
+
+
+def configure_recovery_reset(configs, sources=None, dynamic_probability=None):
+    """CLI 显式覆盖采集来源或比例；普通 saved 续训保留已存档的数值姿态池。"""
+    if sources is None and dynamic_probability is None:
+        return
+    import math
+    from .tasks.recovery.config import get_recovery_training_reset_cfg
+
+    tasks = configs["env_cfg"]["tasks"]
+    if "recovery" not in tasks:
+        raise ValueError("Recovery reset options require the recovery task")
+    env_cfg = tasks["recovery"]["env_cfg"]
+    if "recovery_reset" not in env_cfg:
+        env_cfg["recovery_reset"] = get_recovery_training_reset_cfg(sources)
+    elif sources is not None:
+        loaded = get_recovery_training_reset_cfg(sources)
+        # 换数据时保留当前/存档中的动静态比例和动态难度，只替换快照池。
+        for name in ("pose_pool", "side_lying_angle_deg"):
+            env_cfg["recovery_reset"][name] = loaded[name]
+    if dynamic_probability is not None:
+        if isinstance(dynamic_probability, bool) or not math.isfinite(dynamic_probability) or not 0 <= dynamic_probability <= 1:
+            raise ValueError("--recovery-dynamic-probability must be finite and in [0, 1]")
+        env_cfg["recovery_reset"]["dynamic_probability"] = dynamic_probability
 
 
 def _train(args, parser, workers):
@@ -44,16 +78,19 @@ def _train(args, parser, workers):
     from .policy_runner import PolicyRunner
 
     plan = None
-    configs = get_cfgs(args.exp_name)
     if args.resume is not None:
         plan = workers.primary(resolve_resume_plan, args.log_root, args.exp_name, args.resume, args.checkpoint)
-        if args.resume_config == "saved":
-            configs = deepcopy(workers.primary(load_run_configs, plan.source_run_dir))
+    configs = (
+        deepcopy(workers.primary(load_run_configs, plan.source_run_dir))
+        if plan is not None and args.resume_config == "saved"
+        else get_cfgs(args.exp_name)
+    )
     if configs.get("framework") != "wheel_leg_infantry_multitask_v1":
         parser.error("This entry requires a unified multi-task GRU configuration")
     try:
         if args.tasks:
             select_tasks(configs, args.tasks)
+        configure_recovery_reset(configs, args.recovery_poses, args.recovery_dynamic_probability)
         tasks = configs["env_cfg"]["tasks"]
         for entry in args.task_weights or ():
             name, weight = entry.split("=", 1)
@@ -73,16 +110,23 @@ def _train(args, parser, workers):
         arguments["resume_from"] = str(plan.checkpoint_path.resolve())
     workers.primary(save_run_artifacts, run_dir, configs, arguments)
     print(f"[train] one GRU policy; tasks={dict(zip(tasks, counts))}; run={run_dir}")
-    gs.init(backend=gs.cpu if args.cpu else gs.gpu, precision="32", logging_level="warning",
-            seed=args.seed + workers.rank, performance_mode=True)
+    gs.init(backend=gs.cpu if args.cpu else gs.gpu, precision="32", logging_level="warning", seed=args.seed + workers.rank, performance_mode=True)
     try:
-        env = WheelLegInfantryEnv(args.num_envs, **env_kwargs(configs),
-                                 steps_per_iteration=configs["train_cfg"]["num_steps_per_env"],
-                                 show_viewer=args.vis and workers.rank == 0)
-        runner = PolicyRunner(env, configs["train_cfg"], str(run_dir), device=str(gs.device), workers=workers)
+        env = WheelLegInfantryEnv(
+            args.num_envs,
+            **env_kwargs(configs),
+            steps_per_iteration=configs["train_cfg"]["num_steps_per_env"],
+            show_viewer=args.vis and workers.rank == 0,
+        )
+        runner = PolicyRunner(
+            env, configs["train_cfg"], str(run_dir), device=str(gs.device), workers=workers,
+            allow_new_tasks=plan is not None and args.resume_config == "current",
+        )
         remaining = args.max_iterations
         if plan:
             remaining = restore_training_state(runner, env, plan, args.max_iterations)
+            resumed_counts = {name: len(task.env_ids) for name, task in env.task_manager.tasks.items()}
+            print(f"[resume] iteration={runner.current_learning_iteration}; tasks={resumed_counts}")
         runner.learn(num_learning_iterations=remaining, init_at_random_ep_len=False)
     finally:
         gs.destroy()

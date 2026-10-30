@@ -3,15 +3,16 @@
 import torch
 
 from ...terrains.manager import TerrainManager
-from .config import validate_platform_enabled
+from .config import get_approach_cfg, validate_platform_enabled
 from .geometry import active_step_heights
 
 
 class JumpTerrain(TerrainManager):
-    def __init__(self, task_cfg):
+    def __init__(self, task_cfg, approach_cfg=None):
         super().__init__({"preset": "plane"})
         self.task_cfg = task_cfg
-        self.tile_size = (12.0, 2 * (len(task_cfg["mode_names"]) * task_cfg["lane_spacing_m"]))
+        self.approach_cfg = get_approach_cfg() if approach_cfg is None else approach_cfg
+        self.tile_size = (40.0, 2 * (len(task_cfg["mode_names"]) * task_cfg["lane_spacing_m"]))
         self.platform_entities = {}
         self.cyclic_mode_offset = 0
 
@@ -59,8 +60,9 @@ class JumpTerrain(TerrainManager):
             probabilities = torch.tensor(cfg["mode_probabilities"], dtype=self._dtype or torch.float32, device=env_ids.device)
             modes = torch.multinomial(probabilities, env_ids.numel(), replacement=True)
         centers = torch.zeros((env_ids.numel(), 2), dtype=self._dtype or torch.float32, device=env_ids.device)
-        centers[:, 0] = 0.0
-        centers[:, 1] = modes * cfg["lane_spacing_m"]
+        # 出生点与平台通道分开，先在没有障碍物的平地实际加速。
+        centers[:, 0] = self.approach_cfg["spawn_x_m"]
+        centers[:, 1] = self.approach_cfg["spawn_y_m"]
         return centers, modes
 
     def height_at(self, world_xy):

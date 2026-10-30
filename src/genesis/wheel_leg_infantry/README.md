@@ -19,12 +19,22 @@ uv run --locked python -m src.genesis.wheel_leg_infantry.train \
 uv run --locked python -m src.genesis.wheel_leg_infantry.train \
   -e infantry --resume --max-iterations 20000
 
+# 使用当前配置续训单任务实验
+uv run --locked python -m src.genesis.wheel_leg_infantry.train \
+  -e locomotion_only --tasks locomotion --resume --resume-config current
+
+# 沿用 locomotion 策略新增 recovery，按当前全局课程分配任务
+uv run --locked python -m src.genesis.wheel_leg_infantry.train \
+  -e locomotion_only --tasks locomotion recovery --resume --resume-config current
+
 # 选择地形，连续操纵同一台机器人
 uv run --locked python -m src.genesis.wheel_leg_infantry.eval \
   -e infantry --terrain plane
 ```
 
 训练默认构建全部任务，零权重任务暂不采样，可由后续课程启用。`--tasks` 支持多个名称并限制可分配的任务集合；若只选择初始权重为零的任务，需要同时用 `--task-weights` 设置正权重。每个正权重任务至少分配一个环境，所有权重不能同时为零；multi_terrain 的正配额还需容纳其内部课程。`--task-weights` 覆盖初始比例，后续仍遵循配置中的阶段分配。
+
+续训默认使用 `--resume-config saved`，保留已保存的任务集合与权重，不接受 `--tasks` / `--task-weights`。使用 `--resume-config current` 时可通过这些参数选择当前配置中的任务和初始权重，并在保留 checkpoint 全部任务的基础上新增任务。已有任务保留课程进度及专属状态，新增任务使用当前配置初始化，独立课程从 0 开始；策略、优化器和全局迭代数继续恢复，网络结构需兼容 checkpoint。全局课程立即应用恢复轮次所属阶段：例如从 `model_3000.pt` 恢复，从 3001 轮继续；若该阶段权重为 locomotion=1、recovery=0.5，环境约按 2:1 分配。新增任务在实际分到环境后才推进独立课程。`--max-iterations` 表示总目标轮数，须大于 checkpoint 的已完成轮数。
 
 **eval 是连续交互仿真**，默认开启 viewer、控制一台机器人，直到关闭窗口。无需选择 tasks、设置任务配额或添加键盘开关。通过 `--terrain`（也支持 `-terrain`）加载已有地形；`--difficulty` 选择对应地形已有级别，`--terrain-size LENGTH WIDTH` 调整场地尺寸：
 
@@ -52,9 +62,11 @@ uv run --locked python -m src.genesis.wheel_leg_infantry.eval \
 
 跳跃沿用保存配置的模式 one-hot、六维时间编码和目标 base 到轮底距离轨迹，电机参数始终来自共享根配置；按键只启动控制信号，不改机器人位置或实际速度。跳跃计时结束后恢复普通命令；起身期间保持零速度与起身高度，方向/高度按键暂时锁定。跳跃及起身完成后继续运行，保留连续的策略历史。倒地、接触、动作完成、回合时长和地形边界均不会自动复位；R 和 Backspace 会显式复位机器人、传感器、动作与 GRU，数值求解器报错则停止仿真。
 
-R 的姿态池由 `tasks/recovery/config.py::get_recovery_reset_cfgs()` 提供，默认通过已有的 `get_reset_pose_cfg()` 解析 `reset_pos.json`。新增姿态时将快照路径追加到 `RECOVERY_RESET_POSES` 即可，也可使用 `"default"` 站立姿态。eval 每次按 R 等概率随机选择一个配置（可能重复，受 `--seed` 控制），共用完整环境 reset 路径并适配当前地形高度；Backspace 仍使用正常站立出生配置。仿真不直接读取姿态文件；也可向 `InteractiveEnv` 注入其他来源的数值姿态配置列表。此姿态池不改变训练使用的 `RESET_POSE`。
+R 的姿态池由 `tasks/recovery/config.py::get_recovery_reset_cfgs()` 提供，默认通过已有的 `get_reset_pose_cfg()` 解析 `reset_pos.json`。新增姿态时将快照路径追加到 `RECOVERY_RESET_POSES` 即可，也可使用 `"default"` 站立姿态。eval 每次按 R 等概率随机选择一个配置（可能重复，受 `--seed` 控制），共用完整环境 reset 路径并适配当前地形高度；Backspace 仍使用正常站立出生配置。仿真不直接读取姿态文件；也可向 `InteractiveEnv` 注入其他来源的数值姿态配置列表。
 
-命令范围取 checkpoint 对应的 locomotion 课程；速度区间包含零，支持从静止逐步调速。优先使用 checkpoint 保存的跳跃/起身参数，缺失时使用当前默认配置；动作效果取决于模型实际训练能力，尤其是当前姿态下按键触发跳跃与训练时直接从起跳状态开始的差异。
+recovery 训练使用独立的数值姿态池：默认自动发现 `tasks/recovery/reset_pos/**/pose_*.json` 并保留原始快照，过滤侧躺终态，每个环境每次 reset 独立采样，80% 静态起身、20% 低难度动态释放。`train --recovery-poses PATH ...` 可直接指定采集目录/JSON，`--recovery-dynamic-probability 0` 可单测静态。采样参数、分组成功率与续训行为见 [Recovery 说明](tasks/recovery/README.md)。
+
+命令范围取 checkpoint 对应的 locomotion 课程；速度区间包含零，支持从静止逐步调速。优先使用 checkpoint 保存的跳跃/起身参数，缺失时使用当前默认配置；动作效果取决于模型实际训练能力。jump 训练先在空旷区域实际加速，达速并站稳后移动至指定起跳位置，再输入跳跃信息；交互中的 J 则在当前位置直接触发。
 
 `--steps N` 可选地限制仿真步数；`--no-vis --steps N` 用于无窗口运行，`--output results.json` 保存运行步数、模拟时长与地形配置。训练和评估共用 `--log-root`、`--seed`、`--cpu` 及随机化开关。
 
@@ -113,7 +125,19 @@ kp、kd、力矩限幅及动作缩放由所有任务共用，任务 reset、课�
 
 `env.py::_reset_idx()` 将 `None` 转换成全量 mask，后续全量和局部 reset 共用机器人、物理状态、传感器、任务 buffer 和命令的重置路径。`None` 用于初始化或手动 reset，不生成结束回合日志；显式布尔 mask 会先保存结束回合统计，再清零对应行。
 
-Episode 日志按 `Episode/<task>/...` 分组，回合项只使用该任务本次结束的回合，保留逐回合样本供 logger 求均值。奖励项使用 `reward_<name>`，只输出当前权重非零或本回合已有累计值的奖励；各任务分别记录 `episode_duration_s` 和启用时的 `curriculum_stage`。每轮还记录全部任务的 `num_envs`、`env_fraction`、`curriculum_iteration` 和 `sampled_env_steps`，便于检查延迟启动和配额变化。共享随机化课程单独记录为 `Episode/shared/curriculum_stage`。评估从 checkpoint 的各任务采样进度冻结对应课程。
+TensorBoard 以 `locomotion/`、`recovery/`、`jump/`、`multi_terrain/` 为独立顶层，不再将任务统计集中到 `Episode/`。每个任务内按以下路径分类：
+
+| 路径 | 内容 |
+| --- | --- |
+| `<task>/rewards/<name>` | 各奖励分量的回合累计值 |
+| `<task>/metrics/<name>` | 成功率、接触率、高度、起身用时等任务指标 |
+| `<task>/episode/duration_s` | 回合时长 |
+| `<task>/curriculum/stage`、`iteration`、`sampled_env_steps` | 任务课程阶段、折算进度及累计样本数 |
+| `<task>/allocation/num_envs`、`env_fraction` | 当前环境配额及占比 |
+| `multi_terrain/terrain/<terrain>/...` | 多地形内部各地形的成功率、难度及停车等统计 |
+| `shared/curriculum/stage` | 共享随机化课程阶段 |
+
+回合项只使用该任务本次结束的回合，保留逐回合样本供 logger 求均值；奖励只输出当前权重非零或本回合已有累计值的分量。环境配额及任务课程进度每轮记录，便于检查延迟启动和配额变化。PPO 的 `Loss/`、`Policy/`、`Perf/`、`Train/` 保留框架分组。新标签在下次启动或续训后生效，已有 event 文件中的旧标签仍保留。评估从 checkpoint 的各任务采样进度冻结对应课程。
 
 逐步诊断由任务的 `EPISODE_METRICS` 声明：locomotion 和 multi_terrain 记录高度、姿态、速度跟踪 gate 与机身接触率；recovery 记录高度/姿态 gate、接触率、起身成功率和起身用时；jump 记录接触率、成功率、机身峰值高度和轮子峰值离地高度，不输出恒为 1 的 gate。`alive_gate` 与接触率互补，不重复记录。multi_terrain 的地形子任务统计也只在对应子任务有回合结束时输出。
 
@@ -125,4 +149,4 @@ Episode 日志按 `Episode/<task>/...` 分组，回合项只使用该任务本�
 
 actor 包含 IMU、重力方向、关节/轮测量、6D actions、六维命令、ToF 与六维跳跃阶段编码。命令依次为缩放后的前向速度、偏航速度、高度目标，以及未缩放的三维 jump 模式 one-hot；非 jump 环境的模式为零。critic 再追加速度、接触等仿真真值，以及 baselink 原点的世界坐标 z（不扣除地形高度）。默认 ToF 配置下 actor 为 51D、critic 为 75D；选择任务子集不会改变网络输入维度。
 
-jump 直接从配置的起跳位置和前向初速度开始回合，沿用阶段状态、轨迹和落地奖励，正常参与每个 PPO rollout。其起跳初速度、恢复姿态、各任务比例与奖励目前保留为框架初值，后续在各任务配置中调整。
+jump 从空旷跑道静止出生，使用同一策略加速；连续达速并站稳后保留物理状态移到指定起跳距离，再发送跳跃编码并开始独立计时。加速与跳跃均参与 PPO rollout，分别结算行走和跳跃奖励。加速容差/超时、起跳距离表、恢复姿态、各任务比例与奖励在对应配置中调整。

@@ -19,6 +19,7 @@ def get_cfgs():
     env = dict(
         episode_length_s=duration, resampling_time_s=duration,
         jump_phase_durations_s=durations, jump_modes=modes,
+        jump_approach=get_approach_cfg(),
         takeoff_min_airborne_time_s=0.06,
         **_get_termination_cfg(),
     )
@@ -30,11 +31,37 @@ def get_cfgs():
     return dict(env_cfg=env, reward_cfg=_get_reward_cfg(), command_cfg=commands, curriculum_cfg=course)
 
 
+def get_approach_cfg():
+    """空旷跑道加速，连续满足速度与站稳条件后才触发 jump。"""
+    return {
+        "spawn_x_m": -6.0,
+        "spawn_y_m": -4.0,
+        "speed_tolerance_m_s": 0.15,
+        "lateral_speed_tolerance_m_s": 0.15,
+        "vertical_speed_tolerance_m_s": 0.20,
+        "height_tolerance_m": 0.04,
+        "max_tilt_deg": 10.0,
+        "max_yaw_deg": 5.0,
+        "stable_time_s": 0.15,
+        "timeout_s": 5.0,
+        "reward_scales": {
+            "tracking_lin_vel": 5.0,
+            "tracking_ang_vel": 5.0,
+            "base_balance": -10.0,
+            "base_height": -50.0,
+            "wheel_airborne": -10.0,
+            "base_contact": -10.0,
+            "leg_symmetry": -5.0,
+            "action_rate": -0.01,
+        },
+    }
+
+
 def _get_termination_cfg():
     """终止条件唯一调参入口；二次腾空和机身触地只惩罚，回合超时由阶段总时长决定。"""
     return {
         # jump 任务失败阈值：任意一拍机身倾角超过此值即锁存无效。
-        "jump_max_tilt_deg": 10.0,
+        "jump_max_tilt_deg": 20.0,
         "jump_termination": {
             # 过倾、撞台阶立面、错误落台中的任一项，立即提前终止。
             "on_invalid": True,
@@ -49,7 +76,7 @@ def _get_termination_cfg():
 
 def _get_jump_modes_cfg(episode_length_s: float):
     """三种模式的 base 到轮底距离轨迹、起跳距离、场地与成功条件。"""
-    # [触发 jump 后的时间(s), 目标 base 到两侧轮底的平均竖直距离(m)]。
+    # [触发 jump 后的时间(s), height]。
     # 实测距离 = base_z - mean(wheel_center_z - wheel_radius)，沿世界 z 方向测量。
     # 节点间五次平滑插值；描述伸腿/收腿姿态，与地形高度及整体腾空高度无关。
     base_to_wheel_bottom_trajectories = {
@@ -139,7 +166,6 @@ def _get_reward_cfg():
             "death": -100.0,
             "jump_invalid": -200.0,
             # 起跳与峰值高度
-            "flight_leg_vertical": 5.0,
             "takeoff_event": 200.0,
             "flight_height_shortfall": -2000.0,
             "flight_peak_height": 5000.0,

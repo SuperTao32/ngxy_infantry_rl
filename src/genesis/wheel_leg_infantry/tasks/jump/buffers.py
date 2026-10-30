@@ -64,7 +64,7 @@ class JumpBuffers:
         # has_taken_off 为物理离地，不等于奖励要求的“连续腾空达到最短时间”。
         self.has_taken_off = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         self.has_landed = torch.zeros_like(self.has_taken_off)
-        self.phase_features = torch.empty((self.num_envs, 6), dtype=gs.tc_float, device=self.device)  # actor 时间编码。
+        self.phase_features = torch.zeros((self.num_envs, 6), dtype=gs.tc_float, device=self.device)  # actor 时间编码。
 
         # 本拍奖励门控：每步重新计算，条件消失即归零，不记录历史。
         self.takeoff_gate = torch.zeros_like(self.base_height_target)  # 计划起跳期且尚有安全轮支撑。
@@ -100,8 +100,8 @@ class JumpBuffers:
             dtype=gs.tc_float,
         )
 
-    def _reset_task_buffers(self, env_idx):
-        """重置全部或布尔掩码选中的环境；既用于物理 reset，也用于预热到 jump 的切换。"""
+    def _reset_jump_buffers(self, env_idx):
+        """清零跳跃结算状态；物理 reset 和达速触发共用，不改加速历史。"""
         selected = slice(None) if env_idx is None else env_idx
         self.jump_reward_state.reset(env_idx)
         for buffer in self._jump_episode_buffers():

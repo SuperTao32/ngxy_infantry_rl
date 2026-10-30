@@ -101,11 +101,6 @@ class JumpRewards:
         tilt_error = self._jump_tilt_error()
         return self.flight_gate * torch.exp(-tilt_error / self.reward_cfg["flight_balance_sigma"])
 
-    def _reward_flight_leg_vertical(self):
-        """在腾空期间，奖励腿部竖直。"""
-        error = torch.mean(torch.square(self.leg_angle * self.obs_scales["leg_angle"]), dim=1)
-        return self.flight_gate * torch.exp(-error)
-
     def _reward_flight_height_tracking(self):
         error = torch.square(self.jump_base_height - self.base_height_target)
         return self.flight_gate * torch.exp(-error / self.reward_cfg["flight_height_sigma"])

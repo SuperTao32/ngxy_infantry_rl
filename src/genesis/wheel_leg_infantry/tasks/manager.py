@@ -25,6 +25,25 @@ def task_configs(name):
         raise ValueError(f"Unknown task {name!r}")
     return import_module(f"{__package__}.{name}.config").get_cfgs()
 
+def task_metric_tag(task_name, key):
+    if key.startswith("reward_"):
+        path = "rewards/" + key.removeprefix("reward_")
+    elif key.startswith("metric_"):
+        path = "metrics/" + key.removeprefix("metric_")
+    elif key == "episode_duration_s":
+        path = "episode/duration_s"
+    elif key in {"curriculum_stage", "curriculum_iteration"}:
+        path = "curriculum/" + key.removeprefix("curriculum_")
+    elif key == "sampled_env_steps":
+        path = "curriculum/sampled_env_steps"
+    elif key in {"num_envs", "env_fraction"}:
+        path = "allocation/" + key
+    elif key.startswith("task/"):
+        path = "terrain/" + key.removeprefix("task/")
+    else:
+        path = "metrics/" + key
+    return f"{task_name}/{path}"
+
 
 def allocate_task_counts(configs, num_envs, weights=None):
     """每个正权重任务至少分配一个环境，剩余数量按最大余数法分配。"""
@@ -109,6 +128,9 @@ class TaskManager:
         """尽量保留原有环境，只迁移超出新配额的行；返回需要 reset 的 mask。"""
         counts = allocate_task_counts(self.configs, self.env.num_envs, self.weights)
         changed = torch.zeros(self.env.num_envs, dtype=torch.bool, device=self.env.device)
+        for name, count in zip(self.tasks, counts):
+            if count:
+                self.progress[name].mark_allocated(iteration)
         if all(len(task.env_ids) == count for task, count in zip(self.tasks.values(), counts)):
             return changed
         released = []
@@ -126,8 +148,6 @@ class TaskManager:
             offset += missing
             if not torch.equal(ids, task.env_ids):
                 task.set_env_ids(ids)
-            if count:
-                self.progress[name].mark_allocated(iteration)
         return changed
 
     def advance_progress(self, iteration):
@@ -149,7 +169,7 @@ class TaskManager:
         self._legacy_progress.clear()
 
     def metrics(self):
-        return {f"Episode/{name}/{key}": value
+        return {task_metric_tag(name, key): value
                 for name, task in self.tasks.items()
                 for key, value in dict(num_envs=float(len(task.env_ids)), env_fraction=len(task.env_ids) / self.env.num_envs,
                                       curriculum_iteration=self.progress[name].iteration,
@@ -171,12 +191,26 @@ class TaskManager:
         return {name: {**task.state_dict(), "curriculum_progress": self.progress[name].state_dict()}
                 for name, task in self.tasks.items()}
 
-    def load_state_dict(self, state):
-        if set(state) != set(self.tasks):
-            raise ValueError("Checkpoint task set differs from the current training configuration")
+    def load_state_dict(self, state, *, allow_new_tasks=False):
+        """恢复已有任务；current 续训可新增任务，其独立课程从零开始。"""
+        removed = set(state) - self.tasks.keys()
+        added = self.tasks.keys() - set(state)
+        if removed or (added and not allow_new_tasks):
+            raise ValueError(
+                "Checkpoint task set differs from the current training configuration; "
+                "use --resume-config current to add tasks, and retain all checkpoint tasks"
+            )
+        self._legacy_progress.clear()
         for name, task in self.tasks.items():
+            if name in added:
+                # 构造环境时可能按第 0 阶段分过配额；新增任务没有历史采样。
+                self.progress[name].sampled_env_steps = 0
+                self.progress[name].started_at_iteration = None
+                continue
             task.load_state_dict(state[name])
             if "curriculum_progress" in state[name]:
                 self.progress[name].load_state_dict(state[name]["curriculum_progress"])
             else:
                 self._legacy_progress.add(name)
+        if added:
+            print(f"[resume] new tasks={sorted(added)}; task curriculum progress starts at 0")

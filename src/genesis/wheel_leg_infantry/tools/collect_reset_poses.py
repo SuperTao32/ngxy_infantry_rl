@@ -21,10 +21,9 @@ import numpy as np
 import torch
 
 from ..config import get_env_cfg
-from ..tasks.recovery.reset_pose import get_reset_pose_cfg
+from ..tasks.recovery.reset_pose import BASE_NAMES, SIDE_LYING_ANGLE_DEG, get_reset_pose_cfg, lateral_axis_vertical_angle_deg, world_up_in_body
 
 RECOVERY_DIR = Path(__file__).resolve().parents[1] / "tasks" / "recovery"
-BASE_NAMES = tuple(f"floating_base_{axis}" for axis in ("x", "y", "z", "qw", "qx", "qy", "qz"))
 DT = 0.01
 
 
@@ -51,20 +50,6 @@ def coordinate_layout(robot, wheel_names):
     if tuple(names[:7]) != BASE_NAMES or None in names or len(set(names)) != len(names):
         raise ValueError("Expected floating_base followed by named scalar joints")
     return names, linear_dofs, revolute_names, prismatic_names
-
-
-def world_up_in_body(pose):
-    """世界竖直方向在机身坐标系中的表示，不受全局 yaw 影响。"""
-    w, x, y, z = (pose[name] for name in BASE_NAMES[3:])
-    norm = math.hypot(w, x, y, z)
-    w, x, y, z = (v / norm for v in (w, x, y, z))
-    return np.array([2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)])
-
-
-def lateral_axis_vertical_angle_deg(pose):
-    """机身左右轴与竖直线的锐角；左右侧平躺都接近 0°。"""
-    alignment = float(np.clip(abs(world_up_in_body(pose)[1]), 0.0, 1.0))
-    return math.degrees(math.acos(alignment))
 
 
 def pose_is_similar(pose, other, revolute_names, prismatic_names):
@@ -244,7 +229,9 @@ def parse_args(argv=None):
     parser.add_argument("--hold-time", type=float, default=0.5, help="全部速度连续达标且接触地面的时间 [s]")
     parser.add_argument("--linear-tol", type=float, default=0.01, help="基座线速度、滑动关节速度各分量阈值 [m/s]")
     parser.add_argument("--angular-tol", type=float, default=0.05, help="基座角速度、所有转动关节（含轮）速度各分量阈值 [rad/s]")
-    parser.add_argument("--side-lying-angle-deg", type=float, default=20.0, help="机身左右轴距竖直方向不超过此角度的终态视为侧躺并过滤 [deg]")
+    parser.add_argument(
+        "--side-lying-angle-deg", type=float, default=SIDE_LYING_ANGLE_DEG, help="机身左右轴距竖直方向不超过此角度的终态视为侧躺并过滤 [deg]"
+    )
     parser.add_argument("--keep-duplicates", action="store_true", help="保留相似终态，默认忽略平移/yaw/轮角去重")
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--cpu", action="store_true")

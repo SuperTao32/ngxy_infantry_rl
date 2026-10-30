@@ -4,8 +4,9 @@ from .tools.run_utils import load_runner_class
 
 
 class PolicyRunner(load_runner_class()):
-    def __init__(self, *args, workers=None, **kwargs):
+    def __init__(self, *args, workers=None, allow_new_tasks=False, **kwargs):
         self.workers = workers
+        self.allow_new_tasks = allow_new_tasks
         super().__init__(*args, **kwargs)
 
     def _configure_multi_gpu(self):
@@ -28,7 +29,7 @@ class PolicyRunner(load_runner_class()):
             state = infos.get("infantry_tasks")
             if state is None:
                 raise ValueError("Checkpoint has no unified task state; use a unified GRU training checkpoint")
-            self.env.load_training_state_dict(state)
+            self.env.load_training_state_dict(state, allow_new_tasks=self.allow_new_tasks)
         # A resumed run starts fresh simulator episodes and recurrent trajectories.
         self.alg.actor.reset()
         self.alg.critic.reset()

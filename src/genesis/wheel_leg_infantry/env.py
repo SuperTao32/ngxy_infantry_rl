@@ -29,6 +29,7 @@ from .terrains.manager import TerrainManager
 from .tasks.task_config import TaskConfiguration
 from .utils.tracking_gate import DEFAULT_TRACKING_GATE_CFG
 from .tasks.manager import TaskManager
+from .tasks.manager import task_metric_tag
 from .terrains.training import TrainingTerrain
 
 
@@ -633,6 +634,7 @@ class WheelLegInfantryEnv(TaskConfiguration):
         self._reset_training_step()
 
         ########### 更新观测值 ###########
+        self.task_manager.call("before_observations")
         self._update_observations()
 
         self.task_manager.call("after_step")
@@ -690,7 +692,7 @@ class WheelLegInfantryEnv(TaskConfiguration):
             "actions": self.actions,  # 6
             "tof_distance": self.tof_history.observation() if self.tof_cfg["include_in_observation"] else empty,
             "commands": commands,  # 6：速度、偏航速度、高度目标、jump 模式 one-hot
-            "jump_phase": jump_phase,
+            "jump_phase": jump_phase, # 6
         }
         self.obs_buf = torch.concatenate(tuple(self.obs_components.values()), dim=-1)
 
@@ -742,8 +744,8 @@ class WheelLegInfantryEnv(TaskConfiguration):
     def training_state_dict(self):
         return self.task_manager.state_dict()
 
-    def load_training_state_dict(self, state):
-        self.task_manager.load_state_dict(state)
+    def load_training_state_dict(self, state, *, allow_new_tasks=False):
+        self.task_manager.load_state_dict(state, allow_new_tasks=allow_new_tasks)
 
     # ============ 回合重置与命令 ============
     def _reset_training_step(self):
@@ -867,9 +869,9 @@ class WheelLegInfantryEnv(TaskConfiguration):
         for name, task in self.task_manager.tasks.items():
             mask = reset_mask & task.mask
             if mask.any():
-                episode.update({f"Episode/{name}/{key}": value for key, value in task.collect_episode_metrics(mask).items()})
+                episode.update({task_metric_tag(name, key): value for key, value in task.collect_episode_metrics(mask).items()})
         if self.curriculum.enabled:
-            episode["Episode/shared/curriculum_stage"] = torch.full_like(
+            episode["shared/curriculum/stage"] = torch.full_like(
                 self.reward_buf[reset_mask], float(self.curriculum.current_stage_index),
             )
         return episode
@@ -971,7 +973,8 @@ class WheelLegInfantryEnv(TaskConfiguration):
         )
         jump = self.task_manager.tasks.get("jump")
         if jump is not None:
-            constrained[jump.mask] = target_joint_pos[jump.mask]
+            active = jump.mask & jump.jump_active
+            constrained[active] = target_joint_pos[active]
         return constrained
 
     def _apply_gas_spring_compensation(self):

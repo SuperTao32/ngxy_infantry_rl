@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from .reset_pose import get_reset_pose_cfg
+from .reset_pose import SIDE_LYING_ANGLE_DEG, get_reset_pose_cfg, load_reset_pose_pool
 
 # 可改为 "default"（0.22 m 默认站姿）或其他 Viewer JSON 快照。
 RESET_POSE = Path(__file__).with_name("reset_pos.json")
@@ -10,6 +10,28 @@ RESET_POSE = Path(__file__).with_name("reset_pos.json")
 # 交互评估的姿态来源；可追加其他 Viewer JSON 快照或 "default"。
 # 配置层负责解析，仿真和按键层只接收数值复位配置。
 RECOVERY_RESET_POSES = (RESET_POSE,)
+
+# 新训练自动纳入采集脚本的输出；CLI --recovery-poses 可指定其他目录/文件。
+RESET_POSE_DIR = Path(__file__).with_name("reset_pos")
+DYNAMIC_RESET_PROBABILITY = 0.2
+
+
+def get_recovery_training_reset_cfg(sources=None):
+    """将训练快照解析为数值配置；续训不再读取原始采集文件。"""
+    if sources is None:
+        sources = (RESET_POSE, *sorted(RESET_POSE_DIR.rglob("pose_*.json")))
+    return {
+        "pose_pool": load_reset_pose_pool(sources),
+        "side_lying_angle_deg": SIDE_LYING_ANGLE_DEG,
+        "dynamic_probability": DYNAMIC_RESET_PROBABILITY,
+        "dynamic": {
+            "lift_height_range": [0.05, 0.15],
+            "pitch_offset_range_deg": [-10.0, 10.0],
+            # 基座线速度与角速度均为世界系；关节初始速度仍为零。
+            "base_lin_vel_range": [[-0.15, 0.15], [-0.15, 0.15], [-0.2, 0.2]],
+            "base_ang_vel_range": [[-0.1, 0.1], [-0.5, 0.5], [-0.1, 0.1]],
+        },
+    }
 
 
 def get_recovery_reset_cfgs():
@@ -38,6 +60,7 @@ def get_cfgs():
         },
     }
     env_cfg.update(get_reset_pose_cfg(RESET_POSE))
+    env_cfg["recovery_reset"] = get_recovery_training_reset_cfg()
     reward_cfg = {
         "standing_tracking_sigma": 0.1,
         "stand_up_leg_length_target": 0.14,
@@ -51,20 +74,16 @@ def get_cfgs():
             "floor": 0.3,
         },
         "reward_scales": {
-            "stand_up_success": 500.0,
-            "stand_up_leg_length": -10.0,
-            "stand_up_leg_vertical": -10.0,
-            "wheel_airborne": -100.0,
-            "base_contact": -1.0,
-            "base_balance": -20.0,
+            "stand_up_success": 50.0,
+            "wheel_airborne": -10.0,
+            "base_contact": -10.0,
+            "base_balance": -50.0,
             "gated_tracking_lin_vel": 1.0,
             "gated_tracking_ang_vel": 1.0,
-            "leg_symmetry": -5.0,
-            "leg_symmetry_bonus": 1.0,
+            "base_height": -10.0,
             "height_gate": 5.0,
-            "joint_vel": -0.003,
-            "alive": 5.0,
-            "death": -100.0,
+            "joint_vel": -0.005,
+            "death": -50.0,
         },
     }
     command_cfg = {
@@ -82,8 +101,7 @@ def get_cfgs():
         },
         "standing_probability": 1.0,
     }
-    return dict(env_cfg=env_cfg, reward_cfg=reward_cfg, command_cfg=command_cfg,
-                curriculum_cfg=_curriculum_cfg())
+    return dict(env_cfg=env_cfg, reward_cfg=reward_cfg, command_cfg=command_cfg, curriculum_cfg=_curriculum_cfg())
 
 
 def _curriculum_cfg() -> dict:

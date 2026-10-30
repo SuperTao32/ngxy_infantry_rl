@@ -191,6 +191,10 @@ class Task(CommonRewards, TaskConfiguration):
     def after_step(self):
         pass
 
+    def before_observations(self):
+        """奖励及 reset 结算后、发布下一拍观测前的任务切换。"""
+        pass
+
     def state_dict(self):
         return {}
 
