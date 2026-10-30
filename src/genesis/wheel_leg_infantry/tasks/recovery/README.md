@@ -32,6 +32,8 @@ uv run --locked python -m src.genesis.wheel_leg_infantry.tools.collect_reset_pos
 
 默认至少模拟 2 s，之后基座和全部关节（包括被动关节、气弹簧和轮子）的速度必须连续 0.5 s 低于阈值，且持续接触地面。线速度各分量阈值为 0.01 m/s，角速度各分量阈值为 0.05 rad/s；可用 `--linear-tol`、`--angular-tol`、`--hold-time` 调整。每次最多 20 s，超时或非有限/求解器错误状态不保存为姿态。`--max-time` 调整单次时间上限。
 
+静止后的左右侧躺姿态会被过滤：机身左右轴与世界竖直线的锐角不超过 30° 时，记录为 `side_lying` 并继续下一次释放，不写入姿态 JSON，也不计入目标数量。可用 `--side-lying-angle-deg` 调整范围，数值越大排除范围越宽；判定不受全局 yaw 影响，前后倾倒和翻面不会仅因倾角大被过滤。`--keep-duplicates` 不会关闭侧躺过滤。
+
 输出位于 `tasks/recovery/reset_pos/run_<UTC时间>/`（可用 `--output-dir` 修改）。`pose_*.json` 与原 `reset_pos.json` 格式一致，包含浮动基座 XYZ、wxyz 四元数和全部活动关节位置，能直接传给 `get_reset_pose_cfg()`。`report.json` 单独记录参数、初态、原始终态速度、超时和去重结果。每次采集创建新目录，已保存的样本在 Ctrl-C 后仍然可用；未达到目标数量时以非零退出码返回。
 
 默认在本次采集内去重，忽略水平平移、全局 yaw 和轮子转角；基座高度差不超过 1 cm、重力方向夹角不超过 5°，且所有其他转动关节差不超过 0.05 rad、滑动关节差不超过 5 mm 时视为重复。`--keep-duplicates` 可关闭。不同释放条件可能落入同一终态，因此尝试次数可能多于保存数。
