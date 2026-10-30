@@ -626,26 +626,7 @@ class WheelLegInfantryEnv(TaskConfiguration):
         self._update_task_state()
 
         ########### 判断终止 ###########
-        tilt_out = self._tilt_failure()
-        self.tilt_out_steps.copy_(torch.where(tilt_out, self.tilt_out_steps + 1, 0))
-        self.base_contact_steps.copy_(torch.where(self._base_contact_failure(), self.base_contact_steps + 1, 0))
-        persistent_tilt = self.tilt_out_steps >= self.tilt_termination_steps
-        if self.base_contact_termination_steps is None:
-            persistent_base_contact = torch.zeros_like(self.base_contact, dtype=torch.bool)
-        else:
-            persistent_base_contact = self.base_contact_steps >= self.base_contact_termination_steps
-        time_out = self._episode_timeout()
-        # patch 接缝不属于任何一种训练地形，接近边界时按 timeout 重置并允许 bootstrap。
-        terrain_out = self.terrain.out_of_bounds(self.base_pos[:, :2], self.terrain_spawn_centers)
-        time_out = time_out | terrain_out
-        solver_error = self.scene.rigid_solver.get_error_envs_mask().bool()
-
-        self.terminated_buf = persistent_tilt | persistent_base_contact | solver_error | self._task_termination()
-        # 成功是终局而非失败：不发 death，也不作为 time_out bootstrap。
-        task_success = self._task_success() & ~self.terminated_buf
-        time_out &= ~(task_success | self.terminated_buf)
-        self.reset_buf = self.terminated_buf | time_out | task_success
-        self.extras["task_successes"] = task_success
+        time_out = self._update_termination()
 
         ########### 计算奖励 ###########
         self.reward_buf.zero_()
@@ -677,6 +658,30 @@ class WheelLegInfantryEnv(TaskConfiguration):
         self.task_manager.call("after_step")
         return self.get_observations(), self.reward_buf, self.reset_buf, self.extras
 
+    def _update_termination(self):
+        """训练回合终止判定；连续交互仿真可覆盖此钩子。"""
+        tilt_out = self._tilt_failure()
+        self.tilt_out_steps.copy_(torch.where(tilt_out, self.tilt_out_steps + 1, 0))
+        self.base_contact_steps.copy_(torch.where(self._base_contact_failure(), self.base_contact_steps + 1, 0))
+        persistent_tilt = self.tilt_out_steps >= self.tilt_termination_steps
+        if self.base_contact_termination_steps is None:
+            persistent_base_contact = torch.zeros_like(self.base_contact, dtype=torch.bool)
+        else:
+            persistent_base_contact = self.base_contact_steps >= self.base_contact_termination_steps
+        time_out = self._episode_timeout()
+        # patch 接缝不属于任何一种训练地形，接近边界时按 timeout 重置并允许 bootstrap。
+        terrain_out = self.terrain.out_of_bounds(self.base_pos[:, :2], self.terrain_spawn_centers)
+        time_out = time_out | terrain_out
+        solver_error = self.scene.rigid_solver.get_error_envs_mask().bool()
+
+        self.terminated_buf = persistent_tilt | persistent_base_contact | solver_error | self._task_termination()
+        # 成功是终局而非失败：不发 death，也不作为 time_out bootstrap。
+        task_success = self._task_success() & ~self.terminated_buf
+        time_out &= ~(task_success | self.terminated_buf)
+        self.reset_buf = self.terminated_buf | time_out | task_success
+        self.extras["task_successes"] = task_success
+        return time_out
+
     def get_observations(self):
         """以 TensorDict 返回策略观测和特权 critic 观测。"""
         return TensorDict(
@@ -689,11 +694,8 @@ class WheelLegInfantryEnv(TaskConfiguration):
 
     def _update_observations(self):
         """所有 actor/critic 观测在此显式列出；字典顺序就是网络输入顺序。"""
-        jump = self.task_manager.tasks.get("jump")
         empty = self.base_pos.new_empty((self.num_envs, 0))
-        zeros_3 = self.base_pos.new_zeros((self.num_envs, 3))
-        zeros_6 = self.base_pos.new_zeros((self.num_envs, 6))
-        jump_mode = torch.where(jump.mask[:, None], jump.jump_mode_one_hot, 0.0) if jump is not None else zeros_3
+        jump_mode, jump_phase = self._get_jump_observations()
         commands = torch.concatenate((self.commands * self.commands_scale, jump_mode), dim=-1)
 
         # actor：可部署的传感器测量、动作、命令及跳跃条件。
@@ -708,7 +710,7 @@ class WheelLegInfantryEnv(TaskConfiguration):
             "actions": self.actions,  # 6
             "tof_distance": self.tof_history.observation() if self.tof_cfg["include_in_observation"] else empty,
             "commands": commands,  # 6：速度、偏航速度、高度目标、jump 模式 one-hot
-            "jump_phase": torch.where(jump.mask[:, None], jump.phase_features, 0.0) if jump is not None else zeros_6,
+            "jump_phase": jump_phase,
         }
         self.obs_buf = torch.concatenate(tuple(self.obs_components.values()), dim=-1)
 
@@ -725,7 +727,7 @@ class WheelLegInfantryEnv(TaskConfiguration):
             "actions": self.actions,  # 6
             "tof_distance": self.true_tof_history.observation() if self.tof_cfg["include_in_observation"] else empty,
             "commands": commands,  # 6
-            "jump_phase": torch.where(jump.mask[:, None], jump.phase_features, 0.0) if jump is not None else zeros_6,  # 6
+            "jump_phase": jump_phase,  # 6
             # critic特权观测
             "privileged_base_lin_vel": self.base_lin_vel * self.obs_scales["lin_vel"],  # 3
             "privileged_wheel_normal_force": self.wheel_normal_force.flatten(1) * self.obs_scales["normal_force"],  # 6
@@ -738,6 +740,13 @@ class WheelLegInfantryEnv(TaskConfiguration):
             "privileged_base_height": self.base_pos[:, 2:3] * self.obs_scales["base_height"],  # 1：baselink 原点的世界坐标 z
         }
         self.critic_obs_buf = torch.concatenate(tuple(self.critic_obs_components.values()), dim=-1)
+
+    def _get_jump_observations(self):
+        jump = self.task_manager.tasks.get("jump")
+        if jump is None:
+            return self.base_pos.new_zeros((self.num_envs, 3)), self.base_pos.new_zeros((self.num_envs, 6))
+        return (torch.where(jump.mask[:, None], jump.jump_mode_one_hot, 0.0),
+                torch.where(jump.mask[:, None], jump.phase_features, 0.0))
 
     def set_training_iteration(self, iteration):
         if iteration < 0:

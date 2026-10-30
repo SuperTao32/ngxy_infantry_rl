@@ -19,21 +19,42 @@ uv run --locked python -m src.genesis.wheel_leg_infantry.train \
 uv run --locked python -m src.genesis.wheel_leg_infantry.train \
   -e infantry --resume --max-iterations 20000
 
-# 同一 checkpoint 评估全部任务，或用 --tasks 聚焦其中一个任务
+# 选择地形，连续操纵同一台机器人
 uv run --locked python -m src.genesis.wheel_leg_infantry.eval \
-  -e infantry --tasks jump -B 64 --steps 3000
+  -e infantry --terrain plane
 ```
 
-训练和评估共用 `--tasks`、`--log-root`、`--seed`、`--cpu` 及随机化开关。`--tasks` 支持多个名称；训练默认全部开启。每个开启任务需要正权重且至少一个环境；multi_terrain 的内部子任务还需足够的环境配额。默认评估开启 viewer，`--no-vis` 关闭；`--output results.json` 保存汇总。
+训练默认开启全部任务，`--tasks` 支持多个名称。每个开启任务需要正权重且至少一个环境；multi_terrain 的内部子任务还需足够的环境配额。
 
-交互控制 command 时添加 `--keyboard`，并在 viewer 窗口中按键：
+**eval 是连续交互仿真**，默认开启 viewer、控制一台机器人，直到关闭窗口。无需选择 tasks、设置任务配额或添加键盘开关。通过 `--terrain`（也支持 `-terrain`）加载已有地形；`--difficulty` 选择对应地形已有级别，`--terrain-size LENGTH WIDTH` 调整场地尺寸：
 
 ```bash
 uv run --locked python -m src.genesis.wheel_leg_infantry.eval \
-  -e infantry --tasks locomotion -B 1 --keyboard --steps 100000
+  -e infantry -terrain stairs_up --difficulty 0
 ```
 
-↑/↓ 每次增减前向速度 0.5 m/s，←/→ 每次增减偏航速度 0.5 rad/s；PageUp/PageDown 每次增减目标高度 0.05 m；空格将速度和转向清零，Enter 对准机器人。命令限幅使用 0 号机器人所属任务在 checkpoint 时的课程范围，所有并行环境共用同一键盘输入，建议用单任务评估。每次策略推理前重新写入命令并刷新观测，自动 reset 后仍保持键盘目标。`--keyboard` 需要 viewer；不传时保持自动采样命令。
+可用地形：`plane`、`stairs`、`stairs_up`、`platform_ridge_down`、`platform_ridge_up`、`trapezoidal_wave`、`square_wave`、`slope_up`、`slope_down`。
+
+点击 viewer 窗口后操纵：
+
+| 按键 | 命令 |
+| --- | --- |
+| ↑ / ↓ | 前向速度增减 0.5 m/s |
+| ← / → | 偏航速度增减 0.5 rad/s |
+| PageUp / PageDown | 目标高度增减 0.05 m |
+| J | 在当前位置启动一次跳跃命令 |
+| 1 / 2 / 3 | 选择平地 / 20 cm / 40 cm 跳跃编码，随后按 J |
+| R | 在当前姿态请求起身，速度归零，站稳后恢复普通控制 |
+| L | 取消当前行为，返回普通 command 控制 |
+| 空格 | 取消当前行为并清零速度、转向 |
+| Backspace | 显式复位机器人到场地出生位置，并清空 GRU |
+| Enter | 相机对准机器人 |
+
+跳跃沿用保存配置的模式 one-hot、六维时间编码、目标 base 到轮底距离轨迹和电机参数，按键只启动控制信号，不改机器人位置或实际速度。跳跃计时结束后恢复普通命令；起身期间保持零速度与起身高度，方向/高度按键暂时锁定。行为切换不重置物理、传感器、动作或 GRU 历史。倒地、接触、动作完成、回合时长和地形边界均不会自动复位，只有显式复位键会重新摆放机器人；数值求解器报错则停止仿真。
+
+命令范围取 checkpoint 对应的 locomotion 课程；速度区间包含零，支持从静止逐步调速。优先使用 checkpoint 保存的跳跃/起身参数，缺失时使用当前默认配置；动作效果取决于模型实际训练能力，尤其是当前姿态下按键触发跳跃与训练时直接从起跳状态开始的差异。
+
+`--steps N` 可选地限制仿真步数；`--no-vis --steps N` 用于无窗口运行，`--output results.json` 保存运行步数、模拟时长与地形配置。训练和评估共用 `--log-root`、`--seed`、`--cpu` 及随机化开关。
 
 多卡入口仍是同一个模块，每卡环境数由 `-B` 指定：
 
@@ -50,7 +71,8 @@ uv run --locked torchrun --standalone --nproc_per_node=2 \
 | --- | --- |
 | `config.py` | 统一机器人、观测、GRU/PPO 默认值、任务权重与课程组装；保存时仅存任务环境覆盖项 |
 | `env.py` | 统一场景、控制、传感器、任务调度与重置；`_update_observations()` 显式列出全部观测 |
-| `train.py` / `eval.py` | 统一训练、恢复与评估 |
+| `train.py` / `eval.py` | 多任务训练/恢复与连续交互仿真 |
+| `tools/interactive_env.py` / `interactive_viewer.py` | 部署命令、固定场景、连续仿真与键盘诊断 |
 | `policy_runner.py` | 一份 PPO actor/critic，保存和恢复任务课程 |
 | `tasks/task_config.py` | 共享命令采样、reset 状态采样与配置更新 |
 | `tasks/base.py` / `manager.py` | 任务协议、固定 batch 分组、任务注册和 hook 调度 |

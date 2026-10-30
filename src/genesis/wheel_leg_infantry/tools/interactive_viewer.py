@@ -1,12 +1,14 @@
 """统一 eval 的键盘控制和 Viewer 实时诊断组件。"""
 
 import time
+from queue import Empty, SimpleQueue
 
 from genesis.ext.pyrender.constants import FONT_SIZE, TEXT_PADDING, TextAlign
 from genesis.vis.keybindings import Key, KeyAction, Keybind
 from genesis.vis.viewer_plugins import ViewerPlugin
 
 from .tof_viewer import tof_overlay_lines
+from ..tasks.jump.config import MODE_NAMES
 
 
 class DiagnosticsOverlay(ViewerPlugin):
@@ -51,11 +53,9 @@ class KeyboardCommand:
 
     def __init__(self, env):
         self.env = env
-        # The viewer follows env 0. Shared defaults have zero velocity ranges;
-        # use its task's ranges after the checkpoint curriculum was restored.
-        self.task = next(task for task in env.task_manager.tasks.values() if bool(task.mask[0]))
-        self.command_ranges = {key: tuple(self.task.command_cfg[key]) for key in
-                               ("lin_vel_range", "ang_vel_range", "base_height_range")}
+        self._requests = SimpleQueue()
+        self.selected_jump_mode = 0
+        self.command_ranges = env.command_ranges
         self.lin_vel = 0.0
         self.ang_vel = 0.0
         self.height_target = float(env.commands[0, 2].item())
@@ -80,8 +80,57 @@ class KeyboardCommand:
                 Key.SPACE,
                 key_action=KeyAction.PRESS,
                 callback=self.stop,
+                allow_overload=False,
             ),
+            self._action_key("request_jump", Key.J, "jump"),
+            self._action_key("request_recovery", Key.R, "recovery"),
+            self._action_key("request_drive", Key.L, "drive"),
+            self._action_key("reset_robot", Key.BACKSPACE, "reset"),
+            self._keybind("jump_mode_flat", Key._1, self._select_jump_mode, 0),
+            self._keybind("jump_mode_20cm", Key._2, self._select_jump_mode, 1),
+            self._keybind("jump_mode_40cm", Key._3, self._select_jump_mode, 2),
+            # Replace native viewer actions on these keys (e.g. R=record).
+            overwrite=True,
         )
+
+    @property
+    def recovering(self):
+        return self.env.control_mode == "recovery"
+
+    def _select_jump_mode(self, mode):
+        self.selected_jump_mode = mode
+
+    def _action_key(self, name, key, action):
+        return Keybind(name, key, key_action=KeyAction.PRESS, callback=self._enqueue,
+                       args=(action,), allow_overload=False)
+
+    def _enqueue(self, action):
+        self._requests.put((action, self.selected_jump_mode))
+
+    def process_requests(self):
+        """仿真线程处理行为请求；只有显式物理复位要求清空 GRU。"""
+        reset_policy = False
+        self.write_to_env()
+        while True:
+            try:
+                action, mode = self._requests.get_nowait()
+            except Empty:
+                break
+            if action == "jump":
+                self.env.request_jump(mode)
+            elif action == "recovery":
+                self.lin_vel = self.ang_vel = 0.0
+                self.height_target = self.env.recovery.config["height"]
+                self.env.request_recovery()
+            elif action == "drive":
+                self.env.return_to_drive()
+            elif action == "reset":
+                self.lin_vel = self.ang_vel = 0.0
+                self.height_target = 0.22
+                self.env.reset()
+                self.env.focus_viewer()
+                reset_policy = True
+        return reset_policy
 
     @staticmethod
     def _keybind(name, key, callback, amount):
@@ -91,28 +140,34 @@ class KeyboardCommand:
             key_action=KeyAction.PRESS,
             callback=callback,
             args=(amount,),
+            allow_overload=False,
         )
 
     def _change_lin(self, amount):
+        if self.recovering:
+            return
         lower, upper = self.command_ranges["lin_vel_range"]
         self.lin_vel = min(max(self.lin_vel + amount, lower), upper)
 
     def _change_ang(self, amount):
+        if self.recovering:
+            return
         lower, upper = self.command_ranges["ang_vel_range"]
         self.ang_vel = min(max(self.ang_vel + amount, lower), upper)
 
     def _change_height(self, amount):
+        if self.recovering:
+            return
         lower, upper = self.command_ranges["base_height_range"]
         self.height_target = min(max(self.height_target + amount, lower), upper)
 
     def stop(self):
         self.lin_vel = 0.0
         self.ang_vel = 0.0
+        self._enqueue("drive")
 
     def write_to_env(self):
-        self.env.commands[:, 0] = self.lin_vel
-        self.env.commands[:, 1] = self.ang_vel
-        self.env.commands[:, 2] = self.height_target
+        self.env.set_drive_command(self.lin_vel, self.ang_vel, self.height_target)
 
     def _wheel_slip_caption(self):
         """显示实际施加的低摩擦事件；结束后保留两秒提示，避免短事件漏看。"""
@@ -148,16 +203,17 @@ class KeyboardCommand:
         obs = env.obs_buf[0]
         pd = env.get_pd_diagnostics()
         slip_text, slip_color = self._wheel_slip_caption()
-        terrain = self.task.terrain
-        terrain_type = terrain.tile_type(self.task.terrain_tile_index[0].item())
+        terrain = env.terrain
+        terrain_type = terrain.tile_type(env.terrain_tile_index[0].item())
         text = (
-            f"command  vx={self.lin_vel:+.2f} m/s  wz={self.ang_vel:+.2f} rad/s  " f"height={self.height_target:.3f} m",
+            f"command  vx={env.commands[0, 0].item():+.2f} m/s  wz={env.commands[0, 1].item():+.2f} rad/s  "
+            f"height={env.commands[0, 2].item():.3f} m",
             f"state    vx_true={env.base_lin_vel[0, 0].item():+.2f} m/s  "
             f"wz={env.base_ang_vel[0, 2].item():+.2f} rad/s",
             slip_text,
             f"pose     z={env.base_pos[0, 2].item():.3f} m  ground={env.terrain_height[0].item():.3f} m  "
             f"height={env.base_height[0].item():.3f} m",
-            f"terrain  task={self.task.name}  preset={terrain.preset}  patch={terrain_type}  "
+            f"terrain  preset={terrain.preset}  patch={terrain_type}  "
             f"roll={env.base_euler[0, 0].item():+.1f} deg  pitch={env.base_euler[0, 1].item():+.1f} deg",
             f"legs     left={env.leg_length[0, 0].item():.3f} m  right={env.leg_length[0, 1].item():.3f} m",
             f"obs      n={obs.numel()}  min={obs.min().item():+.2f}  max={obs.max().item():+.2f}  " f"mean={obs.mean().item():+.2f}",
@@ -165,6 +221,8 @@ class KeyboardCommand:
             f"joint Kd       {format_tensor(pd['joint_kd'], precision=2)}",
             f"joint -Kd*qdot {format_tensor(pd['joint_kd_damping'], precision=2)}",
             "keys  Up/Down=vx  Left/Right=wz  PgUp/PgDn=height  Space=stop  Enter=focus",
+            f"control  {env.control_mode.upper()} | J=jump ({MODE_NAMES[self.selected_jump_mode]})  "
+            "1/2/3=select jump  R=recover  L=drive  Backspace=reset",
         )
         self.diagnostics_overlay.update(text, colors={2: slip_color})
 
