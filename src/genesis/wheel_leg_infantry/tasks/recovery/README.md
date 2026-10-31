@@ -8,13 +8,26 @@
 
 复位时按当前模型的碰撞几何检查离地高度。静态 pose 若穿地，只向上抬到至少 0.1 mm 间隙；动态 pose 保留采样的释放间隙。关节、姿态和初始速度按原配置使用，原 JSON 无需改写；交互 R 键加载的旧快照也使用同样的高度校正。
 
-交互 eval 的 R 键仍从 `config.py::get_recovery_reset_cfgs()` 提供的独立数值姿态池采样，默认只有 `reset_pos.json`。可在 `RECOVERY_RESET_POSES` 中追加快照路径或 `"default"`；训练姿态池的配置不改变 R 键行为。
+交互 eval 的 R 键从 `config.py::get_recovery_reset_cfgs()` 提供的独立数值姿态池等概率采样，当前清单为 `reset_pos.json` 和 `pose_leg_bb.json`。直接在 `RECOVERY_RESET_POSES` 中写“文件名 -> 难度”，无需逐个定义 Path 变量：
+
+```python
+RECOVERY_RESET_POSES = {
+    "reset_pos.json": 0,
+    "pose_leg_bb.json": 0,
+    "pose_pitch90.json": 1,
+}
+RECOVERY_RESET_DIFFICULTY_RANGE = [0, 0]  # 只测 0 级；None 使用清单全部姿态。
+```
+
+`reset_pos.json` 使用 `RESET_POSE`，其余裸文件名自动位于 `RESET_POSE_DIR`（`reset_pos/` 子目录）；也支持 `"default"`、绝对路径及显式相对路径（相对工作目录）。要复用训练清单，可写 `RECOVERY_RESET_POSES = RESET_POSE_DIFFICULTIES.copy()`，再按 eval 难度范围筛选。难度只用于筛选，不是采样权重；每次 R 可重复抽到同一个姿态。未配置文件不会自动加载，筛选无候选时会明确报错。旧式 Path/字符串 tuple/list 继续使用原路径规则，不进行难度筛选。eval 启动时从当前源码读取清单；它不使用 checkpoint 保存的训练池或动态释放概率。
 
 恢复成功需要连续满足高度、姿态、腿角、接触和速度条件；成功回合作为正常终局结束。恢复任务和另外三个任务共用动作缩放、观测与 GRU policy。
 
 未成功结束的 recovery 回合（包括超时或越界截断）统一触发一次 `death` 惩罚，数值由 `reward_scales.death` 控制，不乘控制步长。超时与物理失败同拍不会重复扣分，成功同拍超时不扣分；成功与物理失败同拍仍按失败处理。超时继续保留原有的价值 bootstrap 处理，其他任务的 `death` 规则不变。
 
-`stand_up_leg_angle` 是双腿朝下的连续奖励：`exp(-mean(leg_angle**2) / stand_up_leg_angle_sigma)`，腿角单位为弧度，0 表示沿机身 -Z。双腿均向下时原始奖励为 1，前后摆角都会降低奖励，左右腿不会抵消；机身倾斜由独立的 `base_balance` 项约束。sigma 越小，角度要求越严格。`reward_scales.stand_up_leg_angle` 默认 5.0，按控制步长缩放，并记录到 `recovery/rewards/stand_up_leg_angle`。
+Recovery 的 `base_height` 使用姿态混合惩罚：`active * (height-target)**2 + (1-active) * clamp(H_REF-height, min=0) / 15`。`active` 由 `-projected_gravity[:, 2]` 计算，倾角 ≤30° 为 1，≥80°（包括翻面）为 0，中间按余弦线性过渡。height 使用相对当地地面的机身高度，target 使用当前高度命令；`stand_up_height_reference_m` 是 H_REF，默认 0.22 m，旧存档未配置时取 `stand_up.height`。权重仍为 `reward_scales.base_height=-10.0`，按控制步长缩放。
+
+`stand_up_leg_angle` 是双腿朝下的连续奖励。`stand_up_leg_angle_tolerance_deg` 默认 10°，双腿绝对摆角均不超过该值时原始奖励饱和为 1；超出部分 `excess = clamp(abs(leg_angle) - radians(tolerance_deg), min=0)` 按 `exp(-mean(excess**2) / stand_up_leg_angle_sigma)` 衰减。腿角单位为弧度，0 表示沿机身 -Z，左右腿误差不会抵消；机身倾斜由独立的 `base_balance` 项约束。sigma 越小，容差外衰减越快。`reward_scales.stand_up_leg_angle` 默认 5.0，按控制步长缩放，并记录到 `recovery/rewards/stand_up_leg_angle`。
 
 `stand_up_speed` 在成功当拍额外奖励起身速度：`clamp(1 - elapsed_s / episode_length_s, 0, 1)`，只发放一次，不乘控制步长。计时从 reset 开始，包含动态释放和连续站稳确认；未成功或成功当拍发生物理失败时为 0。权重 `reward_scales.stand_up_speed` 默认 50，日志为 `recovery/rewards/stand_up_speed`。默认 5 s 回合内，1/3/5 s 成功分别获得额外 40/20/0 分，另有基础 `stand_up_success` 奖励 50 分。
 

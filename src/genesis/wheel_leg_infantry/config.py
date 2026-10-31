@@ -207,7 +207,7 @@ def get_reward_cfg() -> dict:
         "standing_tracking_sigma": 0.25,
         "standing_lin_vel_threshold": 0.02,
         "standing_ang_vel_threshold": 0.02,
-        "standing_drift_deadband": 0.02,
+        "standing_drift_deadband": 0.01,
         "tracking_gate": {
             "height_full_error": 0.03,
             "height_zero_error": 0.05,

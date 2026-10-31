@@ -2,14 +2,9 @@
 
 from pathlib import Path
 
-from .reset_pose import SIDE_LYING_ANGLE_DEG, get_reset_pose_cfg, load_reset_pose_pool
+from .reset_pose import SIDE_LYING_ANGLE_DEG, get_reset_pose_cfg, load_reset_pose_pool, resolve_reset_selection
 
-# 可改为 "default"（0.22 m 默认站姿）或其他 Viewer JSON 快照。
 RESET_POSE = Path(__file__).with_name("reset_pos.json")
-
-# 交互评估的姿态来源；可追加其他 Viewer JSON 快照或 "default"。
-# 配置层负责解析，仿真和按键层只接收数值复位配置。
-RECOVERY_RESET_POSES = (RESET_POSE,)
 
 # 配置中列出的 pose 文件位于此目录；CLI --recovery-poses 可显式指定其他来源。
 RESET_POSE_DIR = Path(__file__).with_name("reset_pos")
@@ -21,12 +16,23 @@ DYNAMIC_RESET_PROBABILITY = 0.2
 RESET_POSE_DIFFICULTIES = {
     "reset_pos.json": 0,
     "pose_leg_bb.json": 0,
-    "pose_leg_bf.json": 1,
-    "pose_leg_fb.json": 1,
-    "pose_leg_ff.json": 1,
-    "pose_pitch90.json": 2,
-    "pose_pitch-90.json": 2,
+    "pose_leg_bf.json": 0,
+    "pose_leg_fb.json": 0,
+    "pose_leg_ff.json": 0,
+    "pose_pitch90.json": 1,
+    "pose_pitch-90.json": 1,
 }
+
+# 交互 eval 的独立清单：文件名 -> 难度；路径规则与训练清单一致。
+# 可以改为 RESET_POSE_DIFFICULTIES.copy()，复用训练清单中的文件和难度。
+# 也支持 "default"、绝对路径，或旧式路径 tuple/list（不按难度筛选）。
+RECOVERY_RESET_POSES = {
+    "pose_leg_bb.json": 0,
+    "pose_leg_bf.json": 0,
+    "pose_leg_fb.json": 0,
+    "pose_leg_ff.json": 0,
+}
+RECOVERY_RESET_DIFFICULTY_RANGE = None  # None 全选；[0, 0] 只选 0 级，含上下界。
 
 
 def get_recovery_training_reset_cfg(sources=None):
@@ -49,10 +55,38 @@ def get_recovery_training_reset_cfg(sources=None):
 
 
 def get_recovery_reset_cfgs():
-    """返回 R 键可随机采样的复位配置，不改变训练的默认复位姿态。"""
+    """按 eval 清单与难度生成 R 键候选，不扫描目录或修改训练姿态池。"""
     if not RECOVERY_RESET_POSES:
         raise ValueError("RECOVERY_RESET_POSES must contain at least one pose")
-    return [get_reset_pose_cfg(source) for source in RECOVERY_RESET_POSES]
+    if not isinstance(RECOVERY_RESET_POSES, dict):
+        # 兼容已有显式路径 tuple/list；沿用原路径解析行为。
+        return [get_reset_pose_cfg(source) for source in RECOVERY_RESET_POSES]
+    if any(not isinstance(name, str) or not name.strip() for name in RECOVERY_RESET_POSES):
+        raise ValueError("RECOVERY_RESET_POSES keys must be non-empty filenames, paths, or 'default'")
+    entries = [dict(source=name, difficulty=difficulty) for name, difficulty in RECOVERY_RESET_POSES.items()]
+    try:
+        indices, _ = resolve_reset_selection(
+            dict(
+                pose_pool=entries,
+                difficulty_range=RECOVERY_RESET_DIFFICULTY_RANGE,
+                dynamic_probability=0.0,
+            )
+        )
+    except ValueError as exc:
+        raise ValueError(f"Invalid eval RECOVERY_RESET_POSES / RECOVERY_RESET_DIFFICULTY_RANGE: {exc}") from exc
+    configs = []
+    for index in indices:
+        name = entries[index]["source"]
+        if name == "reset_pos.json":
+            source = RESET_POSE
+        elif name == "default":
+            source = "default"
+        else:
+            source = Path(name).expanduser()
+            if not source.is_absolute() and source.parent == Path("."):
+                source = RESET_POSE_DIR / source
+        configs.append(get_reset_pose_cfg(source))
+    return configs
 
 
 def get_cfgs():
@@ -67,26 +101,30 @@ def get_cfgs():
             "height": 0.22,
             "height_tolerance": 0.025,
             "max_tilt_deg": 5.0,
-            "max_leg_angle_deg": 5.0,
-            "max_lin_vel": 1.0,
-            "max_ang_vel": 1.0,
-            "hold_time_s": 0.5,
+            "max_leg_angle_deg": 10.0,
+            "max_lin_vel": 0.2,
+            "max_ang_vel": 0.2,
+            "hold_time_s": 0.01,
         },
     }
     env_cfg.update(get_reset_pose_cfg(RESET_POSE))
     env_cfg["recovery_reset"] = get_recovery_training_reset_cfg()
     reward_cfg = {
+        "stand_up_height_reference_m": 0.22,  # 倾倒时高度惩罚的 H_REF。
+        "stand_up_leg_angle_tolerance_deg": 10.0,  # 双腿角度均在 ±10° 内时满奖励。
         "stand_up_leg_angle_sigma": 0.5,
         "reward_scales": {
             "stand_up_success": 50.0,
             "stand_up_speed": 50.0,
-            "stand_up_leg_angle": 5.0,
+            "stand_up_leg_angle": 1.0,
+            "tracking_lin_vel": -2.0,
+            "tracking_ang_vel": -3.0,
             "leg_symmetry": -5.0,
             "wheel_airborne": -5.0,
             "base_contact": -10.0,
             "base_balance": -50.0,
             "base_height": -10.0,
-            "joint_vel": -0.005,
+            "joint_vel": -0.01,
             "death": -50.0,
         },
     }
@@ -143,7 +181,7 @@ def _curriculum_cfg() -> dict:
             },
             {
                 "name": "difficulty_2",
-                "start_iteration": 1500,
+                "start_iteration": 1000,
                 "targets": {
                     # None 使用全部难度；[0, 1] 选 0/1 级，[2, 2] 只选 2 级。
                     "recovery_reset": {"difficulty_range": [0, 2]},

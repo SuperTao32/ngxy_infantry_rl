@@ -195,11 +195,11 @@ def _curriculum_cfg() -> dict:
                         "base_height_range": [0.20, 0.38],
                     },
                     "reward_scales": {
+                        "standing_drift": -20.0,
                         "tracking_lin_vel": -2.0,
                         "tracking_ang_vel": -3.0,
                         "height_gate": 10.0,
                         "leg_symmetry": -10.0,
-                        "standing_drift": -2.0,
                         "gated_tracking_lin_vel": 5.0,
                         "gated_tracking_ang_vel": 7.0,
                         "base_balance": -15.0,

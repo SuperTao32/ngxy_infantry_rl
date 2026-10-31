@@ -1,7 +1,23 @@
+import math
+
 import torch
 
 
 class RecoveryRewards:
+    def _near_upright(self):
+        """倾角不超过 30° 时为 1，达到 80° 时为 0，按姿态余弦过渡。"""
+        cosine = -self.projected_gravity[:, 2]
+        low, high = math.cos(math.radians(80.0)), math.cos(math.radians(30.0))
+        return ((cosine - low) / (high - low)).clamp(0.0, 1.0)
+
+    def _reward_base_height(self):
+        """直立时跟踪高度，倾倒时只惩罚低于参考高度的部分。"""
+        active = self._near_upright()
+        reference = self.reward_cfg.get("stand_up_height_reference_m", self.env_cfg["stand_up"]["height"])
+        target_error = (self.base_height - self.commands[:, 2]).square()
+        low_height_error = (reference - self.base_height).clamp_min(0.0) / 15.0
+        return active * target_error + (1.0 - active) * low_height_error
+
     def _reward_death(self):
         # reset_buf 已包含本拍超时；extras["time_outs"] 在计算奖励后才更新。
         # 成功免罚，成功与物理失败同拍时仍按失败处理；并发原因只扣一次。
@@ -27,6 +43,8 @@ class RecoveryRewards:
         return succeeded.to(self.reward_buf.dtype) * remaining
 
     def _reward_stand_up_leg_angle(self):
-        """奖励双腿沿机身 -Z；leg_angle 为弧度，0 表示相对机身向下。"""
-        error = self.leg_angle.square().mean(dim=-1)
+        """双腿在向下方向的容差内满奖励，超出部分按均方误差衰减。"""
+        tolerance = math.radians(self.reward_cfg.get("stand_up_leg_angle_tolerance_deg", 10.0))
+        excess = (self.leg_angle.abs() - tolerance).clamp_min(0.0)
+        error = excess.square().mean(dim=-1)
         return torch.exp(-error / self.reward_cfg["stand_up_leg_angle_sigma"])

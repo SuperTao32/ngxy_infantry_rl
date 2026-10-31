@@ -41,7 +41,7 @@ class CommonRewards:
     def _reward_standing_drift(self):
         """静止命令下的水平 L1 漂移；保留平衡死区，不乘姿态/高度 gate。"""
         excess_speed = torch.clamp_min(
-            self.base_lin_vel[:, :2].abs() - self.reward_cfg.get("standing_drift_deadband", 0.02), 0.0
+            self.base_lin_vel[:, :2].abs() - self.reward_cfg.get("standing_drift_deadband", 0.01), 0.0
         )
         return self._standing_command_mask() * excess_speed.sum(dim=1)
 
