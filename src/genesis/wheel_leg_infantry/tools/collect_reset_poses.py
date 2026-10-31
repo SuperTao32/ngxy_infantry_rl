@@ -3,6 +3,7 @@
 从仓库根目录运行：
     python -m src.genesis.wheel_leg_infantry.tools.collect_reset_poses --num-poses 32
     python -m src.genesis.wheel_leg_infantry.tools.collect_reset_poses --num-poses 4 --vis
+    python -m src.genesis.wheel_leg_infantry.tools.collect_reset_poses --leg-angle-deg 20 -20 --vis
 
 电机始终为零力矩，仅保留模型本身的摩擦、阻尼、闭链约束和训练配置的气弹簧。
 """
@@ -70,6 +71,20 @@ def write_json(path, value):
     temporary = path.with_suffix(".tmp")
     temporary.write_text(json.dumps(value, indent=2, ensure_ascii=False, allow_nan=False) + "\n", encoding="utf-8")
     temporary.replace(path)
+
+
+def initial_joint_positions(joint_positions, cfg, leg_angle_deg):
+    """设置左右虚拟腿初始摆角，保留电机角差及闭链被动关节的相对角。"""
+    positions = dict(joint_positions)
+    if leg_angle_deg is not None:
+        for front, rear, angle_deg in zip(cfg["leg_front_joint_names"], cfg["leg_rear_joint_names"], leg_angle_deg):
+            front_angle = positions.get(front, 0.0)
+            rear_angle = positions.get(rear, 0.0)
+            # leg_angle = (front1 + rear1) / 2；同增量旋转整条腿，保持腿长和闭链形状。
+            offset = math.radians(angle_deg) - 0.5 * (front_angle + rear_angle)
+            positions[front] = front_angle + offset
+            positions[rear] = rear_angle + offset
+    return positions
 
 
 def settle(scene, robot, ground, spring_indices, cfg, args, velocity_limits):
@@ -162,7 +177,8 @@ def collect(args):
             rpy = rng.uniform([args.roll[0], args.pitch[0], args.yaw[0]], [args.roll[1], args.pitch[1], args.yaw[1]])
             quat = xyz_to_quat(torch.tensor(rpy, dtype=gs.tc_float, device=gs.device), rpy=True, degrees=True)
             initial = [0.0, 0.0, float(rng.uniform(*args.height)), *quat.tolist()]
-            initial.extend(source_cfg["reset_joint_pos"].get(name, 0.0) for name in names[7:])
+            joint_positions = initial_joint_positions(source_cfg["reset_joint_pos"], cfg, args.leg_angle_deg)
+            initial.extend(joint_positions.get(name, 0.0) for name in names[7:])
             robot.set_qpos([initial], zero_velocity=True)
             # 任意朝向下都保证从地面上方释放，而非从穿地状态弹出。
             lift = max(0.0, 0.02 - robot.get_AABB()[0, 0, 2].item())
@@ -221,6 +237,10 @@ def parse_args(argv=None):
         help="轮流使用这些 JSON 的完整关节初态或 default；基座高度/朝向由范围重新采样",
     )
     parser.add_argument("--output-dir", type=Path, default=RECOVERY_DIR / "reset_pos")
+    parser.add_argument(
+        "--leg-angle-deg", type=float, nargs=2, metavar=("LEFT", "RIGHT"),
+        help="左右虚拟腿的绝对初始摆角 [deg]，保留来源姿态的腿长；默认沿用来源角度，仅释放前设置",
+    )
     parser.add_argument("--height", type=float, nargs=2, default=(0.6, 1.0), metavar=("MIN", "MAX"), help="释放基座高度范围 [m]")
     for angle in ("roll", "pitch", "yaw"):
         parser.add_argument(f"--{angle}", type=float, nargs=2, default=(-180.0, 180.0), metavar=("MIN", "MAX"), help="绝对角度范围 [deg]")
@@ -241,6 +261,8 @@ def parse_args(argv=None):
         args.max_attempts = args.num_poses * 10
     if args.num_poses <= 0 or args.max_attempts <= 0:
         parser.error("--num-poses and --max-attempts must be positive")
+    if args.leg_angle_deg is not None and not all(math.isfinite(value) for value in args.leg_angle_deg):
+        parser.error("--leg-angle-deg requires finite LEFT and RIGHT angles")
     for name in ("height", "roll", "pitch", "yaw"):
         lower, upper = getattr(args, name)
         if not all(math.isfinite(v) for v in (lower, upper)) or lower > upper:

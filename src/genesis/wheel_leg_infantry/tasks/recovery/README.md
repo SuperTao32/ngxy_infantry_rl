@@ -57,6 +57,10 @@ uv run --locked python -m src.genesis.wheel_leg_infantry.tools.collect_reset_pos
 uv run --locked python -m src.genesis.wheel_leg_infantry.tools.collect_reset_poses \
   --num-poses 8 --vis --height 0.6 1.0 --roll -180 180 --pitch -90 90
 
+# 指定左右腿初始摆角（依次为左腿、右腿，单位为度）。
+uv run --locked python -m src.genesis.wheel_leg_infantry.tools.collect_reset_poses \
+  --num-poses 8 --vis --leg-angle-deg 20 -20
+
 # 自定义关节初态来源；输入快照的基座坐标会被重新采样的高度、朝向覆盖。
 uv run --locked python -m src.genesis.wheel_leg_infantry.tools.collect_reset_poses \
   --reset-poses src/genesis/wheel_leg_infantry/tasks/recovery/reset_pos.json \
@@ -64,6 +68,8 @@ uv run --locked python -m src.genesis.wheel_leg_infantry.tools.collect_reset_pos
 ```
 
 采集器使用训练的 Genesis MJCF、0.01 s 控制步、20 个物理子步和气弹簧参数。电机为零力矩，保留原模型的摩擦、阻尼与闭链约束；每次完整复位场景后，从零速度释放，不在落地过程中清零速度或增加阻尼。若释放姿态穿地，会自动抬高到碰撞几何离地至少 2 cm，实际初态写入报告。
+
+`--leg-angle-deg LEFT RIGHT` 覆盖所有来源姿态的左右虚拟腿初始摆角，定义与环境中的 `leg_angle` 一致：`(front1 + rear1) / 2`，相对于机身。通过对同侧两个电机角施加相同偏移来保留原姿态的腿长和闭链形状，其他关节相对角保持原值；不传则使用来源姿态的角度。此参数仅设置释放前的初态，不会在下落过程中保持目标角度，实际关节初态保存在 `report.json` 的 `initial_pose` 中。
 
 默认至少模拟 2 s，之后基座和全部关节（包括被动关节、气弹簧和轮子）的速度必须连续 0.5 s 低于阈值，且持续接触地面。线速度各分量阈值为 0.01 m/s，角速度各分量阈值为 0.05 rad/s；可用 `--linear-tol`、`--angular-tol`、`--hold-time` 调整。每次最多 20 s，超时或非有限/求解器错误状态不保存为姿态。`--max-time` 调整单次时间上限。
 
