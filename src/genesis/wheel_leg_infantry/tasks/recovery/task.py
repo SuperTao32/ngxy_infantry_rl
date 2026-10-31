@@ -11,6 +11,7 @@ from ...utils.reset import ensure_reset_clearance
 
 
 class RecoveryTask(RecoveryRewards, Task):
+    EVENT_REWARDS = Task.EVENT_REWARDS | {"stand_up_speed"}
     EPISODE_METRICS = ("height_gate", "attitude_gate", "base_contact")
 
     def _register_task_curriculum(self):

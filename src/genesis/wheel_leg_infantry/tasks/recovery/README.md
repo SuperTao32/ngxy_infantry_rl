@@ -12,6 +12,12 @@
 
 恢复成功需要连续满足高度、姿态、腿角、接触和速度条件；成功回合作为正常终局结束。恢复任务和另外三个任务共用动作缩放、观测与 GRU policy。
 
+未成功结束的 recovery 回合（包括超时或越界截断）统一触发一次 `death` 惩罚，数值由 `reward_scales.death` 控制，不乘控制步长。超时与物理失败同拍不会重复扣分，成功同拍超时不扣分；成功与物理失败同拍仍按失败处理。超时继续保留原有的价值 bootstrap 处理，其他任务的 `death` 规则不变。
+
+`stand_up_leg_angle` 是双腿朝下的连续奖励：`exp(-mean(leg_angle**2) / stand_up_leg_angle_sigma)`，腿角单位为弧度，0 表示沿机身 -Z。双腿均向下时原始奖励为 1，前后摆角都会降低奖励，左右腿不会抵消；机身倾斜由独立的 `base_balance` 项约束。sigma 越小，角度要求越严格。`reward_scales.stand_up_leg_angle` 默认 5.0，按控制步长缩放，并记录到 `recovery/rewards/stand_up_leg_angle`。
+
+`stand_up_speed` 在成功当拍额外奖励起身速度：`clamp(1 - elapsed_s / episode_length_s, 0, 1)`，只发放一次，不乘控制步长。计时从 reset 开始，包含动态释放和连续站稳确认；未成功或成功当拍发生物理失败时为 0。权重 `reward_scales.stand_up_speed` 默认 50，日志为 `recovery/rewards/stand_up_speed`。默认 5 s 回合内，1/3/5 s 成功分别获得额外 40/20/0 分，另有基础 `stand_up_success` 奖励 50 分。
+
 整体用法见 [框架说明](../../README.md)。
 
 ## Pose 难度与课程选择

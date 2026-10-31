@@ -42,7 +42,7 @@ def get_recovery_training_reset_cfg(sources=None):
             "lift_height_range": [0.05, 0.15],
             "pitch_offset_range_deg": [-10.0, 10.0],
             # 基座线速度与角速度均为世界系；关节初始速度仍为零。
-            "base_lin_vel_range": [[-0.15, 0.15], [-0.15, 0.15], [-0.2, 0.2]],
+            "base_lin_vel_range": [[-0.15, 0.15], [-0.15, 0.15], [-0.2, 0.0]],
             "base_ang_vel_range": [[-0.1, 0.1], [-0.5, 0.5], [-0.1, 0.1]],
         },
     }
@@ -76,20 +76,13 @@ def get_cfgs():
     env_cfg.update(get_reset_pose_cfg(RESET_POSE))
     env_cfg["recovery_reset"] = get_recovery_training_reset_cfg()
     reward_cfg = {
-        "standing_tracking_sigma": 0.1,
-        "stand_up_leg_length_target": 0.14,
-        "stand_up_leg_length_sigma": 0.1,
         "stand_up_leg_angle_sigma": 0.5,
-        "tracking_gate": {
-            "height_full_error": 0.02,
-            "height_zero_error": 0.08,
-            "attitude_full_angle_deg": 1.0,
-            "attitude_zero_angle_deg": 10.0,
-            "floor": 0.3,
-        },
         "reward_scales": {
-            "stand_up_success": 500.0,
-            "wheel_airborne": -10.0,
+            "stand_up_success": 50.0,
+            "stand_up_speed": 50.0,
+            "stand_up_leg_angle": 5.0,
+            "leg_symmetry": -5.0,
+            "wheel_airborne": -5.0,
             "base_contact": -10.0,
             "base_balance": -50.0,
             "base_height": -10.0,
