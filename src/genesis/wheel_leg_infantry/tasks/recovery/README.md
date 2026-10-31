@@ -6,6 +6,8 @@
 
 新训练只读取 `config.py::RESET_POSE_DIFFICULTIES` 中明确列出的快照，过滤左右侧躺快照，每个 recovery 环境每次 reset 独立抽取一个完整关节构型。默认 80% 为静态零速度起身，20% 为低难度动态恢复。不会自动扫描采集目录，也不会额外加入未配置的 `reset_pos.json`。
 
+复位时按当前模型的碰撞几何检查离地高度。静态 pose 若穿地，只向上抬到至少 0.1 mm 间隙；动态 pose 保留采样的释放间隙。关节、姿态和初始速度按原配置使用，原 JSON 无需改写；交互 R 键加载的旧快照也使用同样的高度校正。
+
 交互 eval 的 R 键仍从 `config.py::get_recovery_reset_cfgs()` 提供的独立数值姿态池采样，默认只有 `reset_pos.json`。可在 `RECOVERY_RESET_POSES` 中追加快照路径或 `"default"`；训练姿态池的配置不改变 R 键行为。
 
 恢复成功需要连续满足高度、姿态、腿角、接触和速度条件；成功回合作为正常终局结束。恢复任务和另外三个任务共用动作缩放、观测与 GRU policy。

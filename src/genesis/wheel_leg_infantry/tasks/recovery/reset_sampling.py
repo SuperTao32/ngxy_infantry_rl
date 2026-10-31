@@ -7,6 +7,7 @@ import torch
 from genesis.utils.geom import inv_quat, transform_by_quat, transform_quat_by_quat, xyz_to_quat
 
 from ...utils.tensor_utils import as_range_tensors, sample_uniform
+from ...utils.reset import ensure_reset_clearance
 from .reset_pose import BASE_NAMES, POSTURE_GROUPS, _quat_to_rpy_deg, read_reset_pose, resolve_reset_selection
 
 
@@ -92,20 +93,9 @@ class RecoveryResetSampler:
         self.clearance[env_ids] = lift
         return qpos, pos, quat, lin_vel, ang_vel, gravity, height, centers, tiles
 
-    def ensure_dynamic_clearance(self, robot, env_ids, state):
-        """只对动态行临时做 FK，抬高至碰撞几何真正离地；最终状态仍由环境统一写入。"""
-        dynamic = self.is_dynamic[env_ids]
-        ids = env_ids[dynamic]
-        if not ids.numel():
-            return
-        qpos, pos = state[:2]
-        robot.set_qpos(qpos[dynamic], envs_idx=ids, zero_velocity=True)
-        bottom = robot.get_AABB(envs_idx=ids)[:, 0, 2]
-        if not torch.isfinite(bottom).all():
-            raise RuntimeError("Nonfinite collision geometry in recovery reset")
-        correction = (state[6][dynamic] + self.clearance[ids] - bottom).clamp_min(0.0)
-        qpos[dynamic, 2] += correction
-        pos[dynamic, 2] += correction
+    def ensure_clearance(self, robot, env_ids, state):
+        """静态旧快照避免穿地，动态行保留本次采样的离地间隙。"""
+        ensure_reset_clearance(robot, env_ids, state, self.clearance[env_ids].clamp_min(1e-4))
 
     def update_landing(self, wheel_contact, base_contact):
         self.landed |= (wheel_contact > 0.5).any(dim=1) | (base_contact > 0.5)

@@ -73,6 +73,10 @@ R 的姿态池由 `tasks/recovery/config.py::get_recovery_reset_cfgs()` 提供�
 
 recovery 训练使用独立的数值姿态池：默认只加载 `tasks/recovery/config.py::RESET_POSE_DIFFICULTIES` 中列出的快照，不扫描采集目录。课程可按难度筛选，过滤侧躺终态，每个环境每次 reset 独立采样，默认 80% 静态起身、20% 低难度动态释放。`train --recovery-poses PATH ...` 可显式指定采集目录/JSON，`--recovery-dynamic-probability 0` 可单测静态。采样参数、分组成功率与续训行为见 [Recovery 说明](tasks/recovery/README.md)。
 
+ToF 射线起点贴到或进入地形时，读数为 `min_range_m`（当前为 0 m），表示近距离遮挡；只有正常位置上的射线未命中/超量程才返回 `max_range_m`。判定使用每个传感器的世界位置及该点地形高度，包含安装随机偏移；标称真值使用标称安装位置。训练、交互评估、复位首帧和历史观测共用此处理，噪声不会将遮挡通道改回非零读数。旧 checkpoint 也使用修正后的读数，观测维度保持原样，但倒地时的输入语义发生变化，可通过续训适应。
+
+机身碰撞体按可视网格拟合为主体盒体和四个侧面部件盒体。默认 ToF 安装位置同步更新为 `mount_revision=2`，保持光心在碰撞体外；旧 checkpoint 中精确匹配旧默认安装位置的配置会自动迁移。几何参数和复位兼容说明见 [模型说明](../../../assets/robot/wheelbipeV14_2/mjcf/README.md)。
+
 命令范围取 checkpoint 对应的 locomotion 课程；速度区间包含零，支持从静止逐步调速。优先使用 checkpoint 保存的跳跃/起身参数，缺失时使用当前默认配置；动作效果取决于模型实际训练能力。jump 训练先在空旷区域实际加速，达速并站稳后移动至指定起跳位置，再输入跳跃信息；交互中的 J 则在当前位置直接触发。
 
 `--steps N` 可选地限制仿真步数；`--no-vis --steps N` 用于无窗口运行，`--output results.json` 保存运行步数、模拟时长与地形配置。训练和评估共用 `--log-root`、`--seed`、`--cpu` 及随机化开关。

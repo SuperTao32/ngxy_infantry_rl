@@ -7,6 +7,7 @@ from .rewards import RecoveryRewards
 from .buffers import RecoveryBuffers
 from .reset_sampling import RecoveryResetSampler
 from .reset_pose import resolve_reset_selection
+from ...utils.reset import ensure_reset_clearance
 
 
 class RecoveryTask(RecoveryRewards, Task):
@@ -47,9 +48,11 @@ class RecoveryTask(RecoveryRewards, Task):
 
     def _sample_base_reset_state(self, env_ids):
         if self.reset_sampler is None:
-            return super()._sample_base_reset_state(env_ids)
+            state = super()._sample_base_reset_state(env_ids)
+            ensure_reset_clearance(self.robot, env_ids, state)
+            return state
         state = self.reset_sampler.sample(env_ids, self.terrain)
-        self.reset_sampler.ensure_dynamic_clearance(self.robot, env_ids, state)
+        self.reset_sampler.ensure_clearance(self.robot, env_ids, state)
         return state
 
     def _reset_task_buffers(self, mask):

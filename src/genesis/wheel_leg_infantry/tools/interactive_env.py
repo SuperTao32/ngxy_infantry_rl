@@ -12,6 +12,7 @@ from ..tasks.recovery.buffers import RecoveryBuffers
 from ..tasks.jump.config import MODE_NAMES
 from ..tasks.jump.height_reference import sample_height_reference, validate_height_reference
 from ..tasks.jump.phase import phase_encoding, validate_phase_durations
+from ..utils.reset import ensure_reset_clearance
 
 
 class InteractiveEnv(WheelLegInfantryEnv):
@@ -126,6 +127,12 @@ class InteractiveEnv(WheelLegInfantryEnv):
             task.env_cfg = original_cfg
             task._apply_reset_ranges({key: original_cfg[key] for key in range_keys})
             task.init_dof_pos = original_dof_pos
+
+    def _sample_base_reset_state(self, env_ids):
+        state = super()._sample_base_reset_state(env_ids)
+        # R 键的旧 JSON 也按当前模型校正高度，避免模型更新后首帧穿地。
+        ensure_reset_clearance(self.robot, env_ids, state)
+        return state
 
     def _write_commands(self):
         self.commands[:] = self.commands.new_tensor(self.drive_command)

@@ -299,7 +299,10 @@ class WheelLegInfantryEnv(TaskConfiguration):
         )
 
         # tof
-        self.tof = GenesisToF(self.scene, self.robot, self.tof_cfg, self.sensor_noise.config["tof"]) if self.tof_cfg["enabled"] else None
+        self.tof = (
+            GenesisToF(self.scene, self.robot, self.tof_cfg, self.sensor_noise.config["tof"], terrain=self.terrain)
+            if self.tof_cfg["enabled"] else None
+        )
         self.tof_distances = torch.empty(
             (num_envs, len(self.tof_cfg.get("sensors", ()))),
             dtype=gs.tc_float,

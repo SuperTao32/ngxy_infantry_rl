@@ -14,25 +14,25 @@ def default_tof_cfg(
     forward_reference_distance_m=1.0, downward_reference_distance_m=0.5,
 ):
     # base_link 坐标为 X 前、Y 左、Z 上；前向组位于前侧底缘，下向组位于底部左右。
-    # 四路从 z=-0.15 向下外移 10 mm，避免位置随机化后贴入底盘碰撞箱。
-    # 对 wheelbipeV14_2 实际 pos/quat/size，默认三轴 ±5 mm 下仍有至少 10 mm
-    # 的底盘外侧余量；默认三轴 ±2° 下光轴始终朝该外侧平面之外。
+    # 主体碰撞盒底面为 z=-0.167001，前面为 x=0.267485。
+    # 光心向外留出余量，默认 ±5 mm 安装误差下也不会进入主体碰撞盒。
     return {
         "enabled": True,
         "include_in_observation": include_in_observation,
         "history_frames": history_frames,
         "update_hz": update_hz,
+        "mount_revision": 2,
         "link_name": "base_link",
         "min_range_m": 0.0,
         "max_range_m": max_range_m,
         "sensors": [
-            {"name": "tof_left", "pos_offset": [0.23, 0.15, -0.16], "downward_angle_deg": 45.0,
+            {"name": "tof_left", "pos_offset": [0.28, 0.15, -0.13], "downward_angle_deg": 45.0,
              "reference_distance_m": forward_reference_distance_m},
-            {"name": "tof_right", "pos_offset": [0.23, -0.15, -0.16], "downward_angle_deg": 45.0,
+            {"name": "tof_right", "pos_offset": [0.28, -0.15, -0.13], "downward_angle_deg": 45.0,
              "reference_distance_m": forward_reference_distance_m},
-            {"name": "tof_down_left", "pos_offset": [0.10, 0.12, -0.16], "downward_angle_deg": 90.0,
+            {"name": "tof_down_left", "pos_offset": [0.10, 0.12, -0.18], "downward_angle_deg": 90.0,
              "reference_distance_m": downward_reference_distance_m},
-            {"name": "tof_down_right", "pos_offset": [0.10, -0.12, -0.16], "downward_angle_deg": 90.0,
+            {"name": "tof_down_right", "pos_offset": [0.10, -0.12, -0.18], "downward_angle_deg": 90.0,
              "reference_distance_m": downward_reference_distance_m},
         ],
     }
@@ -56,6 +56,9 @@ def resolve_tof_cfg(value):
     if not cfg["enabled"]:
         cfg["include_in_observation"] = False
         return cfg
+    revision = cfg.get("mount_revision", 1)
+    if type(revision) is not int or revision not in (1, 2):
+        raise ValueError("tof.mount_revision must be 1 or 2")
     if not isinstance(cfg.get("link_name"), str) or not cfg["link_name"]:
         raise ValueError("tof.link_name must name the mounting link")
     lo, hi = cfg.get("min_range_m"), cfg.get("max_range_m")
@@ -79,6 +82,17 @@ def resolve_tof_cfg(value):
         if (isinstance(reference, bool) or not isinstance(reference, (int, float))
                 or not math.isfinite(reference) or reference <= 0):
             raise ValueError(f"{sensor['name']}.reference_distance_m must be positive and finite, in meters")
+    if revision == 1:
+        # 旧 checkpoint 的标准光心会被修正后的外壳包住，只迁移精确匹配的旧默认值。
+        legacy_positions = {
+            "tof_left": [0.23, 0.15, -0.16], "tof_right": [0.23, -0.15, -0.16],
+            "tof_down_left": [0.10, 0.12, -0.16], "tof_down_right": [0.10, -0.12, -0.16],
+        }
+        current_positions = {sensor["name"]: sensor["pos_offset"] for sensor in default_tof_cfg()["sensors"]}
+        for sensor in sensors:
+            if list(sensor["pos_offset"]) == legacy_positions.get(sensor["name"]):
+                sensor["pos_offset"] = current_positions[sensor["name"]].copy()
+    cfg["mount_revision"] = 2
     return cfg
 
 
@@ -152,11 +166,12 @@ class ToFHistory:
 class GenesisToF:
     """附着在机身上的单射线 Raycaster，以及无物理步进的复位刷新。"""
 
-    def __init__(self, scene, robot, cfg, randomization_cfg=None):
+    def __init__(self, scene, robot, cfg, randomization_cfg=None, *, terrain):
         import genesis as gs
 
         self.robot = robot
         self.cfg = cfg
+        self.terrain = terrain
         self.randomization_cfg = randomization_cfg
         self.randomization = None
         self._mount_metadata = None
@@ -225,6 +240,22 @@ class GenesisToF:
         """标称安装位姿的无噪声测距，绕过安装误差、偏置和白噪声。"""
         return self.read(after_reset=after_reset, env_ids=env_ids, ground_truth=True)
 
+    def _apply_terrain_occlusion(self, distances, env_ids=None, *, ground_truth=False):
+        """起点贴地/入地表示近距离遮挡，不能把向外穿出地形或无交点解释为空旷。"""
+        from genesis.utils.geom import transform_by_quat
+
+        selected = slice(None) if env_ids is None else env_ids
+        local_pos = distances.new_tensor([sensor["pos_offset"] for sensor in self.cfg["sensors"]])[None]
+        if not ground_truth and self.randomization is not None:
+            local_pos = local_pos + self.randomization.position[selected]
+        link_pos = self._link.get_pos(envs_idx=env_ids, relative=False)[:, None, :]
+        link_quat = self._link.get_quat(envs_idx=env_ids, relative=False)[:, None, :]
+        origins = link_pos + transform_by_quat(local_pos, link_quat)
+        heights = self.terrain.height_at(origins[..., :2].reshape(-1, 2)).reshape(distances.shape)
+        blocked = origins[..., 2] <= heights + 1e-6
+        # 在噪声处理后覆盖，避免遮挡通道又被白噪声/偏置变成非零距离。
+        return torch.where(blocked, self.cfg["min_range_m"], distances)
+
     def read(self, *, after_reset=False, env_ids=None, strength=1.0, ground_truth=False):
         if not ground_truth and self.randomization is not None and self.randomization.mount_active:
             distances = self._read_randomized_mounts(after_reset=after_reset)
@@ -253,5 +284,7 @@ class GenesisToF:
             ], dim=-1)
         selected = slice(None) if env_ids is None else env_ids
         if not ground_truth and self.randomization is not None:
-            return self.randomization.measure(distances[selected], self.cfg, env_ids, strength=strength)
-        return sanitize_tof_distances(distances[selected], self.cfg)
+            measured = self.randomization.measure(distances[selected], self.cfg, env_ids, strength=strength)
+        else:
+            measured = sanitize_tof_distances(distances[selected], self.cfg)
+        return self._apply_terrain_occlusion(measured, env_ids, ground_truth=ground_truth)
