@@ -11,17 +11,31 @@ RESET_POSE = Path(__file__).with_name("reset_pos.json")
 # 配置层负责解析，仿真和按键层只接收数值复位配置。
 RECOVERY_RESET_POSES = (RESET_POSE,)
 
-# 新训练自动纳入采集脚本的输出；CLI --recovery-poses 可指定其他目录/文件。
+# 配置中列出的 pose 文件位于此目录；CLI --recovery-poses 可显式指定其他来源。
 RESET_POSE_DIR = Path(__file__).with_name("reset_pos")
 DYNAMIC_RESET_PROBABILITY = 0.2
 
+# 默认训练池的完整清单：文件名 -> 难度，非负整数，越大越难。
+# reset_pos.json 使用 RESET_POSE，其余文件相对 RESET_POSE_DIR；不扫描目录。
+# 以下仅为初始分级，可根据各 pose 的实际起身成功率调整；不修改快照 JSON。
+RESET_POSE_DIFFICULTIES = {
+    "reset_pos.json": 0,
+    "pose_leg_bb.json": 0,
+    "pose_leg_bf.json": 1,
+    "pose_leg_fb.json": 1,
+    "pose_leg_ff.json": 1,
+    "pose_pitch90.json": 2,
+    "pose_pitch-90.json": 2,
+}
+
 
 def get_recovery_training_reset_cfg(sources=None):
-    """将训练快照解析为数值配置；续训不再读取原始采集文件。"""
+    """只加载配置清单或显式来源；续训不再读取原始快照文件。"""
     if sources is None:
-        sources = (RESET_POSE, *sorted(RESET_POSE_DIR.rglob("pose_*.json")))
+        sources = [RESET_POSE if name == "reset_pos.json" else RESET_POSE_DIR / name for name in RESET_POSE_DIFFICULTIES]
     return {
-        "pose_pool": load_reset_pose_pool(sources),
+        "pose_pool": load_reset_pose_pool(sources, difficulties=RESET_POSE_DIFFICULTIES),
+        "difficulty_range": None,
         "side_lying_angle_deg": SIDE_LYING_ANGLE_DEG,
         "dynamic_probability": DYNAMIC_RESET_PROBABILITY,
         "dynamic": {
@@ -105,14 +119,44 @@ def get_cfgs():
 
 
 def _curriculum_cfg() -> dict:
-    """阶段参数累计覆盖；复位姿态和起身终止条件由 env_cfg 统一设置。"""
+    """阶段参数累计覆盖；recovery_reset 可筛选难度及调整动态比例。"""
     return {
         "enabled": True,
         "stages": [
             {
-                "name": "stand_up",
+                "name": "difficulty_0",
                 "start_iteration": 0,
                 "targets": {
+                    # None 使用全部难度；[0, 1] 选 0/1 级，[2, 2] 只选 2 级。
+                    "recovery_reset": {"difficulty_range": [0, 0]},
+                    "command_ranges": {
+                        "standing_probability": 1.0,
+                        "lin_vel_range": [0.0, 0.0],
+                        "ang_vel_range": [0.0, 0.0],
+                        "base_height_range": [0.22, 0.22],
+                    },
+                },
+            },
+            {
+                "name": "difficulty_1",
+                "start_iteration": 500,
+                "targets": {
+                    # None 使用全部难度；[0, 1] 选 0/1 级，[2, 2] 只选 2 级。
+                    "recovery_reset": {"difficulty_range": [0, 1]},
+                    "command_ranges": {
+                        "standing_probability": 1.0,
+                        "lin_vel_range": [0.0, 0.0],
+                        "ang_vel_range": [0.0, 0.0],
+                        "base_height_range": [0.22, 0.22],
+                    },
+                },
+            },
+            {
+                "name": "difficulty_2",
+                "start_iteration": 1500,
+                "targets": {
+                    # None 使用全部难度；[0, 1] 选 0/1 级，[2, 2] 只选 2 级。
+                    "recovery_reset": {"difficulty_range": [0, 2]},
                     "command_ranges": {
                         "standing_probability": 1.0,
                         "lin_vel_range": [0.0, 0.0],

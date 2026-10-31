@@ -16,8 +16,8 @@ from .terrains import default_terrain_cfg
 # 权重为 0 时暂不分配环境，后续可通过 get_curriculum_cfg() 的阶段权重启用。
 TASK_WEIGHTS = {
     "locomotion": 2.0,
-    "recovery": 0.0,
-    "jump": 1.0,
+    "recovery": 1.0,
+    "jump": 0.0,
     "multi_terrain": 0.0,
 }
 # 每个任务可通过 curriculum_cfg.reference_num_envs 单独覆盖。

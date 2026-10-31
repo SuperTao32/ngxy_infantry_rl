@@ -1,24 +1,24 @@
 """恢复任务的逐环境完整快照采样；静态与低难度动态初态共用关节构型。"""
 
-import math
+from collections import Counter
+from pathlib import Path
 
 import torch
 from genesis.utils.geom import inv_quat, transform_by_quat, transform_quat_by_quat, xyz_to_quat
 
 from ...utils.tensor_utils import as_range_tensors, sample_uniform
-from .reset_pose import BASE_NAMES, POSTURE_GROUPS, _quat_to_rpy_deg, read_reset_pose
+from .reset_pose import BASE_NAMES, POSTURE_GROUPS, _quat_to_rpy_deg, read_reset_pose, resolve_reset_selection
 
 
 class RecoveryResetSampler:
     def __init__(self, config, robot, num_envs, device, default_joint_pos):
-        probability = config["dynamic_probability"]
-        if isinstance(probability, bool) or not math.isfinite(probability) or not 0 <= probability <= 1:
-            raise ValueError("recovery_reset.dynamic_probability must be in [0, 1]")
-        self.dynamic_probability = probability
         self.device = device
         self.pose_pool = config["pose_pool"]
-        if not self.pose_pool:
-            raise ValueError("recovery_reset.pose_pool must contain at least one pose")
+        names = [Path(entry["source"]).stem for entry in self.pose_pool]
+        counts = Counter(names)
+        # 显式来源可包含不同目录中的同名快照，保留独立指标，避免互相覆盖。
+        self.pose_names = [name if counts[name] == 1 else f"{name}__{index:04d}" for index, name in enumerate(names)]
+        self.apply_selection(config)
         joints = [joint for joint in robot.joints if joint.n_qs == 1]
         if robot.n_qs != 7 + len(joints) or robot.joints[0].qs_idx_local != list(range(7)):
             raise ValueError("Recovery snapshots require a floating base followed by scalar joints")
@@ -42,6 +42,7 @@ class RecoveryResetSampler:
         self.rpy = torch.tensor(rpy, dtype=torch.float32, device=device)
         self.group_names = POSTURE_GROUPS
         self.group_ids = torch.tensor([self.group_names.index(entry["group"]) for entry in self.pose_pool], device=device)
+        self.difficulties = torch.tensor([entry.get("difficulty", 0) for entry in self.pose_pool], device=device)
         self.pose_ids = torch.full((num_envs,), -1, dtype=torch.long, device=device)
         self.is_dynamic = torch.zeros(num_envs, dtype=torch.bool, device=device)
         self.landed = torch.ones(num_envs, dtype=torch.bool, device=device)
@@ -52,10 +53,16 @@ class RecoveryResetSampler:
         if self.limits["lift_height_range"][0].item() <= 0:
             raise ValueError("Dynamic lift heights must be positive")
 
+    def apply_selection(self, config):
+        """课程只改变后续 reset 的候选池；已开始的回合保留原始姿态编号。"""
+        indices, probability = resolve_reset_selection(config)
+        self.available_pose_ids = torch.tensor(indices, dtype=torch.long, device=self.device)
+        self.dynamic_probability = probability
+
     def sample(self, env_ids, terrain):
         """每次独立采样姿态和 Bernoulli 动静态标记，只更新本次 reset 的行。"""
         count = len(env_ids)
-        pose_ids = torch.randint(len(self.pose_pool), (count,), device=self.device)
+        pose_ids = self.available_pose_ids[torch.randint(len(self.available_pose_ids), (count,), device=self.device)]
         dynamic = torch.rand(count, device=self.device) < self.dynamic_probability
         qpos = self.templates[pose_ids].clone()
         pos, rpy = qpos[:, :3].clone(), self.rpy[pose_ids].clone()
@@ -108,8 +115,9 @@ class RecoveryResetSampler:
         pose_ids = self.pose_ids[mask]
         dynamic = self.is_dynamic[mask]
         groups = self.group_ids[pose_ids]
+        difficulties = self.difficulties[pose_ids]
         success, duration = success[mask], duration[mask]
-        metrics = {"dynamic_fraction": dynamic.float()}
+        metrics = {"dynamic_fraction": dynamic.float(), "difficulty": difficulties.float()}
 
         def add(prefix, selected):
             if selected.any():
@@ -122,5 +130,7 @@ class RecoveryResetSampler:
             for index, group in enumerate(self.group_names):
                 add(f"{mode}/{group}", selected & (groups == index))
         for index in pose_ids.unique().tolist():
-            add(f"pose/{index:04d}", pose_ids == index)
+            add(f"pose/{self.pose_names[index]}", pose_ids == index)
+        for difficulty in difficulties.unique().tolist():
+            add(f"difficulty/{difficulty}", difficulties == difficulty)
         return metrics

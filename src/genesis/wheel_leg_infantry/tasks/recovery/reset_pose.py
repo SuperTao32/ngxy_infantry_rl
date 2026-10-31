@@ -44,10 +44,14 @@ def lateral_axis_vertical_angle_deg(pose):
     return math.degrees(math.acos(min(1.0, abs(world_up_in_body(pose)[1]))))
 
 
-def load_reset_pose_pool(sources, side_lying_angle_deg=SIDE_LYING_ANGLE_DEG):
+def load_reset_pose_pool(sources, side_lying_angle_deg=SIDE_LYING_ANGLE_DEG, *, difficulties=None):
     """展开 JSON/采集目录，过滤侧躺；返回可直接存档、不依赖文件的快照池。"""
     if isinstance(side_lying_angle_deg, bool) or not math.isfinite(side_lying_angle_deg) or not 0 < side_lying_angle_deg < 90:
         raise ValueError("side_lying_angle_deg must be between 0 and 90 (exclusive)")
+    difficulties = dict(difficulties or {})
+    for name, difficulty in difficulties.items():
+        if not isinstance(name, str) or type(difficulty) is not int or difficulty < 0:
+            raise ValueError("Reset pose difficulties must map filenames to nonnegative integers")
     pool, seen = [], set()
     for source in sources:
         path = Path(source).expanduser()
@@ -76,10 +80,35 @@ def load_reset_pose_pool(sources, side_lying_angle_deg=SIDE_LYING_ANGLE_DEG):
                 group = "level"
             else:
                 group = "tilted"
-            pool.append(dict(source=label, pose=pose, group=group))
+            difficulty = difficulties.get(Path(candidate).name, 0)
+            pool.append(dict(source=label, pose=pose, group=group, difficulty=difficulty))
     if not pool:
         raise ValueError("Recovery reset pose pool is empty after filtering side-lying poses")
     return pool
+
+
+def resolve_reset_selection(config):
+    """校验课程筛选，返回完整池中的索引；旧存档未标难度的姿态按 0 级处理。"""
+    pool = config["pose_pool"]
+    if not pool:
+        raise ValueError("recovery_reset.pose_pool must contain at least one pose")
+    difficulties = [entry.get("difficulty", 0) for entry in pool]
+    if any(type(value) is not int or value < 0 for value in difficulties):
+        raise ValueError("Recovery pose difficulty must be a nonnegative integer")
+    bounds = config.get("difficulty_range")
+    if bounds is not None:
+        if (not isinstance(bounds, (list, tuple)) or len(bounds) != 2
+                or any(type(value) is not int or value < 0 for value in bounds) or bounds[0] > bounds[1]):
+            raise ValueError("recovery_reset.difficulty_range must be [min, max] nonnegative integers or None")
+    indices = [index for index, value in enumerate(difficulties) if bounds is None or bounds[0] <= value <= bounds[1]]
+    if not indices:
+        raise ValueError(
+            f"recovery_reset.difficulty_range={bounds} selects no poses; available difficulties: {sorted(set(difficulties))}"
+        )
+    probability = config["dynamic_probability"]
+    if isinstance(probability, bool) or not isinstance(probability, (int, float)) or not math.isfinite(probability) or not 0 <= probability <= 1:
+        raise ValueError("recovery_reset.dynamic_probability must be in [0, 1]")
+    return indices, probability
 
 
 def get_reset_pose_cfg(reset_pose):

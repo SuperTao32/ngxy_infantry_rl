@@ -1,13 +1,35 @@
 """完整快照复位、动静态恢复及起身状态；仿真与动作执行由统一环境负责。"""
 
+from copy import deepcopy
+
 from ..base import Task
 from .rewards import RecoveryRewards
 from .buffers import RecoveryBuffers
 from .reset_sampling import RecoveryResetSampler
+from .reset_pose import resolve_reset_selection
 
 
 class RecoveryTask(RecoveryRewards, Task):
     EPISODE_METRICS = ("height_gate", "attitude_gate", "base_contact")
+
+    def _register_task_curriculum(self):
+        self.curriculum.register_target("recovery_reset", self._apply_recovery_reset)
+
+    def _apply_recovery_reset(self, values):
+        unknown = set(values) - {"difficulty_range", "dynamic_probability"}
+        if unknown:
+            raise ValueError(f"Unknown recovery_reset curriculum options: {sorted(unknown)}")
+        config = self.env_cfg.get("recovery_reset")
+        if config is None:
+            raise ValueError("recovery_reset curriculum requires a reset pose pool")
+        updated = {**config, **deepcopy(values)}
+        sampler = self.__dict__.get("reset_sampler")
+        if sampler is None:
+            # 课程的首阶段早于 bind_buffers，先校验并存储筛选配置。
+            resolve_reset_selection(updated)
+        else:
+            sampler.apply_selection(updated)
+        self.env_cfg["recovery_reset"] = updated
 
     def _initialize_task_buffers(self):
         self.stand_up = RecoveryBuffers(self.env_cfg["stand_up"], self.num_envs, self.dt, self.device)
@@ -19,7 +41,9 @@ class RecoveryTask(RecoveryRewards, Task):
             else None
         )
         if self.reset_sampler is not None:
-            print(f"[recovery] poses={len(self.reset_sampler.pose_pool)}, dynamic_probability={self.reset_sampler.dynamic_probability:g}")
+            sampler = self.reset_sampler
+            print(f"[recovery] poses={len(sampler.available_pose_ids)}/{len(sampler.pose_pool)}, "
+                  f"difficulty_range={reset_cfg.get('difficulty_range')}, dynamic_probability={sampler.dynamic_probability:g}")
 
     def _sample_base_reset_state(self, env_ids):
         if self.reset_sampler is None:

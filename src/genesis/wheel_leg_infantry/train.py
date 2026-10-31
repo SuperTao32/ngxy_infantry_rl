@@ -26,7 +26,7 @@ def main(argv=None):
     parser.add_argument("--tasks", nargs="+", choices=TASK_NAMES)
     parser.add_argument("--task-weights", nargs="+", metavar="NAME=WEIGHT", help="initial task weights; zero pauses a task")
     parser.add_argument(
-        "--recovery-poses", nargs="+", metavar="PATH", help="recovery JSON files or collection directories; default: auto-discover reset_pos"
+        "--recovery-poses", nargs="+", metavar="PATH", help="recovery JSON files or collection directories; default: configured pose list"
     )
     parser.add_argument("--recovery-dynamic-probability", type=float, help="dynamic recovery reset probability in [0, 1] (new runs default: 0.2)")
     parser.add_argument("--seed", type=int, default=32)

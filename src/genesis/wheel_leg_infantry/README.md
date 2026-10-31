@@ -71,7 +71,7 @@ uv run --locked python -m src.genesis.wheel_leg_infantry.eval \
 
 R 的姿态池由 `tasks/recovery/config.py::get_recovery_reset_cfgs()` 提供，默认通过已有的 `get_reset_pose_cfg()` 解析 `reset_pos.json`。新增姿态时将快照路径追加到 `RECOVERY_RESET_POSES` 即可，也可使用 `"default"` 站立姿态。eval 每次按 R 等概率随机选择一个配置（可能重复，受 `--seed` 控制），共用完整环境 reset 路径并适配当前地形高度；Backspace 仍使用正常站立出生配置。仿真不直接读取姿态文件；也可向 `InteractiveEnv` 注入其他来源的数值姿态配置列表。
 
-recovery 训练使用独立的数值姿态池：默认自动发现 `tasks/recovery/reset_pos/**/pose_*.json` 并保留原始快照，过滤侧躺终态，每个环境每次 reset 独立采样，80% 静态起身、20% 低难度动态释放。`train --recovery-poses PATH ...` 可直接指定采集目录/JSON，`--recovery-dynamic-probability 0` 可单测静态。采样参数、分组成功率与续训行为见 [Recovery 说明](tasks/recovery/README.md)。
+recovery 训练使用独立的数值姿态池：默认只加载 `tasks/recovery/config.py::RESET_POSE_DIFFICULTIES` 中列出的快照，不扫描采集目录。课程可按难度筛选，过滤侧躺终态，每个环境每次 reset 独立采样，默认 80% 静态起身、20% 低难度动态释放。`train --recovery-poses PATH ...` 可显式指定采集目录/JSON，`--recovery-dynamic-probability 0` 可单测静态。采样参数、分组成功率与续训行为见 [Recovery 说明](tasks/recovery/README.md)。
 
 命令范围取 checkpoint 对应的 locomotion 课程；速度区间包含零，支持从静止逐步调速。优先使用 checkpoint 保存的跳跃/起身参数，缺失时使用当前默认配置；动作效果取决于模型实际训练能力。jump 训练先在空旷区域实际加速，达速并站稳后移动至指定起跳位置，再输入跳跃信息；交互中的 J 则在当前位置直接触发。
 
