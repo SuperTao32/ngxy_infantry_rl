@@ -5,7 +5,7 @@ import math
 from pathlib import Path
 
 BASE_NAMES = tuple(f"floating_base_{name}" for name in ("x", "y", "z", "qw", "qx", "qy", "qz"))
-SIDE_LYING_ANGLE_DEG = 20.0
+SIDE_LYING_ANGLE_DEG = 10.0
 POSTURE_GROUPS = ("level", "front_down", "rear_down", "inverted", "tilted")
 
 

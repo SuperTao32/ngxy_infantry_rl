@@ -26,6 +26,27 @@ class RecoveryRewards:
 
     def _reward_wheel_airborne(self):
         penalty = super()._reward_wheel_airborne()
+        return self._gate_wheel_ground_penalty(penalty)
+
+    def _reward_wheel_ground_distance(self):
+        """翻倒时惩罚两轮轮底的离地距离之和，单位为米。"""
+        wheels = self.robot.get_links_pos(self.wheel_links_idx)
+        ground = self.terrain.height_at(wheels[..., :2].reshape(-1, 2)).reshape(wheels.shape[:2])
+        clearance = (wheels[..., 2] - self.wheel_radius - ground).clamp_min(0.0)
+        penalty = (1.0 - self._near_upright()) * clearance.sum(dim=1)
+        return self._gate_wheel_ground_penalty(penalty)
+
+    def _reward_stand_up_wheel_push(self):
+        """翻倒时奖励双轮向地面蹬压产生的向上法向支撑力。"""
+        reference = float(self.reward_cfg.get("stand_up_wheel_push_force_reference_n", 200.0))
+        if not math.isfinite(reference) or reference <= 0.0:
+            raise ValueError("stand_up_wheel_push_force_reference_n must be finite and positive")
+        # 法向力与重力都在机身坐标系；投影到反重力方向即世界竖直向上。
+        upward_force = -(self.wheel_normal_force * self.projected_gravity[:, None, :]).sum(dim=-1)
+        support = upward_force.clamp_min(0.0).sum(dim=1)
+        return (1.0 - self._near_upright()) * (support / reference).clamp(0.0, 1.0)
+
+    def _gate_wheel_ground_penalty(self, penalty):
         sampler = self.__dict__.get("reset_sampler")
         if sampler is not None:
             # 动态释放到首次落地期间不惩罚必然的离地；策略始终保持控制。

@@ -33,11 +33,11 @@ def main(argv=None):
     parser.add_argument("-v", "--vis", action="store_true")
     parser.add_argument("--cpu", action="store_true")
     parser.add_argument("--log-root", default="logs")
-    add_resume_arguments(parser)
     parser.add_argument(
         "--load-weight", type=Path, metavar="CHECKPOINT",
         help="load actor/critic weights into a new run using current config; reset optimizer, iteration and curricula",
     )
+    add_resume_arguments(parser)
     add_randomization_arguments(parser, evaluation=False)
     args = parser.parse_args(argv)
     if args.num_envs < 1 or args.max_iterations < 1:

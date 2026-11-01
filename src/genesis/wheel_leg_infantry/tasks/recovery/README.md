@@ -27,6 +27,10 @@ RECOVERY_RESET_DIFFICULTY_RANGE = [0, 0]  # 只测 0 级；None 使用清单全�
 
 Recovery 的 `base_height` 使用姿态混合惩罚：`active * (height-target)**2 + (1-active) * clamp(H_REF-height, min=0) / 15`。`active` 由 `-projected_gravity[:, 2]` 计算，倾角 ≤30° 为 1，≥80°（包括翻面）为 0，中间按余弦线性过渡。height 使用相对当地地面的机身高度，target 使用当前高度命令；`stand_up_height_reference_m` 是 H_REF，默认 0.22 m，旧存档未配置时取 `stand_up.height`。权重仍为 `reward_scales.base_height=-10.0`，按控制步长缩放。
 
+`wheel_ground_distance` 仅在翻倒时惩罚两个轮子轮底的离地距离之和：`(1-active) * sum(clamp(wheel_center_z - wheel_radius - ground_z, min=0))`，单位为米。`active` 与 `base_height` 共用姿态门：倾角 ≤30° 不惩罚，≥80°（包括翻面）全额惩罚，中间按姿态余弦渐变。地面高度分别在两轮的世界 XY 位置查询，接地或轻微穿地时该轮贡献为 0。默认权重 `reward_scales.wheel_ground_distance=-50.0`，按控制步长缩放，日志为 `recovery/rewards/wheel_ground_distance`。`wheel_airborne` 仍按离地轮数计算，不受此姿态门影响；动态释放到首次轮子或机身接地前，两项惩罚均暂停。旧存档若没有此权重，普通续训不会自动启用；使用 `--resume-config current` 可采用当前配置。
+
+`stand_up_wheel_push` 在翻倒姿态下奖励轮子蹬地：`(1-active) * clamp(sum(max(F_up, 0)) / F_REF, 0, 1)`。`active` 与 `base_height` 共用姿态门，倾角 ≤30° 时此奖励为 0，≥80°（包括翻面）时全开，中间平滑过渡。`F_up = -dot(wheel_normal_force, projected_gravity)` 从机身坐标系的法向力取出世界竖直向上的支撑分量，再对两轮求和；离地、水平法向力及向下分量不贡献奖励。`stand_up_wheel_push_force_reference_n` 默认 200 N，达到后饱和；`reward_scales.stand_up_wheel_push` 默认 5.0，按控制步长缩放。日志为 `recovery/rewards/stand_up_wheel_push`。动态释放空中无接触力时为 0，触地后立即按实际支撑力计算。普通续训沿用旧存档权重，使用 `--resume-config current` 可启用此项。
+
 `stand_up_leg_angle` 是双腿朝下的连续奖励。`stand_up_leg_angle_tolerance_deg` 默认 10°，双腿绝对摆角均不超过该值时原始奖励饱和为 1；超出部分 `excess = clamp(abs(leg_angle) - radians(tolerance_deg), min=0)` 按 `exp(-mean(excess**2) / stand_up_leg_angle_sigma)` 衰减。腿角单位为弧度，0 表示沿机身 -Z，左右腿误差不会抵消；机身倾斜由独立的 `base_balance` 项约束。sigma 越小，容差外衰减越快。`reward_scales.stand_up_leg_angle` 默认 5.0，按控制步长缩放，并记录到 `recovery/rewards/stand_up_leg_angle`。
 
 `stand_up_speed` 在成功当拍额外奖励起身速度：`clamp(1 - elapsed_s / episode_length_s, 0, 1)`，只发放一次，不乘控制步长。计时从 reset 开始，包含动态释放和连续站稳确认；未成功或成功当拍发生物理失败时为 0。权重 `reward_scales.stand_up_speed` 默认 50，日志为 `recovery/rewards/stand_up_speed`。默认 5 s 回合内，1/3/5 s 成功分别获得额外 40/20/0 分，另有基础 `stand_up_success` 奖励 50 分。

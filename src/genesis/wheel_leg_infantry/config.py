@@ -237,13 +237,18 @@ def get_curriculum_cfg() -> dict:
             },
             {
                 "name": "recovery",
-                "start_iteration": 3000,
+                "start_iteration": 500,
                 "targets": {
                     # 只填写需要改变的权重；空字典继承上一阶段的分配。
-                    "task_weights": {},
-                    "domain_rand": {"strength": 0.4},
-                    "sensor_noise": {"strength": 0.4},
-                    "wheel_slip": {"strength": 0.4},
+                    "task_weights": {
+                        "locomotion": 3.0,
+                        "recovery": 1.0,
+                        "jump": 2.0,
+                        "multi_terrain": 0.0,
+                    },
+                    "domain_rand": {"strength": 0.0},
+                    "sensor_noise": {"strength": 0.0},
+                    "wheel_slip": {"strength": 0.0},
                 },
             },
             {

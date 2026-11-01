@@ -113,10 +113,13 @@ def get_cfgs():
         "stand_up_height_reference_m": 0.22,  # 倾倒时高度惩罚的 H_REF。
         "stand_up_leg_angle_tolerance_deg": 10.0,  # 双腿角度均在 ±10° 内时满奖励。
         "stand_up_leg_angle_sigma": 0.5,
+        "stand_up_wheel_push_force_reference_n": 250.0,  # 双轮向上法向支撑力之和达到此值时饱和。
         "reward_scales": {
             "stand_up_success": 50.0,
             "stand_up_speed": 50.0,
             "stand_up_leg_angle": 1.0,
+            "stand_up_wheel_push": 2.0,
+            "wheel_ground_distance": -50.0,
             "tracking_lin_vel": -2.0,
             "tracking_ang_vel": -3.0,
             "leg_symmetry": -5.0,
@@ -167,10 +170,10 @@ def _curriculum_cfg() -> dict:
             },
             {
                 "name": "difficulty_1",
-                "start_iteration": 500,
+                "start_iteration": 100,
                 "targets": {
                     # None 使用全部难度；[0, 1] 选 0/1 级，[2, 2] 只选 2 级。
-                    "recovery_reset": {"difficulty_range": [0, 1]},
+                    "recovery_reset": {"difficulty_range": [0, 0]},
                     "command_ranges": {
                         "standing_probability": 1.0,
                         "lin_vel_range": [0.0, 0.0],
@@ -179,19 +182,19 @@ def _curriculum_cfg() -> dict:
                     },
                 },
             },
-            {
-                "name": "difficulty_2",
-                "start_iteration": 1000,
-                "targets": {
-                    # None 使用全部难度；[0, 1] 选 0/1 级，[2, 2] 只选 2 级。
-                    "recovery_reset": {"difficulty_range": [0, 2]},
-                    "command_ranges": {
-                        "standing_probability": 1.0,
-                        "lin_vel_range": [0.0, 0.0],
-                        "ang_vel_range": [0.0, 0.0],
-                        "base_height_range": [0.22, 0.22],
-                    },
-                },
-            },
+            # {
+            #     "name": "difficulty_2",
+            #     "start_iteration": 1000,
+            #     "targets": {
+            #         # None 使用全部难度；[0, 1] 选 0/1 级，[2, 2] 只选 2 级。
+            #         "recovery_reset": {"difficulty_range": [0, 2]},
+            #         "command_ranges": {
+            #             "standing_probability": 1.0,
+            #             "lin_vel_range": [0.0, 0.0],
+            #             "ang_vel_range": [0.0, 0.0],
+            #             "base_height_range": [0.22, 0.22],
+            #         },
+            #     },
+            # },
         ],
     }
