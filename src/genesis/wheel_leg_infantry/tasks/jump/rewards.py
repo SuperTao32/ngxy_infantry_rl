@@ -166,4 +166,6 @@ class JumpRewards:
         return self.task_success_event
 
     def _reward_task_failure(self):
-        return self.task_failure_event
+        """失败当拍按未完成的高度比例惩罚，达到目标后此项为零。"""
+        shortfall = torch.clamp(1.0 - self.jump_base_height / self.base_height_target, 0.0, 1.0)
+        return self.task_failure_event * shortfall

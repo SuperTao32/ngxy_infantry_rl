@@ -56,16 +56,16 @@ def _get_termination_cfg():
     """终止条件唯一调参入口；二次腾空和机身触地只惩罚，回合超时由阶段总时长决定。"""
     return {
         # jump 任务失败阈值：任意一拍机身倾角超过此值即锁存无效。
-        "jump_max_tilt_deg": 20.0,
+        "jump_max_tilt_deg": 10.0,
         "jump_termination": {
             # 过倾、撞台阶立面、错误落台中的任一项，立即提前终止。
             "on_invalid": True,
         },
-        # 默认 jump 的 20° 过倾会先通过 on_invalid 立即终止。
-        "termination_if_roll_greater_than": 90.0,
-        "termination_if_pitch_greater_than": 90.0,
-        "tilt_termination_duration_s": 3.0,
-        "base_contact_termination_duration_s": 5.0,
+        # 过倾会先通过 on_invalid 立即终止。
+        "termination_if_roll_greater_than": 10.0,
+        "termination_if_pitch_greater_than": 10.0,
+        "tilt_termination_duration_s": 1.0,
+        "base_contact_termination_duration_s": 0.2,
     }
 
 
@@ -141,14 +141,14 @@ def _get_reward_cfg():
             # 一次性奖励仍乘 dt：默认 0.01 s 下，合格起跳 +1、达标峰值累计 +3。
             "takeoff_event": 100.0,
             "flight_height_shortfall": -300.0,
-            "flight_peak_height": 300.0,
+            "flight_peak_height": 3000.0,
             # 持续项按每秒计，避免起跳速度和超高收益压过落稳成功。
-            "takeoff_upward_velocity": 10.0,
-            "takeoff_vertical_velocity": 100.0,
+            "takeoff_upward_velocity": 50.0,
+            "takeoff_vertical_velocity": 1000.0,
             # 腾空
             "flight_airtime": 1.0,
             "flight_balance": 2.0,
-            "flight_height_progress": 5.0,
+            "flight_height_progress": 50.0,
             "flight_height_tracking": 0.0,
             "flight_wheel_clearance": 10.0,
             # 落地
@@ -159,7 +159,7 @@ def _get_reward_cfg():
             "base_to_wheel_bottom_distance_tracking": 5.0,
             # 任务结果
             "task_success": 1500.0,  # dt=0.01 时单次 +15，作为主要正向收益。
-            "task_failure": -1000.0,  # dt=0.01 时单次 -10；异常终止另有 death。
+            "task_failure": -100.0,  
         },
     }
 
@@ -191,9 +191,8 @@ def _get_curriculum_cfg():
                         "base_contact": -15.0,
                         "landing_airborne": -15.0,
                         "base_balance": -10.0,
-                        "flight_peak_height": 200.0,
-                        "takeoff_upward_velocity": 5.0,
-                        "flight_height_progress": 3.0,
+                        "flight_peak_height": 2000.0,
+                        "flight_height_progress": 30.0,
                         "soft_landing": 150.0,
                         "landing_stability": 8.0,
                         "leg_extension_at_limit": -10.0,
@@ -215,10 +214,10 @@ def _get_curriculum_cfg():
                         "wheel_action_rate": -1.5,
                         # 按 [JUMP_20, JUMP_40] 指定权重，保留各模式的跳高信号。
                         "flight_airtime": [0.5, 1.0],
-                        "flight_peak_height": [100.0, 200.0],
-                        "takeoff_vertical_velocity": [50.0, 100.0],
-                        "takeoff_upward_velocity": [0.0, 3.0],
-                        "flight_height_progress": [0.0, 2.0],
+                        "flight_peak_height": [500.0, 2000.0],
+                        "takeoff_vertical_velocity": [200.0, 1000.0],
+                        "takeoff_upward_velocity": [0.0, 30.0],
+                        "flight_height_progress": [0.0, 20.0],
                         "flight_height_tracking": [2.0, 0.0],
                         "flight_wheel_clearance": [5.0, 10.0],
                     },
