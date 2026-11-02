@@ -9,9 +9,9 @@ import torch
 from ..env import WheelLegInfantryEnv
 from ..tasks.manager import TaskManager
 from ..tasks.recovery.buffers import RecoveryBuffers
-from ..tasks.jump.config import MODE_NAMES
-from ..tasks.jump.height_reference import sample_height_reference, validate_height_reference
-from ..tasks.jump.phase import phase_encoding, validate_phase_durations
+from ..tasks.jump.config import MODE_NAMES, validate_configs as validate_jump_configs
+from ..tasks.jump.height_reference import resolve_height_reference, resolve_retract_duration, sample_height_reference
+from ..tasks.jump.phase import PHASE_ENCODING_DIM, phase_encoding, validate_phase_durations
 from ..utils.reset import ensure_reset_clearance
 
 
@@ -60,15 +60,17 @@ class InteractiveEnv(WheelLegInfantryEnv):
         self.recovery = RecoveryBuffers(recovery_cfg, self.num_envs, self.dt, self.device)
         self.recovery.active.zero_()
         jump_cfg = self.control_configs["jump"]["env_cfg"]
+        validate_jump_configs(jump_cfg, self.control_configs["jump"].get("curriculum_cfg"))
         durations = validate_phase_durations(jump_cfg["jump_phase_durations_s"])
         self.jump_cycle_s = sum(durations)
         self.jump_horizon = math.ceil(self.jump_cycle_s / self.dt)
-        self.height_references = []
-        for points in jump_cfg["jump_modes"]["height_references"]:
-            times, heights = validate_height_reference(points, self.jump_cycle_s)
-            self.height_references.append((self.commands.new_tensor(times), self.commands.new_tensor(heights)))
-        self.jump_mode_one_hot = torch.zeros((self.num_envs, 3), device=self.device, dtype=gs.tc_float)
-        self.jump_phase = torch.zeros((self.num_envs, 6), device=self.device, dtype=gs.tc_float)
+        self.jump_phase_duration_s = sum(durations[:2])
+        self.jump_phase_horizon = math.ceil(self.jump_phase_duration_s / self.dt - 1e-9)
+        self.jump_takeoff_s, self.jump_flight_s = durations[:2]
+        self.height_reference_min_m, self.height_reference_max_m = resolve_height_reference(jump_cfg)
+        self.retract_duration_s = resolve_retract_duration(jump_cfg)
+        self.jump_mode_one_hot = torch.zeros((self.num_envs, len(MODE_NAMES)), device=self.device, dtype=gs.tc_float)
+        self.jump_phase = torch.zeros((self.num_envs, PHASE_ENCODING_DIM), device=self.device, dtype=gs.tc_float)
 
     def set_drive_command(self, velocity, yaw_rate, height):
         self.drive_command = (float(velocity), float(yaw_rate), float(height))
@@ -142,12 +144,15 @@ class InteractiveEnv(WheelLegInfantryEnv):
             self.recovery.enforce_commands(self.commands)
         elif self.control_mode == "jump":
             elapsed = self.commands.new_full((self.num_envs,), self.jump_steps * self.dt)
-            times, heights = self.height_references[self.jump_mode]
             self.commands[:, 0] = self.jump_velocity
             self.commands[:, 1] = 0.0
-            self.commands[:, 2] = sample_height_reference(elapsed, times, heights)
-            self.jump_mode_one_hot[:, self.jump_mode] = 1.0
-            self.jump_phase.copy_(phase_encoding(elapsed, self.jump_cycle_s))
+            self.commands[:, 2] = sample_height_reference(
+                elapsed, takeoff_s=self.jump_takeoff_s, retract_duration_s=self.retract_duration_s,
+                min_distance_m=self.height_reference_min_m, max_distance_m=self.height_reference_max_m,
+            )
+            if self.jump_steps < self.jump_phase_horizon:
+                self.jump_mode_one_hot[:, self.jump_mode] = 1.0
+                self.jump_phase.copy_(phase_encoding(elapsed, self.jump_phase_duration_s))
 
     def _resample_commands(self, envs_mask):
         self._write_commands()

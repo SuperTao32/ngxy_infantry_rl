@@ -168,20 +168,20 @@ def _curriculum_cfg() -> dict:
                     },
                 },
             },
-            {
-                "name": "difficulty_1",
-                "start_iteration": 100,
-                "targets": {
-                    # None 使用全部难度；[0, 1] 选 0/1 级，[2, 2] 只选 2 级。
-                    "recovery_reset": {"difficulty_range": [0, 0]},
-                    "command_ranges": {
-                        "standing_probability": 1.0,
-                        "lin_vel_range": [0.0, 0.0],
-                        "ang_vel_range": [0.0, 0.0],
-                        "base_height_range": [0.22, 0.22],
-                    },
-                },
-            },
+            # {
+            #     "name": "difficulty_1",
+            #     "start_iteration": 100,
+            #     "targets": {
+            #         # None 使用全部难度；[0, 1] 选 0/1 级，[2, 2] 只选 2 级。
+            #         "recovery_reset": {"difficulty_range": [0, 0]},
+            #         "command_ranges": {
+            #             "standing_probability": 1.0,
+            #             "lin_vel_range": [0.0, 0.0],
+            #             "ang_vel_range": [0.0, 0.0],
+            #             "base_height_range": [0.22, 0.22],
+            #         },
+            #     },
+            # },
             # {
             #     "name": "difficulty_2",
             #     "start_iteration": 1000,

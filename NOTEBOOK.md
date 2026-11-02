@@ -13,8 +13,9 @@
 
 # Infantry 单策略多任务
 
-- 配置与结构：`experiments/genesis/wheel_leg_infantry/README.md`。
-- 统一训练：`uv run --locked python -m experiments.genesis.wheel_leg_infantry.train -e infantry -B 8192 --max-iterations 10000`。
-- 统一评估：`uv run --locked python -m experiments.genesis.wheel_leg_infantry.eval -e infantry --tasks jump -B 64`。
-- 续训：`uv run --locked python -m experiments.genesis.wheel_leg_infantry.train -e infantry --resume --max-iterations 20000`。
+- 配置与结构：`src/genesis/wheel_leg_infantry/README.md`。
+- 统一训练：`uv run --locked python -m src.genesis.wheel_leg_infantry.train -e infantry -B 8192 --max-iterations 10000`。
+- 双 GPU 训练（每卡 4096，总计 8192 环境）：`uv run --locked python -m src.genesis.wheel_leg_infantry.train -e infantry --num-gpus 2 -B 4096 --max-iterations 10000`。
+- 统一评估：`uv run --locked python -m src.genesis.wheel_leg_infantry.eval -e infantry --terrain plane`。
+- 续训：`uv run --locked python -m src.genesis.wheel_leg_infantry.train -e infantry --resume --max-iterations 20000`；双卡追加 `--num-gpus 2 -B 4096`。
 - 四个任务共用一个环境和一个 GRU + MLP policy；任务配置分别位于 `tasks/locomotion`、`tasks/recovery`、`tasks/jump`、`tasks/multi_terrain`。

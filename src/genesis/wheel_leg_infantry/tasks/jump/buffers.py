@@ -5,9 +5,10 @@ import genesis as gs
 import torch
 import torch.nn.functional as F
 
-from .config import PHASE_NAMES
-from .geometry import active_step_heights
-from .phase import phase_encoding
+from .config import MODE_NAMES, PHASE_NAMES
+from .geometry import terrain_tile_heights
+from .height_reference import resolve_height_reference, resolve_retract_duration
+from .phase import PHASE_ENCODING_DIM, phase_encoding
 from .reward_state import JumpRewardState
 
 
@@ -34,14 +35,12 @@ class JumpBuffers:
             dtype=torch.long,
             device=self.device,
         )
-        self.mode_height_references = [
-            tuple(torch.tensor(values, dtype=gs.tc_float, device=self.device) for values in zip(*points))
-            for points in self.task_cfg["height_references"]
-        ]
+        self.height_reference_min_m, self.height_reference_max_m = resolve_height_reference(self.env_cfg)
+        self.retract_duration_s = resolve_retract_duration(self.env_cfg)
 
         # 本轮任务：reset 时从地形通道确定；jump 期间冻结，不因提前终止而重新采样。
         self.jump_mode = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
-        self.jump_mode_one_hot = torch.zeros((self.num_envs, 3), dtype=gs.tc_float, device=self.device)
+        self.jump_mode_one_hot = torch.zeros((self.num_envs, len(MODE_NAMES)), dtype=gs.tc_float, device=self.device)
         self.base_height_target = torch.zeros(self.num_envs, dtype=gs.tc_float, device=self.device)
         self.landing_surface_height = torch.zeros_like(self.base_height_target)
         self.trigger_distance_m = torch.zeros_like(self.base_height_target)  # 开始 jump 时记录的起跳距离。
@@ -64,7 +63,7 @@ class JumpBuffers:
         # has_taken_off 为物理离地，不等于奖励要求的“连续腾空达到最短时间”。
         self.has_taken_off = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         self.has_landed = torch.zeros_like(self.has_taken_off)
-        self.phase_features = torch.zeros((self.num_envs, 6), dtype=gs.tc_float, device=self.device)  # actor 时间编码。
+        self.phase_features = torch.zeros((self.num_envs, PHASE_ENCODING_DIM), dtype=gs.tc_float, device=self.device)  # actor 时间编码。
 
         # 本拍奖励门控：每步重新计算，条件消失即归零，不记录历史。
         self.takeoff_gate = torch.zeros_like(self.base_height_target)  # 计划起跳期且尚有安全轮支撑。
@@ -106,18 +105,18 @@ class JumpBuffers:
         self.jump_reward_state.reset(env_idx)
         for buffer in self._jump_episode_buffers():
             buffer[selected] = 0
-        # t=0 的六维编码并非全零；广播到选中的行，避免为局部 reset 同步 GPU 计数。
+        # t=0 的四维编码为 [0, 1, 0, 1]；仅初始化选中的环境。
         self.phase_features[selected] = phase_encoding(
-            torch.zeros(1, dtype=gs.tc_float, device=self.device), self.phase_cycle_s
+            torch.zeros(1, dtype=gs.tc_float, device=self.device), self.phase_input_duration_s
         )
 
         # 本轮模式由地形通道给定；只在这里刷新配置派生量。
-        self.jump_mode[selected] = self.terrain_tile_index[selected]
-        self.jump_mode_one_hot[selected] = F.one_hot(self.jump_mode[selected], 3).to(gs.tc_float)
+        self.jump_mode[selected] = self.terrain_tile_index[selected] // 2
+        self.jump_mode_one_hot[selected] = F.one_hot(self.jump_mode[selected], len(MODE_NAMES)).to(gs.tc_float)
         targets = self.commands.new_tensor(self.task_cfg["clearance_targets_m"])
-        heights = self.commands.new_tensor(active_step_heights(self.task_cfg))
+        heights = self.commands.new_tensor(terrain_tile_heights(self.task_cfg))
         self.base_height_target[selected] = targets[self.jump_mode[selected]]
-        self.landing_surface_height[selected] = heights[self.jump_mode[selected]]
+        self.landing_surface_height[selected] = heights[self.terrain_tile_index[selected]]
 
     def _jump_episode_buffers(self):
         """需要在回合边界清零的逐环境状态；全量/局部 reset 共用这一份清单。"""

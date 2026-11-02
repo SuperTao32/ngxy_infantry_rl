@@ -86,9 +86,8 @@ class KeyboardCommand:
             self._action_key("request_recovery", Key.R, "recovery"),
             self._action_key("request_drive", Key.L, "drive"),
             self._action_key("reset_robot", Key.BACKSPACE, "reset"),
-            self._keybind("jump_mode_flat", Key._1, self._select_jump_mode, 0),
-            self._keybind("jump_mode_20cm", Key._2, self._select_jump_mode, 1),
-            self._keybind("jump_mode_40cm", Key._3, self._select_jump_mode, 2),
+            self._keybind("jump_mode_20cm", Key._1, self._select_jump_mode, 0),
+            self._keybind("jump_mode_40cm", Key._2, self._select_jump_mode, 1),
             # Replace native viewer actions on these keys (e.g. R=record).
             overwrite=True,
         )
@@ -224,7 +223,7 @@ class KeyboardCommand:
             f"joint -Kd*qdot {format_tensor(pd['joint_kd_damping'], precision=2)}",
             "keys  Up/Down=vx  Left/Right=wz  PgUp/PgDn=height  Space=stop  Enter=focus",
             f"control  {env.control_mode.upper()} | J=jump ({MODE_NAMES[self.selected_jump_mode]})  "
-            "1/2/3=select jump  R=random reset/recover  L=drive  Backspace=upright reset",
+            "1/2=JUMP_20/JUMP_40  R=random reset/recover  L=drive  Backspace=upright reset",
         )
         self.diagnostics_overlay.update(text, colors={2: slip_color})
 

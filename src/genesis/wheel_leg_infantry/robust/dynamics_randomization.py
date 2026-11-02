@@ -169,6 +169,7 @@ class DynamicsRandomizationManager:
         reference = motor_params["joint_kp"]
         self.env_ids = torch.arange(num_envs, device=reference.device)
         self.episode_strength = reference.new_zeros(num_envs)
+        self._parameters_initialized = torch.zeros(num_envs, dtype=torch.bool, device=reference.device)
         self.friction_ratio = torch.ones((num_envs, 1), device=reference.device, dtype=reference.dtype)
         self.added_mass = torch.zeros_like(self.friction_ratio)
         self.com_displacement = torch.zeros((num_envs, 1, 3), device=reference.device, dtype=reference.dtype)
@@ -240,11 +241,22 @@ class DynamicsRandomizationManager:
         env_ids = self.env_ids if env_ids is None else env_ids
         if env_ids.numel() == 0:
             return
+        parameter_ids = env_ids
+        if not self.config["enabled"] or self.strength == 0:
+            # Parameter setters are expensive with many terrain entities. Once
+            # nominal parameters are applied, another nominal episode need not
+            # rewrite them. A previously randomized episode must still restore
+            # its nominal values when the curriculum strength returns to zero.
+            needs_write = ~self._parameters_initialized[env_ids] | (self.episode_strength[env_ids] != 0)
+            parameter_ids = env_ids[needs_write]
         self.episode_strength[env_ids] = self.strength if self.config["enabled"] else 0.0
-        self._randomize_rigids(env_ids)
-        self._randomize_controls(env_ids)
-        self._randomize_gas_springs(env_ids)
-        self._randomize_passive_joints(env_ids)
+        if parameter_ids.numel():
+            self._randomize_rigids(parameter_ids)
+            self._randomize_controls(parameter_ids)
+            self._randomize_gas_springs(parameter_ids)
+            self._randomize_passive_joints(parameter_ids)
+            self._parameters_initialized[parameter_ids] = True
+        # External force timers belong to episodes even if parameters are reused.
         self.push.reset(env_ids, strength=self.strength)
 
     def before_step(self):

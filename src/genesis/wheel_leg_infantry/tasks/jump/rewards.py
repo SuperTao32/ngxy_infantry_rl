@@ -123,7 +123,7 @@ class JumpRewards:
         )
         attitude_quality = torch.exp(-tilt_error / self.reward_cfg["landing_tilt_sigma"])
         support = target_wheel_support(
-            self.wheel_center_pos, self.wheel_contact, self.jump_mode, self.task_cfg, self.wheel_radius, margin=0.0,
+            self.wheel_center_pos, self.wheel_contact, self.terrain_tile_index, self.task_cfg, self.wheel_radius, margin=0.0,
         ).any(dim=1)
         return self.jump_landing_event * impact_quality * attitude_quality * support * (self.jump_invalid < 0.5)
 

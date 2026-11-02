@@ -1,10 +1,10 @@
-"""三条并排通道：课程可移走/放回台阶，保持任务通道编码不变。"""
+"""每种跳高各有平地和台阶通道，跳高模式与地形分别采样。"""
 
 import torch
 
 from ...terrains.manager import TerrainManager
 from .config import get_approach_cfg, validate_platform_enabled
-from .geometry import active_step_heights
+from .geometry import active_step_heights, jump_lane_y
 
 
 class JumpTerrain(TerrainManager):
@@ -37,14 +37,14 @@ class JumpTerrain(TerrainManager):
     def _platform_center(self, mode):
         cfg = self.task_cfg
         height = cfg["step_heights_m"][mode]
-        enabled = cfg.get("platform_enabled", [True, True, True])[mode]
+        enabled = cfg.get("platform_enabled", [True] * len(cfg["mode_names"]))[mode]
         # 移至地下使整个箱体远离轮子；放回时恢复台面高度，不重建场景。
         center_z = height / 2 if enabled else -1.0 - height / 2
-        return (cfg["platform_length_m"] / 2, mode * cfg["lane_spacing_m"], center_z)
+        return (cfg["platform_length_m"] / 2, jump_lane_y(2 * mode + 1, cfg), center_z)
 
     def set_platform_enabled(self, values):
         validate_platform_enabled(values)
-        previous = self.task_cfg.get("platform_enabled", [True, True, True])
+        previous = self.task_cfg.get("platform_enabled", [True] * len(self.task_cfg["mode_names"]))
         self.task_cfg["platform_enabled"] = list(values)
         for mode, entity in self.platform_entities.items():
             if values[mode] != previous[mode]:
@@ -59,11 +59,15 @@ class JumpTerrain(TerrainManager):
         else:
             probabilities = torch.tensor(cfg["mode_probabilities"], dtype=self._dtype or torch.float32, device=env_ids.device)
             modes = torch.multinomial(probabilities, env_ids.numel(), replacement=True)
+        platform_probabilities = torch.tensor(cfg["platform_probabilities"], dtype=self._dtype or torch.float32, device=env_ids.device)
+        enabled = torch.tensor(cfg.get("platform_enabled", [True] * len(cfg["mode_names"])), device=env_ids.device)
+        has_platform = (torch.rand(env_ids.numel(), device=env_ids.device) < platform_probabilities[modes]) & enabled[modes]
+        tiles = 2 * modes + has_platform.long()
         centers = torch.zeros((env_ids.numel(), 2), dtype=self._dtype or torch.float32, device=env_ids.device)
         # 出生点与平台通道分开，先在没有障碍物的平地实际加速。
         centers[:, 0] = self.approach_cfg["spawn_x_m"]
         centers[:, 1] = self.approach_cfg["spawn_y_m"]
-        return centers, modes
+        return centers, tiles
 
     def height_at(self, world_xy):
         cfg = self.task_cfg
@@ -72,9 +76,12 @@ class JumpTerrain(TerrainManager):
             if top == 0:
                 continue
             inside = ((world_xy[:, 0] >= 0) & (world_xy[:, 0] <= cfg["platform_length_m"])
-                      & (torch.abs(world_xy[:, 1] - mode * cfg["lane_spacing_m"]) <= cfg["platform_width_m"] / 2))
+                      & (torch.abs(world_xy[:, 1] - jump_lane_y(2 * mode + 1, cfg)) <= cfg["platform_width_m"] / 2))
             height = torch.where(inside, top, height)
         return height
 
     def tile_type(self, tile_index):
-        return self.task_cfg["mode_names"][tile_index]
+        mode, has_platform = divmod(tile_index, 2)
+        enabled = self.task_cfg.get("platform_enabled", [True] * len(self.task_cfg["mode_names"]))[mode]
+        terrain = "step" if has_platform and enabled else "flat"
+        return f"{self.task_cfg['mode_names'][mode]}/{terrain}"

@@ -10,6 +10,9 @@ import torch
 from .config import PHASE_NAMES
 
 
+PHASE_ENCODING_DIM = 4
+
+
 def validate_phase_durations(durations: Mapping[str, float]) -> tuple[float, ...]:
     unknown = set(durations).difference(PHASE_NAMES)
     missing = set(PHASE_NAMES).difference(durations)
@@ -22,22 +25,22 @@ def validate_phase_durations(durations: Mapping[str, float]) -> tuple[float, ...
 
 
 def phase_encoding(elapsed_s: torch.Tensor, cycle_s: float) -> torch.Tensor:
-    """ 6 维多尺度 sin/cos 时间编码。"""
+    """四维 sin/cos 编码；cycle_s 为 takeoff + flight，landing 起全部置零。"""
     if cycle_s <= 0.0 or not math.isfinite(cycle_s):
         raise ValueError("cycle_s must be positive and finite")
     progress = torch.clamp(elapsed_s / cycle_s, 0.0, 1.0)
     phase = math.pi * progress
-    return torch.stack(
+    encoding = torch.stack(
         (
             torch.sin(phase),
             torch.cos(phase),
             torch.sin(phase / 2.0),
             torch.cos(phase / 2.0),
-            torch.sin(phase / 4.0),
-            torch.cos(phase / 4.0),
         ),
         dim=-1,
     )
+    outside_window = (elapsed_s < 0.0) | (elapsed_s >= cycle_s)
+    return encoding.masked_fill(outside_window.unsqueeze(-1), 0.0)
 
 
 def scheduled_phase_index(elapsed_s: torch.Tensor, durations: tuple[float, ...]) -> torch.Tensor:

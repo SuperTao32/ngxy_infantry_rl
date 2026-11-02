@@ -120,7 +120,7 @@ def main(argv=None):
         policy = runner.get_inference_policy(device=str(gs.device))
         print(f"[eval] checkpoint: {checkpoint}")
         print(f"[eval] terrain: {args.terrain}; drive limits: {env.command_ranges}")
-        print("[eval] arrows=vx/wz, PgUp/PgDn=height, Space=stop, J=jump, 1/2/3=jump mode, "
+        print("[eval] arrows=vx/wz, PgUp/PgDn=height, Space=stop, J=jump, 1/2=JUMP_20/JUMP_40, "
               "R=random pose reset/recover, L=drive, Backspace=upright reset, Enter=focus")
         with torch.inference_mode():
             policy.reset()

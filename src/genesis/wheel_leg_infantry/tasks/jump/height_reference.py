@@ -3,42 +3,71 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Sequence
+from collections.abc import Mapping
 
 import torch
 
 
-def validate_height_reference(
-    points: Sequence[Sequence[float]], cycle_s: float,
-) -> tuple[tuple[float, ...], tuple[float, ...]]:
-    """校验 [时间(s), 目标 base 到轮底平均竖直距离(m)] 节点，覆盖从跳跃触发到回合结束。"""
-    if not math.isfinite(cycle_s) or cycle_s <= 0.0:
-        raise ValueError("height reference cycle_s must be positive and finite")
-    if len(points) < 2 or any(len(point) != 2 for point in points):
-        raise ValueError("height_reference must contain at least two [time_s, distance_m] points")
-    times, heights = zip(*((float(t), float(h)) for t, h in points))
-    if not all(math.isfinite(t) for t in times) or not all(
-        math.isfinite(h) and h > 0.0 for h in heights
+def validate_height_reference(config: Mapping[str, float]) -> tuple[float, float]:
+    """所有模式共用一组 base 到轮底距离上下限，单位 m。"""
+    if not isinstance(config, Mapping) or set(config) not in (
+        {"min_distance_m", "max_distance_m"},
+        {"min_distance_m", "max_distance_m", "retract_duration_s"},
     ):
-        raise ValueError("height_reference times must be finite and distances positive and finite")
-    if times[0] != 0.0 or not math.isclose(times[-1], cycle_s, rel_tol=0.0, abs_tol=1e-9):
-        raise ValueError("height_reference must start at 0 and end at episode_length_s")
-    if any(b <= a for a, b in zip(times, times[1:])):
-        raise ValueError("height_reference times must be strictly increasing")
-    return times, heights
+        raise ValueError("jump_height_reference requires min_distance_m, max_distance_m and optional retract_duration_s")
+    try:
+        minimum, maximum = float(config["min_distance_m"]), float(config["max_distance_m"])
+    except (ValueError, TypeError) as exc:
+        raise ValueError("jump_height_reference distances must be numeric") from exc
+    if not all(math.isfinite(value) and value > 0.0 for value in (minimum, maximum)) or minimum > maximum:
+        raise ValueError("jump_height_reference must have finite 0 < min_distance_m <= max_distance_m")
+    if "retract_duration_s" in config:
+        _validate_retract_duration(config["retract_duration_s"])
+    return minimum, maximum
+
+
+def resolve_height_reference(env_cfg) -> tuple[float, float]:
+    """新配置读取共享上下限；旧存档只提取原轨迹的共同最低/最高值。"""
+    if "jump_height_reference" in env_cfg:
+        return validate_height_reference(env_cfg["jump_height_reference"])
+    legacy = env_cfg.get("jump_modes", {}).get("height_references")
+    if not legacy or not any(legacy):
+        raise ValueError("Missing jump_height_reference configuration")
+    heights = [float(point[1]) for points in legacy for point in points]
+    return validate_height_reference(dict(min_distance_m=min(heights), max_distance_m=max(heights)))
+
+
+def _validate_retract_duration(value) -> float:
+    try:
+        duration = float(value)
+    except (ValueError, TypeError) as exc:
+        raise ValueError("jump_height_reference.retract_duration_s must be finite and positive") from exc
+    if not math.isfinite(duration) or duration <= 0.0:
+        raise ValueError("jump_height_reference.retract_duration_s must be finite and positive")
+    return duration
+
+
+def resolve_retract_duration(env_cfg) -> float:
+    """收腿独立计时；缺少该字段的旧存档保留按 flight 时长收腿的行为。"""
+    config = env_cfg.get("jump_height_reference", {})
+    if "retract_duration_s" in config:
+        return _validate_retract_duration(config["retract_duration_s"])
+    return _validate_retract_duration(env_cfg["jump_phase_durations_s"]["flight"])
 
 
 def sample_height_reference(
-    elapsed_s: torch.Tensor, times: torch.Tensor, heights: torch.Tensor,
+    elapsed_s: torch.Tensor, *, takeoff_s: float, retract_duration_s: float, min_distance_m: float, max_distance_m: float,
 ) -> torch.Tensor:
-    """分段五次平滑插值，节点速度/加速度为零，范围外保持首尾值。
+    """takeoff 从最低升到最高，随后在独立收腿时长内降到最低，再保持最低。
 
-    times/heights 是校验后的一维同设备张量；elapsed_s 可为标量或一批计时器。
-    参考值表示 base 原点到左右轮底的平均世界竖直距离，与地面高度无关。
-    此函数仅生成目标值；实测距离 = base_z - mean(wheel_center_z - wheel_radius)。
+    两段使用五次平滑插值，边界速度和加速度为零。收腿不依赖 flight 的结束时刻。
+    时长、上下限由配置层校验；
+    elapsed_s 可为标量或一批独立计时器。参考为 base 原点到左右轮底的平均竖直距离。
     """
-    segment = torch.bucketize(elapsed_s.contiguous(), times, right=True) - 1
-    segment = segment.clamp(0, times.numel() - 2)
-    progress = ((elapsed_s - times[segment]) / (times[segment + 1] - times[segment])).clamp(0.0, 1.0)
-    blend = progress**3 * (10.0 + progress * (-15.0 + 6.0 * progress))
-    return heights[segment] + (heights[segment + 1] - heights[segment]) * blend
+    def smoothstep(progress):
+        progress = progress.clamp(0.0, 1.0)
+        return progress**3 * (10.0 + progress * (-15.0 + 6.0 * progress))
+
+    rise = smoothstep(elapsed_s / takeoff_s)
+    fall = smoothstep((elapsed_s - takeoff_s) / retract_duration_s)
+    return min_distance_m + (max_distance_m - min_distance_m) * (rise - fall)

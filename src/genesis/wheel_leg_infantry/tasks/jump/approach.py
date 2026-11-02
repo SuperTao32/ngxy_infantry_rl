@@ -4,7 +4,7 @@ import math
 
 import torch
 
-from .geometry import trigger_distance
+from .geometry import jump_lane_y, trigger_distance
 
 
 class JumpApproach:
@@ -55,7 +55,7 @@ class JumpApproach:
         distance += (torch.rand_like(distance) * 2 - 1) * self.task_cfg["distance_jitter_m"]
         positions = self.base_pos[ids].clone()
         positions[:, 0] = -distance
-        positions[:, 1] = modes * self.task_cfg["lane_spacing_m"]
+        positions[:, 1] = jump_lane_y(self.terrain_tile_index[ids], self.task_cfg)
         # 两处地面均为 z=0；只移动 x/y，保留高度、姿态、全部关节和实际速度。
         self.robot.set_pos(positions, envs_idx=ids, zero_velocity=False)
         self.env.base_pos[ids] = positions

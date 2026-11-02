@@ -9,6 +9,16 @@ def active_step_heights(cfg):
     return [height if active else 0.0 for height, active in zip(cfg["step_heights_m"], enabled)]
 
 
+def terrain_tile_heights(cfg):
+    """每个高度模式分配平地/台阶两条通道，tile = 2 * mode + has_platform。"""
+    return [height for platform in active_step_heights(cfg) for height in (0.0, platform)]
+
+
+def jump_lane_y(tile_index, cfg):
+    """四条通道以任务区域中心对称排列，避免扩大场地或侵入其他任务区域。"""
+    return (tile_index - (2 * len(cfg["mode_names"]) - 1) / 2) * cfg["lane_spacing_m"]
+
+
 def trigger_distance(speed, mode, tables):
     """逐模式分段线性插值；显式拒绝未标定速度，避免默默外推。"""
     result = torch.zeros_like(speed)
@@ -28,11 +38,11 @@ def trigger_distance(speed, mode, tables):
     return result
 
 
-def target_wheel_support(positions, contacts, mode, cfg, wheel_radius, *, margin=None):
+def target_wheel_support(positions, contacts, tile_index, cfg, wheel_radius, *, margin=None):
     """返回 [N,2] 台面/平地支撑；侧壁接触或仅悬在台面上方不计入。"""
     margin = cfg["landing_margin_m"] if margin is None else margin
-    heights = positions.new_tensor(active_step_heights(cfg))[mode, None]
-    lane_y = mode.to(positions.dtype)[:, None] * cfg["lane_spacing_m"]
+    heights = positions.new_tensor(terrain_tile_heights(cfg))[tile_index, None]
+    lane_y = jump_lane_y(tile_index.to(positions.dtype), cfg)[:, None]
     x, y, z = positions.unbind(-1)
     height_match = torch.abs(z - wheel_radius - heights) <= cfg["landing_height_tolerance_m"]
     inside = ((x >= margin) & (x <= cfg["platform_length_m"] - margin)

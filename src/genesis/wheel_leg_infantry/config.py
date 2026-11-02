@@ -15,8 +15,8 @@ from .terrains import default_terrain_cfg
 # 任务分配与课程基准
 # 权重为 0 时暂不分配环境，后续可通过 get_curriculum_cfg() 的阶段权重启用。
 TASK_WEIGHTS = {
-    "locomotion": 2.0,
-    "recovery": 1.0,
+    "locomotion": 1.0,
+    "recovery": 0.0,
     "jump": 0.0,
     "multi_terrain": 0.0,
 }
@@ -159,8 +159,8 @@ def get_obs_cfg() -> dict:
             "link_name": "base_link",
             "pos_offset": [0.0, 0.0, 0.0],
         },
-        # actor 包含 6D actions、6D 命令（运动目标与 jump 模式）及 6D 跳跃阶段编码。
-        # ToF 开启时为 (39 + 4 * history_frames)D；关闭时为 39D。
+        # actor 包含 6D actions、5D 命令（运动目标与两维 jump 模式）及 4D 跳跃阶段编码。
+        # ToF 开启时为 (36 + 4 * history_frames)D；关闭时为 36D。
         "tof": default_tof_cfg(
             include_in_observation=True,
             history_frames=3,
@@ -237,7 +237,22 @@ def get_curriculum_cfg() -> dict:
             },
             {
                 "name": "recovery",
-                "start_iteration": 500,
+                "start_iteration": 4000,
+                "targets": {
+                    "task_weights": {
+                        "locomotion": 2.0,
+                        "recovery": 1.0,
+                        "jump": 0.0,
+                        "multi_terrain": 0.0,
+                    },
+                    "domain_rand": {"strength": 0.0},
+                    "sensor_noise": {"strength": 0.0},
+                    "wheel_slip": {"strength": 0.0},
+                },
+            },
+            {
+                "name": "jump",
+                "start_iteration": 4500,
                 "targets": {
                     # 只填写需要改变的权重；空字典继承上一阶段的分配。
                     "task_weights": {
@@ -252,8 +267,8 @@ def get_curriculum_cfg() -> dict:
                 },
             },
             {
-                "name": "full_randomization",
-                "start_iteration": 7000,
+                "name": "full",
+                "start_iteration": 100000,
                 "targets": {
                     "task_weights": {},
                     "domain_rand": {"strength": 0.7},

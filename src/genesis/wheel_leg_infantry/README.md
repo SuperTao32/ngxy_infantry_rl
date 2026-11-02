@@ -60,14 +60,14 @@ uv run --locked python -m src.genesis.wheel_leg_infantry.eval \
 | ← / → | 偏航速度增减 0.5 rad/s |
 | PageUp / PageDown | 目标高度增减 0.05 m |
 | J | 在当前位置启动一次跳跃命令 |
-| 1 / 2 / 3 | 选择平地 / 20 cm / 40 cm 跳跃编码，随后按 J |
+| 1 / 2 | 选择 JUMP_20 / JUMP_40 跳跃编码，随后按 J |
 | R | 随机选择一个已配置的姿态复位并起身，清空 GRU 和速度目标，站稳后恢复普通控制 |
 | L | 取消当前行为，返回普通 command 控制 |
 | 空格 | 取消当前行为并清零速度、转向 |
 | Backspace | 显式复位机器人到场地出生位置，并清空 GRU |
 | Enter | 相机对准机器人 |
 
-跳跃沿用保存配置的模式 one-hot、六维时间编码和目标 base 到轮底距离轨迹，电机参数始终来自共享根配置；按键只启动控制信号，不改机器人位置或实际速度。跳跃计时结束后恢复普通命令；起身期间保持零速度与起身高度，方向/高度按键暂时锁定。跳跃及起身完成后继续运行，保留连续的策略历史。倒地、接触、动作完成、回合时长和地形边界均不会自动复位；R 和 Backspace 会显式复位机器人、传感器、动作与 GRU，数值求解器报错则停止仿真。
+跳跃沿用保存配置的模式 one-hot、四维时间编码和目标 base 到轮底距离轨迹；相位以 takeoff + flight 的总时长归一化，进入计划 landing 时四维归零。电机参数始终来自共享根配置；按键只启动控制信号，不改机器人位置或实际速度。跳跃计时结束后恢复普通命令；起身期间保持零速度与起身高度，方向/高度按键暂时锁定。跳跃及起身完成后继续运行，保留连续的策略历史。倒地、接触、动作完成、回合时长和地形边界均不会自动复位；R 和 Backspace 会显式复位机器人、传感器、动作与 GRU，数值求解器报错则停止仿真。
 
 R 的姿态池由 `tasks/recovery/config.py::get_recovery_reset_cfgs()` 提供，默认通过已有的 `get_reset_pose_cfg()` 解析 `reset_pos.json`。新增姿态时将快照路径追加到 `RECOVERY_RESET_POSES` 即可，也可使用 `"default"` 站立姿态。eval 每次按 R 等概率随机选择一个配置（可能重复，受 `--seed` 控制），共用完整环境 reset 路径并适配当前地形高度；Backspace 仍使用正常站立出生配置。仿真不直接读取姿态文件；也可向 `InteractiveEnv` 注入其他来源的数值姿态配置列表。
 
@@ -81,7 +81,29 @@ ToF 射线起点贴到或进入地形时，读数为 `min_range_m`（当前为 0
 
 `--steps N` 可选地限制仿真步数；`--no-vis --steps N` 用于无窗口运行，`--output results.json` 保存运行步数、模拟时长与地形配置。训练和评估共用 `--log-root`、`--seed`、`--cpu` 及随机化开关。
 
-多卡入口仍是同一个模块，每卡环境数由 `-B` 指定：
+双 GPU 训练在同一入口添加 `--num-gpus 2`，自动使用当前 Python 环境启动单机 `torchrun`，每张卡运行独立仿真并同步更新同一个策略：
+
+```bash
+# 每卡 4096 个环境，总计 8192 个；默认使用可见的前两张 GPU
+uv run --locked python -m src.genesis.wheel_leg_infantry.train \
+  -e infantry --num-gpus 2 -B 4096 --max-iterations 10000
+
+# 指定使用的两张卡，并恢复最近的 checkpoint
+CUDA_VISIBLE_DEVICES=0,1 uv run --locked python -m src.genesis.wheel_leg_infantry.train \
+  -e infantry --num-gpus 2 -B 4096 --resume --max-iterations 20000
+```
+
+`-B` 始终表示**每卡环境数**，总环境数为 `-B × GPU 数`；保持原单卡 `-B 8192` 的总样本量时，双卡使用 `-B 4096`。不传 `--num-gpus` 时仍默认单卡，`--num-gpus 1` 可显式选择单卡；也支持更多 GPU。GPU 不足、GPU 数与外部 `torchrun` 不一致或同时使用 `--cpu` 时会报错。`CUDA_VISIBLE_DEVICES` 使用不重复的数字 GPU 编号。
+
+两张卡使用 `seed` 与 `seed + 1` 采样；PPO 同步梯度和学习率，任务课程累计两卡的实际有效样本。只创建一份运行目录，由主进程写 TensorBoard 和 checkpoint；`--vis` 仅显示主进程。`run_metadata.json` 记录 GPU 数、每卡/总环境数及各进程种子。双卡同样支持 `--load-weight` 和完整续训。
+
+设备隔离和退出顺序参考 [Genesis 多 GPU 指南](https://genesis-world.readthedocs.io/en/latest/user_guide/policy_training/multi_gpu.html)。正常完成时先等待各进程完成最后一轮及保存，再销毁 NCCL，最后清理 Genesis；训练异常、Ctrl+C 或 torchrun 的 SIGTERM 退出时跳过结束屏障，先释放 NCCL，避免失败进程让其他进程一直等待。
+
+排查中途变慢时，先比较 TensorBoard 的 `Perf/collection_time` 和 `Perf/learning_time`。回合开始异步结束后会增加重置开销，单卡也会出现。每轮 24 个 0.01 秒控制步，机身接触失败阈值为 5 秒时，首次集中重置可能在第 21 轮附近出现；混合任务从初期就频繁重置时，则未必出现明显台阶。
+
+ToF 对少量重置环境直接查询当前碰撞三角形，使用 Genesis 的同一射线相交算法，避免重建全部环境的 BVH。测量值与真实值仍分别使用带安装误差和标称安装的射线，并保留地形遮挡处理；含可视网格测距或大量环境同时重置时沿用完整 BVH 刷新路径。随机化强度为零时，已写入的标称动力学参数直接复用；从非零强度回到零时仍恢复标称值，外力回合时钟照常重置。
+
+也可继续手动使用 `torchrun`，无需传 `--num-gpus`：
 
 ```bash
 uv run --locked torchrun --standalone --nproc_per_node=2 \
@@ -158,6 +180,12 @@ TensorBoard 以 `locomotion/`、`recovery/`、`jump/`、`multi_terrain/` 为独�
 
 所有任务共用六维动作：四个腿关节位置目标和两个轮速目标，共享缩放、裁剪和一拍动作延迟。控制步为 0.01 s，物理子步维持原实现。
 
-actor 包含 IMU、重力方向、关节/轮测量、6D actions、六维命令、ToF 与六维跳跃阶段编码。命令依次为缩放后的前向速度、偏航速度、高度目标，以及未缩放的三维 jump 模式 one-hot；非 jump 环境的模式为零。critic 再追加速度、接触等仿真真值，以及 baselink 原点的世界坐标 z（不扣除地形高度）。默认 ToF 配置下 actor 为 51D、critic 为 75D；选择任务子集不会改变网络输入维度。
+actor 包含 IMU、重力方向、关节/轮测量、6D actions、五维命令、ToF 与四维跳跃阶段编码。命令依次为缩放后的前向速度、偏航速度、高度目标，以及未缩放的两维 jump 模式 one-hot：`JUMP_20=[1,0]`、`JUMP_40=[0,1]`；非 jump 环境的模式为零。critic 再追加速度、接触等仿真真值，以及 baselink 原点的世界坐标 z（不扣除地形高度）。默认 ToF 配置下 actor 为 48D、critic 为 72D；选择任务子集不会改变网络输入维度。原三模式或六维相位 checkpoint 的观测归一化与 GRU 输入层尺寸不同，不能直接续训、加载权重或交互评估，需要重新训练或显式迁移模型。
+
+四维相位为 `[sin(πp), cos(πp), sin(πp/2), cos(πp/2)]`，其中 `p = t / (takeoff + flight)`；模式 one-hot 与相位仅在 `0 ≤ t < takeoff + flight` 输出，计划 landing、助跑及非 jump 任务中两者均为零。默认 takeoff=0.20 s、flight=0.40 s，因此模式 one-hot 与相位在 0.60 s 同时归零；landing 仍持续配置的 0.50 s，完整跳跃回合仍为 1.10 s。任务内部模式编号、落地奖励与 PPO 样本采集继续保留。训练与交互评估使用同一截止时间，并以整数控制步处理 landing 边界。
+
+`JUMP_20` / `JUMP_40` 仅表示跳高，平地与台阶另外采样，不增加独热编码维度。`jump_modes.platform_probabilities` 按两个高度分别配置台阶采样概率，默认 `[0.5, 0.5]`；课程开放台阶后，两种高度都可在平地和台阶上训练。四种高度/地形组合使用独立通道，落台判定按该回合的实际地形计算。
+
+跳跃的 base 到轮底距离参考由 `tasks/jump/config.py::get_cfgs()` 的 `jump_height_reference` 统一配置：`min_distance_m=0.22`、`max_distance_m=0.38`、`retract_duration_s=0.20`。两种模式共用上下限；takeoff 期间从低到高五次平滑伸腿，随后按独立的 `retract_duration_s` 从高到低平滑收腿，完成后保持最低。收腿时长与 flight 独立，相位和模式 one-hot 仍在 takeoff + flight 结束时归零，无需配置各模式的时间/距离节点。
 
 jump 从空旷跑道静止出生，使用同一策略推理加速；连续达速并站稳后保留物理状态移到指定起跳距离，再发送跳跃编码并开始独立计时。助跑不发奖励、不参与 PPO 更新；跳跃编码更新后产生的轨迹进入 PPO，GRU 保留切换时的隐状态，训练不回放助跑过程。加速容差/超时、起跳距离表、恢复姿态、各任务比例与奖励在对应配置中调整。

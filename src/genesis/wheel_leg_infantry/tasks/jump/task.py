@@ -9,7 +9,10 @@ from .approach import JumpApproach
 from .terrain import JumpTerrain
 from ..base import Task
 from .buffers import JumpBuffers
-from .config import MODE_NAMES, get_approach_cfg, validate_mode_probabilities, validate_platform_enabled
+from .config import (
+    MODE_NAMES, get_approach_cfg, validate_configs, validate_mode_probabilities,
+    validate_platform_enabled, validate_platform_probabilities,
+)
 from .geometry import target_wheel_support
 from .height_reference import sample_height_reference
 from .phase import phase_encoding, validate_phase_durations
@@ -18,11 +21,13 @@ from .rewards import JumpRewards
 
 class JumpTask(JumpApproach, JumpRewards, JumpBuffers, Task):
     def __init__(self, env, name, config, env_ids):
+        validate_configs(config["env_cfg"], config["curriculum_cfg"])
         self.approach_cfg = {**get_approach_cfg(), **config["env_cfg"].get("jump_approach", {})}
         self.approach_cfg.pop("reward_scales", None)  # 兼容旧存档，助跑奖励配置不再使用。
         self.task_cfg = config["env_cfg"]["jump_modes"]
         self.phase_durations = validate_phase_durations(config["env_cfg"]["jump_phase_durations_s"])
         self.phase_cycle_s = sum(self.phase_durations)
+        self.phase_input_duration_s = sum(self.phase_durations[:2])
         super().__init__(env, name, config, env_ids)
 
     def _initialize_task_buffers(self):
@@ -42,11 +47,11 @@ class JumpTask(JumpApproach, JumpRewards, JumpBuffers, Task):
         cfg = self.task_cfg
         # 支撑只用于本拍落台判定，无需跨步保存。
         target_support = target_wheel_support(
-            self.wheel_center_pos, self.wheel_contact, self.jump_mode, cfg, self.wheel_radius,
+            self.wheel_center_pos, self.wheel_contact, self.terrain_tile_index, cfg, self.wheel_radius,
         ).all(dim=1)
         # 首次单轮触地可以开始正常缓冲，但侧壁/台阶下方接触不是有效落台。
         top_contact = target_wheel_support(
-            self.wheel_center_pos, self.wheel_contact, self.jump_mode, cfg, self.wheel_radius, margin=0.0,
+            self.wheel_center_pos, self.wheel_contact, self.terrain_tile_index, cfg, self.wheel_radius, margin=0.0,
         ).any(dim=1)
         # 机身先触地不算错误落台；只有实际轮接触落在目标面之外才判错。
         bad_landing = (self.jump_active & (self.landing_surface_height > 0) & self.has_taken_off
@@ -96,7 +101,12 @@ class JumpTask(JumpApproach, JumpRewards, JumpBuffers, Task):
             self.jump_steps.contiguous(),
             self.phase_step_boundaries, right=True,
         )
-        self.phase_features.copy_(torch.where(self.jump_active[:, None], phase_encoding(elapsed_s, self.phase_cycle_s), 0.0))
+        # 用同一整数步边界关闭 landing 的模式与相位输入。
+        phase_active = self.jump_active & (self.jump_steps < self.phase_step_boundaries[-1])
+        self.jump_mode_one_hot.masked_fill_(~phase_active[:, None], 0.0)
+        self.phase_features.copy_(torch.where(
+            phase_active[:, None], phase_encoding(elapsed_s, self.phase_input_duration_s), 0.0,
+        ))
         current_vertical_velocity = self.robot.get_vel()[:, 2]
         self.world_vertical_velocity.copy_(current_vertical_velocity)
 
@@ -190,7 +200,7 @@ class JumpTask(JumpApproach, JumpRewards, JumpBuffers, Task):
                 self.wheel_radius,
             )
         )
-        # 三种模式均从 z=0 的平地起跳；用较低一侧轮底衡量过障间隙。
+        # 两种模式均从 z=0 的平地起跳；用较低一侧轮底衡量过障间隙。
         self.wheel_clearance.copy_(torch.min(wheel_bottom_height, dim=1).values)
         # 首次触地后冻结轮底成绩，二次弹跳不能补足首次跳跃高度。
         self.max_wheel_clearance.copy_(torch.where(
@@ -198,13 +208,15 @@ class JumpTask(JumpApproach, JumpRewards, JumpBuffers, Task):
         ))
 
     def _update_jump_commands(self):
-        """第三列为目标 base 到轮底平均竖直距离；参考仅由模式和时间决定。"""
+        """第三列为共享的 base 到轮底距离参考，按 takeoff / flight 时长生成。"""
         self.commands[self.mask, 1] = 0.0
         self.commands[self.mask & ~self.jump_active, 2] = self.command_cfg["base_height_range"][0]
         elapsed = self.jump_steps.to(gs.tc_float) * self.dt
-        for mode, (times, heights) in enumerate(self.mode_height_references):
-            selected = self.mask & self.jump_active & (self.jump_mode == mode)
-            self.commands[selected, 2] = sample_height_reference(elapsed[selected], times, heights)
+        selected = self.mask & self.jump_active
+        self.commands[selected, 2] = sample_height_reference(
+            elapsed[selected], takeoff_s=self.phase_durations[0], retract_duration_s=self.retract_duration_s,
+            min_distance_m=self.height_reference_min_m, max_distance_m=self.height_reference_max_m,
+        )
 
     def _task_termination(self):
         """返回 jump 特有的终止原因，并区分正常任务失败与 solver 异常。"""
@@ -237,12 +249,12 @@ class JumpTask(JumpApproach, JumpRewards, JumpBuffers, Task):
             self.episode_sums[name].add_(values)
 
     def _apply_reward_scales(self, values):
-        """标量对所有任务生效；三元素列表按平地、20 cm、40 cm 分别设置。"""
+        """标量对所有模式生效；两元素列表按 JUMP_20、JUMP_40 分别设置。"""
         per_mode = {}
         for name, value in values.items():
             if isinstance(value, (list, tuple)):
                 if len(value) != len(MODE_NAMES) or any(not math.isfinite(v) for v in value):
-                    raise ValueError(f"reward scale {name} must contain three finite values")
+                    raise ValueError(f"reward scale {name} must contain {len(MODE_NAMES)} finite values")
                 per_mode[name] = [float(v) for v in value]
         super()._apply_reward_scales({
             name: per_mode[name][0] if name in per_mode else value
@@ -261,15 +273,17 @@ class JumpTask(JumpApproach, JumpRewards, JumpBuffers, Task):
         if "platform_enabled" in values:
             validate_platform_enabled(values["platform_enabled"])
             self.terrain.set_platform_enabled(values["platform_enabled"])
+        if "platform_probabilities" in values:
+            validate_platform_probabilities(values["platform_probabilities"])
+            self.task_cfg["platform_probabilities"] = list(values["platform_probabilities"])
 
     def _sample_base_reset_state(self, env_ids):
         state = super()._sample_base_reset_state(env_ids)
-        qpos, positions, quat, velocity, angular, gravity, height, centers, modes = state
+        qpos, positions, quat, velocity, angular, gravity, height, centers, tiles = state
+        modes = tiles // 2
         commands = self._sample_commands(self.command_cfg, self.commands_limit)[env_ids]
         minimum = commands.new_tensor(self.task_cfg["min_forward_speeds_m_s"])[modes]
         commands[:, 0] = torch.maximum(commands[:, 0], minimum)
-        stationary = (modes == 0) & (torch.rand(len(env_ids), device=self.device) < self.task_cfg["flat_stationary_probability"])
-        commands[stationary, 0] = 0.0
         # 从静止实际加速；目标速度只写命令，不写入机器人速度。
         velocity.zero_()
         angular.zero_()

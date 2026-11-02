@@ -30,6 +30,8 @@ from .tasks.task_config import TaskConfiguration
 from .utils.tracking_gate import DEFAULT_TRACKING_GATE_CFG
 from .tasks.manager import TaskManager
 from .tasks.manager import task_metric_tag
+from .tasks.jump.config import MODE_NAMES
+from .tasks.jump.phase import PHASE_ENCODING_DIM
 from .terrains.training import TrainingTerrain
 
 
@@ -696,8 +698,8 @@ class WheelLegInfantryEnv(TaskConfiguration):
             "leg_length": self.measured_leg_length * self.obs_scales["leg_length"],  # 2
             "actions": self.actions,  # 6
             "tof_distance": self.tof_history.observation() if self.tof_cfg["include_in_observation"] else empty,
-            "commands": commands,  # 6：速度、偏航速度、高度目标、jump 模式 one-hot
-            "jump_phase": jump_phase, # 6
+            "commands": commands,  # 5：速度、偏航速度、高度目标、两维 jump 模式 one-hot
+            "jump_phase": jump_phase,  # 4：时间相位编码
         }
         self.obs_buf = torch.concatenate(tuple(self.obs_components.values()), dim=-1)
 
@@ -713,8 +715,8 @@ class WheelLegInfantryEnv(TaskConfiguration):
             "leg_length": self.leg_length * self.obs_scales["leg_length"],  # 2
             "actions": self.actions,  # 6
             "tof_distance": self.true_tof_history.observation() if self.tof_cfg["include_in_observation"] else empty,
-            "commands": commands,  # 6
-            "jump_phase": jump_phase,  # 6
+            "commands": commands,  # 5
+            "jump_phase": jump_phase,  # 4
             # critic特权观测
             "privileged_base_lin_vel": self.base_lin_vel * self.obs_scales["lin_vel"],  # 3
             "privileged_wheel_normal_force": self.wheel_normal_force.flatten(1) * self.obs_scales["normal_force"],  # 6
@@ -731,7 +733,7 @@ class WheelLegInfantryEnv(TaskConfiguration):
     def _get_jump_observations(self):
         jump = self.task_manager.tasks.get("jump")
         if jump is None:
-            return self.base_pos.new_zeros((self.num_envs, 3)), self.base_pos.new_zeros((self.num_envs, 6))
+            return self.base_pos.new_zeros((self.num_envs, len(MODE_NAMES))), self.base_pos.new_zeros((self.num_envs, PHASE_ENCODING_DIM))
         return (torch.where(jump.mask[:, None], jump.jump_mode_one_hot, 0.0),
                 torch.where(jump.mask[:, None], jump.phase_features, 0.0))
 
@@ -858,7 +860,11 @@ class WheelLegInfantryEnv(TaskConfiguration):
             self.tof_clock.reset(reset_env_ids)
             if self.tof_history is not None:
                 self.tof_history.reset(self.tof_distances, reset_env_ids)
-                self.true_tof_distances[reset_env_ids] = self.tof.read_ground_truth(after_reset=True, env_ids=reset_env_ids)
+                # Measured and nominal rays share geometry: read() just rebuilt
+                # the global BVH, and no pose changed between these two queries.
+                self.true_tof_distances[reset_env_ids] = self.tof.read_ground_truth(
+                    after_reset=True, env_ids=reset_env_ids, refresh_context=False,
+                )
                 self.true_tof_history.reset(self.true_tof_distances, reset_env_ids)
 
         if record_episode:

@@ -3,30 +3,35 @@
 import math
 from typing import Mapping
 
-from .height_reference import validate_height_reference
+from .height_reference import resolve_height_reference, resolve_retract_duration
 
 PHASE_NAMES = ("takeoff", "flight", "landing")
-MODE_NAMES = ("flat", "step_20cm", "step_40cm")
-MODE_HEIGHTS = (0.0, 0.20, 0.40)
+MODE_NAMES = ("JUMP_20", "JUMP_40")
+MODE_HEIGHTS = (0.20, 0.40)
 
 
 def get_cfgs():
     durations = {"takeoff": 0.20, "flight": 0.40, "landing": 0.50}
     duration = sum(durations.values())
     course = _get_curriculum_cfg()
-    modes = _get_jump_modes_cfg(duration)
+    modes = _get_jump_modes_cfg()
     modes["mode_probabilities"] = list(course["stages"][0]["targets"]["terrain"]["mode_probabilities"])
     env = dict(
-        episode_length_s=duration, resampling_time_s=duration,
-        jump_phase_durations_s=durations, jump_modes=modes,
+        episode_length_s=duration,
+        resampling_time_s=duration,
+        jump_phase_durations_s=durations,
+        jump_modes=modes,
+        # 两种模式共用：takeoff 内伸腿，随后按独立的 retract_duration_s 收腿并保持最低。
+        jump_height_reference=dict(min_distance_m=0.22, max_distance_m=0.38, retract_duration_s=0.10),
         jump_approach=get_approach_cfg(),
         takeoff_min_airborne_time_s=0.06,
         **_get_termination_cfg(),
     )
-    commands = dict(lin_vel_range=[1.5, 2.0], ang_vel_range=[0.0, 0.0],
-                    base_height_range=[0.22, 0.22], standing_probability=0.0,
-                    high_speed_ang_vel=dict(lin_vel_threshold=1.5, max_abs_ang_vel=2.0),
-                    high_base_height_velocity_limits=dict(base_height_threshold=0.32, max_abs_lin_vel=2.0, max_abs_ang_vel=3.0))
+    commands = dict(
+        lin_vel_range=[1.0, 3.0],
+        ang_vel_range=[0.0, 0.0],
+        base_height_range=[0.22, 0.22],
+    )
     validate_configs(env, course)
     return dict(env_cfg=env, reward_cfg=_get_reward_cfg(), command_cfg=commands, curriculum_cfg=course)
 
@@ -57,66 +62,41 @@ def _get_termination_cfg():
             "on_invalid": True,
         },
         # 默认 jump 的 20° 过倾会先通过 on_invalid 立即终止。
-        "termination_if_roll_greater_than": 90.0, 
-        "termination_if_pitch_greater_than": 90.0,  
-        "tilt_termination_duration_s": 3.0, 
-        "base_contact_termination_duration_s": 5.0,  
+        "termination_if_roll_greater_than": 90.0,
+        "termination_if_pitch_greater_than": 90.0,
+        "tilt_termination_duration_s": 3.0,
+        "base_contact_termination_duration_s": 5.0,
     }
 
 
-def _get_jump_modes_cfg(episode_length_s: float):
-    """三种模式的 base 到轮底距离轨迹、起跳距离、场地与成功条件。"""
-    # [触发 jump 后的时间(s), height]。
-    # 实测距离 = base_z - mean(wheel_center_z - wheel_radius)，沿世界 z 方向测量。
-    # 节点间五次平滑插值；描述伸腿/收腿姿态，与地形高度及整体腾空高度无关。
-    base_to_wheel_bottom_trajectories = {
-        "flat": [
-            [0.00, 0.22],
-            [0.20, 0.38],
-            [0.30, 0.20],
-            [episode_length_s, 0.22],
-        ],
-        "step_20cm": [
-            [0.00, 0.22],
-            [0.20, 0.38],
-            [0.30, 0.20],
-            [episode_length_s, 0.22],
-        ],
-        "step_40cm": [
-            [0.00, 0.22],
-            [0.20, 0.38],
-            [0.30, 0.20],
-            [episode_length_s, 0.22],
-        ],
-    }
-    # 输出中的逐模式列表统一按 MODE_NAMES 排序：平地、20 cm、40 cm。
+def _get_jump_modes_cfg():
+    """JUMP_20 / JUMP_40 的起跳距离、场地与成功条件。"""
+    # 输出中的逐模式列表统一按 MODE_NAMES 排序：20 cm、40 cm。
     return {
         "mode_names": list(MODE_NAMES),
         "step_heights_m": list(MODE_HEIGHTS),
-        "platform_enabled": [True, True, True],  # 课程可移走台阶，任务编码与跳高目标不变。
+        "platform_enabled": [True, True],  # 课程可移走台阶，任务编码与跳高目标不变。
+        "platform_probabilities": [0.5, 0.5],  # 各高度模式采样台阶的概率；其余回合采样平地。
         "assignment": "random",  # cyclic 用于逐模式验证。
         # base 原点相对起跳面的峰值目标，与 base 到轮底的距离参考独立。
-        "clearance_targets_m": [0.55, 0.45, 0.70],
-        "min_forward_speeds_m_s": [0.0, 0.8, 1.5],
-        "flat_stationary_probability": 0.1,
+        "clearance_targets_m": [0.45, 0.70],
+        "min_forward_speeds_m_s": [0.8, 1.5],
         # 每个模式的 [前向速度 m/s, 起跳距离 m]，节点间线性插值。
         # 这些是待训练/标定的初值，不是已验证的最优起跳位置。
         "distance_tables": [
-            [[0.0, 0.0], [3.0, 0.0]],
             [[0.0, 0.35], [0.8, 0.35], [1.0, 0.40], [2.0, 0.60], [3.0, 0.75]],
             [[0.0, 0.65], [1.5, 0.65], [2.0, 0.8], [3.0, 0.95]],
         ],
         "distance_jitter_m": 0.01,
-        "height_references": [base_to_wheel_bottom_trajectories[name] for name in MODE_NAMES],
         # 场地几何
         "platform_length_m": 2.0,
         "platform_width_m": 1.0,
         "lane_spacing_m": 4.0,
-        # 无台阶时的成功高度，按 flat / step_20cm / step_40cm 排序，单位 m。
+        # 平地回合的成功高度，按 JUMP_20 / JUMP_40 排序，单位 m。
         # 轮底取双轮较低侧的回合峰值；base_link 取首次腾空峰值，均须严格大于阈值。
         # 独立于 clearance_targets_m（奖励目标）；有台阶时仍使用落台成功条件。
-        "ground_success_wheel_clearance_m": [0.32, 0.25, 0.40],
-        "ground_success_base_height_m": [0.55, 0.45, 0.68],
+        "ground_success_wheel_clearance_m": [0.25, 0.40],
+        "ground_success_base_height_m": [0.45, 0.70],
         # 落台成功判定
         "landing_margin_m": 0.02,
         "landing_height_tolerance_m": 0.025,
@@ -185,17 +165,17 @@ def _get_reward_cfg():
 
 
 def _get_curriculum_cfg():
-    """按阶段配置任务采样比例、速度范围与奖励；比例顺序为平地、20 cm、40 cm。"""
+    """按阶段配置任务采样比例、速度范围与奖励；比例顺序为 JUMP_20、JUMP_40。"""
     return {
         "enabled": True,
         "stages": [
             {
-                "name": "flat_jump_high",
+                "name": "JUMP_40_without_platform",
                 "start_iteration": 0,
                 "targets": {
                     "terrain": {
-                        "mode_probabilities": [0.0, 0, 1.0],
-                        "platform_enabled": [True, True, False],
+                        "mode_probabilities": [0.0, 1.0],
+                        "platform_enabled": [True, False],
                     },
                     "command_ranges": {
                         "lin_vel_range": [1.5, 2.0],
@@ -203,10 +183,10 @@ def _get_curriculum_cfg():
                 },
             },
             {
-                "name": "step_40cm",
-                "start_iteration": 1500,
+                "name": "JUMP_40",
+                "start_iteration": 500,
                 "targets": {
-                    "terrain": {"platform_enabled": [True, True, True]},
+                    "terrain": {"platform_enabled": [True, True]},
                     "reward_scales": {
                         "base_contact": -15.0,
                         "landing_airborne": -15.0,
@@ -223,24 +203,24 @@ def _get_curriculum_cfg():
             },
             {
                 "name": "mixed_jump",
-                "start_iteration": 3000,
+                "start_iteration": 1000,
                 "targets": {
                     "terrain": {
-                        "mode_probabilities": [1 / 5, 1 / 5, 3 / 5],
-                        "platform_enabled": [True, True, True],
+                        "mode_probabilities": [1 / 2, 1 / 2],
+                        "platform_enabled": [True, True],
                     },
                     "command_ranges": {"lin_vel_range": [1.0, 3.0]},
                     "reward_scales": {
                         "landing_stability": 10.0,
                         "wheel_action_rate": -1.5,
-                        # 按 [平地, 20 cm, 40 cm] 指定权重，保留各模式的跳高信号。
-                        "flight_airtime": [0.5, 0.5, 1.0],
-                        "flight_peak_height": [150.0, 100.0, 200.0],
-                        "takeoff_vertical_velocity": [50.0, 50.0, 100.0],
-                        "takeoff_upward_velocity": [0.0, 0.0, 3.0],
-                        "flight_height_progress": [0.0, 0.0, 2.0],
-                        "flight_height_tracking": [2.0, 2.0, 0.0],
-                        "flight_wheel_clearance": [5.0, 5.0, 10.0],
+                        # 按 [JUMP_20, JUMP_40] 指定权重，保留各模式的跳高信号。
+                        "flight_airtime": [0.5, 1.0],
+                        "flight_peak_height": [100.0, 200.0],
+                        "takeoff_vertical_velocity": [50.0, 100.0],
+                        "takeoff_upward_velocity": [0.0, 3.0],
+                        "flight_height_progress": [0.0, 2.0],
+                        "flight_height_tracking": [2.0, 0.0],
+                        "flight_wheel_clearance": [5.0, 10.0],
                     },
                 },
             },
@@ -250,18 +230,28 @@ def _get_curriculum_cfg():
 
 def validate_platform_enabled(values):
     if len(values) != len(MODE_NAMES) or any(type(v) is not bool for v in values):
-        raise ValueError("platform_enabled must contain three booleans")
+        raise ValueError(f"platform_enabled must contain {len(MODE_NAMES)} booleans")
+
+
+def validate_platform_probabilities(values):
+    if len(values) != len(MODE_NAMES) or any(not math.isfinite(v) or not 0.0 <= v <= 1.0 for v in values):
+        raise ValueError(f"platform_probabilities must contain {len(MODE_NAMES)} probabilities in [0, 1]")
 
 
 def validate_mode_probabilities(values):
-    """模式权重允许为零，但必须是三个有限非负数，且总权重大于零。"""
+    """每种模式一个有限非负权重，允许为零，但总权重大于零。"""
     if len(values) != len(MODE_NAMES) or any(not math.isfinite(v) or v < 0 for v in values):
-        raise ValueError("mode_probabilities must contain three finite non-negative values")
+        raise ValueError(f"mode_probabilities must contain {len(MODE_NAMES)} finite non-negative values")
     if not math.isfinite(sum(values)) or sum(values) <= 0:
         raise ValueError("mode_probabilities must have a finite positive total weight")
 
 
 def validate_configs(env_cfg, curriculum_cfg=None):
+    from .phase import validate_phase_durations
+
+    validate_phase_durations(env_cfg["jump_phase_durations_s"])
+    resolve_height_reference(env_cfg)
+    resolve_retract_duration(env_cfg)
     termination = env_cfg.get("jump_termination", {})
     if not isinstance(termination, Mapping):
         raise ValueError("jump_termination must be a mapping")
@@ -273,15 +263,21 @@ def validate_configs(env_cfg, curriculum_cfg=None):
             raise ValueError(f"jump_termination.{key} must be a boolean")
     cfg = env_cfg["jump_modes"]
     if tuple(cfg["mode_names"]) != MODE_NAMES or tuple(cfg["step_heights_m"]) != MODE_HEIGHTS:
-        raise ValueError("jump_modes mode order must be flat, step_20cm, step_40cm")
+        raise ValueError("jump_modes mode order must be JUMP_20, JUMP_40 with heights 0.20, 0.40 m")
     validate_mode_probabilities(cfg["mode_probabilities"])
-    validate_platform_enabled(cfg.get("platform_enabled", [True, True, True]))
+    validate_platform_enabled(cfg.get("platform_enabled", [True] * len(MODE_NAMES)))
+    validate_platform_probabilities(cfg["platform_probabilities"])
     for stage in (curriculum_cfg or {}).get("stages", []):
         terrain = stage.get("targets", {}).get("terrain", {})
         if "platform_enabled" in terrain:
             validate_platform_enabled(terrain["platform_enabled"])
         if "mode_probabilities" in terrain:
             validate_mode_probabilities(terrain["mode_probabilities"])
+        if "platform_probabilities" in terrain:
+            validate_platform_probabilities(terrain["platform_probabilities"])
+        for name, value in stage.get("targets", {}).get("reward_scales", {}).items():
+            if isinstance(value, (list, tuple)) and (len(value) != len(MODE_NAMES) or any(not math.isfinite(v) for v in value)):
+                raise ValueError(f"reward scale {name} must contain {len(MODE_NAMES)} finite values")
     for key in (
         "clearance_targets_m",
         "min_forward_speeds_m_s",
@@ -289,16 +285,14 @@ def validate_configs(env_cfg, curriculum_cfg=None):
         "ground_success_base_height_m",
     ):
         values = cfg[key]
-        if len(values) != 3 or any(not math.isfinite(v) or v < 0 for v in values):
-            raise ValueError(f"jump_modes.{key} must contain three finite non-negative values")
+        if len(values) != len(MODE_NAMES) or any(not math.isfinite(v) or v < 0 for v in values):
+            raise ValueError(f"jump_modes.{key} must contain {len(MODE_NAMES)} finite non-negative values")
     if any(c <= h for c, h in zip(cfg["clearance_targets_m"], MODE_HEIGHTS)):
-        raise ValueError("clearance targets must exceed the landing surface height, including flat")
-    if any(v <= 0 for v in cfg["min_forward_speeds_m_s"][1:]):
-        raise ValueError("step modes require a positive approach speed")
+        raise ValueError("clearance targets must exceed the landing surface height")
+    if any(v <= 0 for v in cfg["min_forward_speeds_m_s"]):
+        raise ValueError("jump modes require a positive approach speed")
     if cfg["assignment"] not in ("random", "cyclic"):
         raise ValueError("jump_modes.assignment must be random or cyclic")
-    if not 0 <= cfg["flat_stationary_probability"] <= 1:
-        raise ValueError("flat_stationary_probability must be in [0, 1]")
     for key in (
         "platform_length_m",
         "platform_width_m",
@@ -318,8 +312,8 @@ def validate_configs(env_cfg, curriculum_cfg=None):
     jitter = cfg["distance_jitter_m"]
     if not math.isfinite(jitter) or jitter < 0:
         raise ValueError("distance_jitter_m must be finite and non-negative")
-    if len(cfg["distance_tables"]) != 3 or len(cfg["height_references"]) != 3:
-        raise ValueError("provide one distance table and height reference per mode")
+    if len(cfg["distance_tables"]) != len(MODE_NAMES):
+        raise ValueError("provide one distance table per mode")
     for mode, table in enumerate(cfg["distance_tables"]):
         if len(table) < 2 or any(len(point) != 2 for point in table):
             raise ValueError("distance tables need at least two [speed, distance] points")
@@ -328,6 +322,5 @@ def validate_configs(env_cfg, curriculum_cfg=None):
             raise ValueError("distance table values must be finite and non-negative")
         if any(b <= a for a, b in zip(speeds, speeds[1:])):
             raise ValueError("distance table speeds must strictly increase")
-        if mode and min(distances) <= jitter:
+        if min(distances) <= jitter:
             raise ValueError("step trigger distances must remain positive after jitter")
-        validate_height_reference(cfg["height_references"][mode], env_cfg["episode_length_s"])

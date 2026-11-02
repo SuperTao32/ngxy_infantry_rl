@@ -3,9 +3,10 @@
 import argparse
 from copy import deepcopy
 from pathlib import Path
+import sys
 
 from .config import env_kwargs, get_cfgs, select_tasks
-from .tools.distributed import training_workers
+from .tools.distributed import launch_training, training_workers
 from .robust.randomization_config import add_randomization_arguments, apply_randomization_arguments
 from .tasks.manager import TASK_NAMES, initial_task_counts
 from .tools.run_utils import (
@@ -19,9 +20,14 @@ from .tools.run_utils import (
 
 
 def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
     parser = argparse.ArgumentParser(description="Train one recurrent policy on all infantry tasks")
     parser.add_argument("-e", "--exp-name", "--exp_name", default="wheel_leg_infantry")
-    parser.add_argument("-B", "--num-envs", "--num_envs", type=int, default=8192)
+    parser.add_argument("-B", "--num-envs", "--num_envs", type=int, default=8192, help="number of environments per GPU (default: 8192)")
+    parser.add_argument(
+        "--num-gpus", "--num_gpus", type=int, metavar="N",
+        help="launch N GPU workers, e.g. 2 for dual-GPU training (default: 1, or torchrun worker count)",
+    )
     parser.add_argument("--max-iterations", "--max_iterations", type=int, default=10000)
     parser.add_argument("--tasks", nargs="+", choices=TASK_NAMES)
     parser.add_argument("--task-weights", nargs="+", metavar="NAME=WEIGHT", help="initial task weights; zero pauses a task")
@@ -42,6 +48,8 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.num_envs < 1 or args.max_iterations < 1:
         parser.error("--num-envs and --max-iterations must be positive")
+    if args.num_gpus is not None and args.num_gpus < 1:
+        parser.error("--num-gpus must be positive")
     if args.load_weight is not None:
         if args.resume is not None:
             parser.error("--load-weight and --resume are mutually exclusive")
@@ -52,6 +60,11 @@ def main(argv=None):
         parser.error("--checkpoint and --resume-config require --resume")
     if args.resume is not None and args.resume_config == "saved" and (args.tasks or args.task_weights):
         parser.error("--tasks and --task-weights require --resume-config current when resuming")
+    try:
+        if launch_training(args.num_gpus, argv, cpu=args.cpu):
+            return
+    except ValueError as exc:
+        parser.error(str(exc))
     with training_workers() as workers:
         if args.cpu and workers.distributed:
             parser.error("Distributed training requires GPUs")
@@ -116,14 +129,17 @@ def _train(args, parser, workers):
     apply_randomization_arguments(configs["env_cfg"], configs["obs_cfg"], args)
     run_dir = workers.primary(create_versioned_run_dir, args.log_root, args.exp_name)
     configs["train_cfg"]["run_name"] = f"{args.exp_name}/{run_dir.name}"
-    arguments = {**vars(args), **workers.metadata(args.num_envs, args.seed)}
+    arguments = {**vars(args), "num_gpus": workers.world_size, **workers.metadata(args.num_envs, args.seed)}
     if plan:
         arguments["resume_from"] = str(plan.checkpoint_path.resolve())
     if args.load_weight is not None:
         arguments["load_weight_from"] = str(args.load_weight)
     workers.primary(save_run_artifacts, run_dir, configs, arguments)
-    print(f"[train] one GRU policy; tasks={dict(zip(tasks, counts))}; run={run_dir}")
+    if workers.rank == 0:
+        print(f"[train] one GRU policy; GPUs={workers.world_size}; envs/GPU={args.num_envs}; "
+              f"total_envs={args.num_envs * workers.world_size}; tasks/GPU={dict(zip(tasks, counts))}; run={run_dir}")
     gs.init(backend=gs.cpu if args.cpu else gs.gpu, precision="32", logging_level="warning", seed=args.seed + workers.rank, performance_mode=True)
+    completed = False
     try:
         env = WheelLegInfantryEnv(
             args.num_envs,
@@ -148,8 +164,14 @@ def _train(args, parser, workers):
             )
             print(f"[load-weight] checkpoint={args.load_weight}; iteration=0; optimizer and task curricula start fresh")
         runner.learn(num_learning_iterations=remaining, init_at_random_ep_len=False)
+        completed = True
     finally:
-        gs.destroy()
+        # Genesis may spend time caching kernels and resetting Quadrants/CUDA.
+        # NCCL must be gone first, including on Ctrl+C and torchrun SIGTERM.
+        try:
+            workers.close(synchronize=completed)
+        finally:
+            gs.destroy()
 
 
 if __name__ == "__main__":

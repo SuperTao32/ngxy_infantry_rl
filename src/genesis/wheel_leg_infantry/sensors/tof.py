@@ -190,6 +190,7 @@ class GenesisToF:
             for sensor in cfg["sensors"]
         ]
         self._reset_raw = None
+        self._reset_caster = None
 
     def reset(self, env_ids=None, *, strength=1.0):
         if self.randomization is None:
@@ -236,9 +237,37 @@ class GenesisToF:
             self._mount_raw[sensor._cache_offset:sensor._cache_offset + 1].T for sensor in self.sensors
         ], dim=-1)
 
-    def read_ground_truth(self, *, after_reset=False, env_ids=None):
+    def read_ground_truth(self, *, after_reset=False, env_ids=None, refresh_context=True):
         """标称安装位姿的无噪声测距，绕过安装误差、偏置和白噪声。"""
-        return self.read(after_reset=after_reset, env_ids=env_ids, ground_truth=True)
+        return self.read(after_reset=after_reset, env_ids=env_ids, ground_truth=True, refresh_context=refresh_context)
+
+    def _read_reset_subset(self, env_ids, *, ground_truth):
+        from genesis.utils.geom import transform_by_quat, transform_quat_by_quat
+        from .reset_raycast import ResetRaycaster
+
+        if self._reset_caster is None:
+            self._reset_caster = ResetRaycaster(self.sensors[0]._shared_context, self.cfg["max_range_m"])
+        caster = self._reset_caster
+        if not caster.supported:
+            return None
+        if env_ids is None:
+            env_ids = torch.arange(caster.num_envs, device=self.robot.get_pos().device)
+        elif env_ids.dtype == torch.bool:
+            env_ids = env_ids.nonzero(as_tuple=True)[0]
+        if len(env_ids) > min(512, max(1, caster.num_envs // 4)) and caster.warmed:
+            return None
+        pos = self._link.get_pos(envs_idx=env_ids, relative=False)[:, None, :]
+        quat = self._link.get_quat(envs_idx=env_ids, relative=False)[:, None, :].expand(-1, len(self.sensors), -1)
+        local_pos = pos.new_tensor([sensor["pos_offset"] for sensor in self.cfg["sensors"]])[None]
+        if not ground_truth and self.randomization is not None:
+            local_pos = local_pos + self.randomization.position[env_ids]
+        origins = pos + transform_by_quat(local_pos.expand(len(env_ids), -1, -1), quat)
+        if not ground_truth and self.randomization is not None and self.randomization.mount_active:
+            quat = transform_quat_by_quat(self.randomization.rotation_quat[env_ids], quat)
+        local_dirs = pos.new_tensor([tof_direction(sensor) for sensor in self.cfg["sensors"]])[None]
+        directions = transform_by_quat(local_dirs.expand(len(env_ids), -1, -1), quat)
+        directions = directions / directions.norm(dim=-1, keepdim=True).clamp_min(1e-12)
+        return caster.cast(env_ids, origins.contiguous(), directions.contiguous())
 
     def _apply_terrain_occlusion(self, distances, env_ids=None, *, ground_truth=False):
         """起点贴地/入地表示近距离遮挡，不能把向外穿出地形或无交点解释为空旷。"""
@@ -256,9 +285,22 @@ class GenesisToF:
         # 在噪声处理后覆盖，避免遮挡通道又被白噪声/偏置变成非零距离。
         return torch.where(blocked, self.cfg["min_range_m"], distances)
 
-    def read(self, *, after_reset=False, env_ids=None, strength=1.0, ground_truth=False):
+    def read(self, *, after_reset=False, env_ids=None, strength=1.0, ground_truth=False, refresh_context=True):
+        """Read distances, querying only selected envs for sparse resets.
+
+        On the full-BVH fallback, set refresh_context=False only after another
+        reset read at the same poses. Mounts remain specific to each query.
+        """
+        if after_reset:
+            distances = self._read_reset_subset(env_ids, ground_truth=ground_truth)
+            if distances is not None:
+                if not ground_truth and self.randomization is not None:
+                    measured = self.randomization.measure(distances, self.cfg, env_ids, strength=strength)
+                else:
+                    measured = sanitize_tof_distances(distances, self.cfg)
+                return self._apply_terrain_occlusion(measured, env_ids, ground_truth=ground_truth)
         if not ground_truth and self.randomization is not None and self.randomization.mount_active:
-            distances = self._read_randomized_mounts(after_reset=after_reset)
+            distances = self._read_randomized_mounts(after_reset=after_reset and refresh_context)
         elif after_reset:
             # Genesis 的 read() 只读取 eager cache；set_qpos 不刷新传感器。
             # 当前 Genesis 没有公开的即时刷新接口。只重新调用 Raycaster 几何
@@ -271,7 +313,8 @@ class GenesisToF:
                     (metadata.total_cache_size, pos.shape[0]), device=pos.device, dtype=pos.dtype,
                 )
             # 调用方用 skip_forward=False 设置复位姿态，确保 links/geoms 已更新。
-            first._shared_context.update()
+            if refresh_context:
+                first._shared_context.update()
             type(first)._update_raw_data(first._shared_context, metadata, self._reset_raw)
             distances = torch.cat([
                 self._reset_raw[sensor._cache_offset:sensor._cache_offset + 1].T
