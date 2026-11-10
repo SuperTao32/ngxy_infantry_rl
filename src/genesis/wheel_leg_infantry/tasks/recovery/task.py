@@ -71,16 +71,17 @@ class RecoveryTask(RecoveryRewards, Task):
 
     def _resample_commands(self, mask):
         super()._resample_commands(mask)
-        self.stand_up.enforce_commands(self.commands)
+        self.stand_up.enforce_commands(self.commands, mask=self.mask)
 
     def _update_task_state(self):
         if self.reset_sampler is not None:
             self.reset_sampler.update_landing(self.wheel_contact, self.base_contact)
         self.stand_up.update(self)
-        self.stand_up.enforce_commands(self.commands)
+        self.stand_up.enforce_commands(self.commands, mask=self.mask)
 
     def _task_success(self):
-        return self.stand_up.just_completed
+        # 站稳事件只发奖励，回合到时才以成功终局结束，留出时间学习保持静止。
+        return ~self.stand_up.active & self._episode_timeout()
 
     def episode_metrics(self, mask):
         success = ~self.stand_up.active

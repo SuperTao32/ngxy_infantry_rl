@@ -11,7 +11,7 @@ from ..tasks.manager import TaskManager
 from ..tasks.recovery.buffers import RecoveryBuffers
 from ..tasks.jump.config import MODE_NAMES, validate_configs as validate_jump_configs
 from ..tasks.jump.height_reference import resolve_height_reference, resolve_retract_duration, sample_height_reference
-from ..tasks.jump.phase import PHASE_ENCODING_DIM, phase_encoding, validate_phase_durations
+from ..tasks.jump.phase import PHASE_ENCODING_DIM, phase_encoding, resolve_input_durations, validate_phase_durations
 from ..utils.reset import ensure_reset_clearance
 
 
@@ -63,9 +63,8 @@ class InteractiveEnv(WheelLegInfantryEnv):
         validate_jump_configs(jump_cfg, self.control_configs["jump"].get("curriculum_cfg"))
         durations = validate_phase_durations(jump_cfg["jump_phase_durations_s"])
         self.jump_cycle_s = sum(durations)
-        self.jump_horizon = math.ceil(self.jump_cycle_s / self.dt)
-        self.jump_phase_duration_s = sum(durations[:2])
-        self.jump_phase_horizon = math.ceil(self.jump_phase_duration_s / self.dt - 1e-9)
+        self.jump_input_durations_s = resolve_input_durations(jump_cfg)
+        self._select_jump_timing()
         self.jump_takeoff_s, self.jump_flight_s = durations[:2]
         self.height_reference_min_m, self.height_reference_max_m = resolve_height_reference(jump_cfg)
         self.retract_duration_s = resolve_retract_duration(jump_cfg)
@@ -84,10 +83,16 @@ class InteractiveEnv(WheelLegInfantryEnv):
         self.return_to_drive()
         self.control_mode = "jump"
         self.jump_mode = mode
+        self._select_jump_timing()
         self.jump_steps = 0
         self.jump_velocity = self.drive_command[0]
         self._write_commands()
         print(f"[eval] jump: {MODE_NAMES[mode]}")
+
+    def _select_jump_timing(self):
+        self.jump_phase_duration_s = self.jump_input_durations_s[self.jump_mode]
+        self.jump_phase_horizon = math.ceil(self.jump_phase_duration_s / self.dt - 1e-9)
+        self.jump_horizon = math.ceil(max(self.jump_cycle_s, self.jump_phase_duration_s) / self.dt - 1e-9)
 
     def request_recovery(self, reset_cfg=None):
         """随机（或显式指定）复位姿态后起身；调用方须同步重置策略历史。"""

@@ -31,9 +31,11 @@ class RecoveryBuffers:
         self.stable_steps[selected] = 0
         self.elapsed_steps[selected] = 0
 
-    def enforce_commands(self, commands):
-        commands[self.active, :2] = 0.0
-        commands[self.active, 2] = self.config["height"]
+    def enforce_commands(self, commands, mask=None):
+        # 训练任务传入完整任务 mask，起身完成后继续保持静止；交互控制默认只约束起身期间。
+        selected = self.active if mask is None else mask
+        commands[selected, :2] = 0.0
+        commands[selected, 2] = self.config["height"]
 
     def update(self, env):
         """成功必须连续满足姿态、接触和速度条件，每回合只触发一次。"""

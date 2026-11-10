@@ -1,4 +1,4 @@
-"""同一策略先在空旷跑道加速，达速后保留物理状态平移到起跳位置。"""
+"""同一策略准备跳跃；台阶要求达速，平地只确认站稳后切入跳跃。"""
 
 import math
 
@@ -26,11 +26,15 @@ class JumpApproach:
     def _update_approach_state(self):
         cfg = self.approach_cfg
         approaching = self.mask & ~self.jump_active
-        ready = (
-            approaching
-            & ((self.base_lin_vel[:, 0] - self.commands[:, 0]).abs() <= cfg["speed_tolerance_m_s"])
+        # 平地没有助跑速度门槛；台阶仍须前向达速并抑制侧向/竖向速度。
+        speed_ready = (
+            ((self.base_lin_vel[:, 0] - self.commands[:, 0]).abs() <= cfg["speed_tolerance_m_s"])
             & (self.base_lin_vel[:, 1].abs() <= cfg["lateral_speed_tolerance_m_s"])
             & (self.robot.get_vel()[:, 2].abs() <= cfg["vertical_speed_tolerance_m_s"])
+        )
+        ready = (
+            approaching
+            & ((self.landing_surface_height <= 0.0) | speed_ready)
             & ((self.base_height - self.commands[:, 2]).abs() <= cfg["height_tolerance_m"])
             & (-self.projected_gravity[:, 2] >= math.cos(math.radians(cfg["max_tilt_deg"])))
             & (self.base_euler[:, 2].abs() <= cfg["max_yaw_deg"])
@@ -51,8 +55,13 @@ class JumpApproach:
     def _start_jump(self, mask):
         ids = mask.nonzero(as_tuple=False).flatten()
         modes = self.jump_mode[ids]
-        distance = trigger_distance(self.commands[ids, 0], modes, self.task_cfg["distance_tables"])
-        distance += (torch.rand_like(distance) * 2 - 1) * self.task_cfg["distance_jitter_m"]
+        step = self.landing_surface_height[ids] > 0.0
+        # 平地起跳点不依赖速度或距离表，零速、反向和表外速度都可起跳。
+        distance = torch.zeros_like(self.commands[ids, 0])
+        if step.any():
+            step_distance = trigger_distance(self.commands[ids[step], 0], modes[step], self.task_cfg["distance_tables"])
+            step_distance += (torch.rand_like(step_distance) * 2 - 1) * self.task_cfg["distance_jitter_m"]
+            distance[step] = step_distance
         positions = self.base_pos[ids].clone()
         positions[:, 0] = -distance
         positions[:, 1] = jump_lane_y(self.terrain_tile_index[ids], self.task_cfg)

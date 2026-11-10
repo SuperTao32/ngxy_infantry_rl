@@ -335,6 +335,7 @@ class WheelLegInfantryEnv(TaskConfiguration):
             device=self.device,
         )
         self.base_link_idx = self.robot.get_link(base_link_name).idx_local
+        self.body_contact_links_idx = self._body_contact_link_indices()
 
         # PD 参数
         self.robot.set_dofs_kp(self.joint_kp.tolist(), self.joints_dof_idx)
@@ -438,6 +439,7 @@ class WheelLegInfantryEnv(TaskConfiguration):
         self.wheel_contact = torch.zeros((self.num_envs, 2), dtype=gs.tc_float, device=gs.device)
         self.wheel_normal_force = torch.zeros((self.num_envs, 2, 3), dtype=gs.tc_float, device=gs.device)
         self.wheel_tangential_force = torch.zeros_like(self.wheel_normal_force)
+        # 保留 base_contact 名称供奖励、门控、终止和旧配置使用，判定涵盖基座与腿部。
         self.base_contact = torch.zeros((self.num_envs,), dtype=gs.tc_float, device=gs.device)
         self.base_contact_regions = BaseContactRegions(
             self.robot.get_link(base_link_name), self.num_envs,
@@ -1049,17 +1051,27 @@ class WheelLegInfantryEnv(TaskConfiguration):
             self.wheel_tangential_force[:, side] = transform_by_quat(
                 torch.where(valid[..., None], tangential_force, 0.0).sum(dim=1), base_quat_inv)
 
+    def _body_contact_link_indices(self):
+        """基座与双腿共用碰撞惩罚/终止；轮子和云台不属于腿部。"""
+        leg_prefixes = tuple(f"{side}_{part}" for side in ("left", "right") for part in ("front", "rear", "spring"))
+        return torch.tensor(
+            [link.idx_local for link in self.robot.links
+             if link.idx_local == self.base_link_idx or link.name.startswith(leg_prefixes)],
+            dtype=gs.tc_int,
+            device=self.device,
+        )
+
     def _update_wheel_contact(self):
-        """更新轮子/基座接触和存活门控。"""
+        """更新轮子、基座/腿部接触和存活门控。"""
         all_contact_forces = self.robot.get_links_net_contact_force()
         contact_forces = all_contact_forces[:, self.wheel_links_idx, :]
         self.wheel_contact.copy_((torch.linalg.vector_norm(contact_forces, dim=-1) > self.wheel_contact_force_threshold).to(dtype=gs.tc_float))
         contacts = self.robot.get_contacts(exclude_self_contact=True)
         self._update_wheel_contact_forces(contacts)
         self.base_contact_regions.update(contacts, self.base_pos, self.base_quat)
-        base_contact_force = torch.linalg.vector_norm(all_contact_forces[:, self.base_link_idx, :], dim=-1)
-        self.base_contact.copy_((base_contact_force > self.base_contact_force_threshold).to(dtype=gs.tc_float))
-        # 存活奖励只要求机身不接地；轮子离地由 wheel_airborne 单独约束。
+        body_contact_forces = torch.linalg.vector_norm(all_contact_forces[:, self.body_contact_links_idx, :], dim=-1)
+        self.base_contact.copy_((body_contact_forces > self.base_contact_force_threshold).any(dim=1).to(dtype=gs.tc_float))
+        # 任一基座/腿部 link 碰撞都会关闭存活奖励；轮子离地由 wheel_airborne 单独约束。
         self.alive_gate.copy_((self.base_contact < 0.5).to(dtype=gs.tc_float))
 
     def _apply_sensor_noise(self, values):

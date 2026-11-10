@@ -20,9 +20,17 @@ class RecoveryRewards:
 
     def _reward_death(self):
         # reset_buf 已包含本拍超时；extras["time_outs"] 在计算奖励后才更新。
-        # 成功免罚，成功与物理失败同拍时仍按失败处理；并发原因只扣一次。
-        failed = self.terminated_buf | (self.reset_buf & ~self._task_success())
+        # 已完成起身的超时/截断免罚；保持静止期间物理失败仍扣一次。
+        failed = self.terminated_buf | (self.reset_buf & self.stand_up.active)
         return failed.to(self.reward_buf.dtype)
+
+    def _reward_standing_drift(self):
+        """完成起身后持续约束水平漂移，起身阶段不额外惩罚。"""
+        return super()._reward_standing_drift() * ~self.stand_up.active
+
+    def _reward_standing_still(self):
+        """完成起身后逐拍发放指数静止正奖励，起身阶段为零。"""
+        return torch.where(~self.stand_up.active, super()._reward_standing_still(), 0.0)
 
     def _reward_wheel_airborne(self):
         penalty = super()._reward_wheel_airborne()

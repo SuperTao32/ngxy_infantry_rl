@@ -3,20 +3,27 @@
 import torch
 
 
-def active_step_heights(cfg):
-    """任务编码保持不变；未启用台阶的通道按平地处理。"""
-    enabled = cfg.get("platform_enabled", [True] * len(cfg["step_heights_m"]))
-    return [height if active else 0.0 for height, active in zip(cfg["step_heights_m"], enabled)]
+def terrain_variants(cfg):
+    """保留前四个平地/最终台阶索引，随后添加各模式的低难度通道。"""
+    variants = [(mode, height) for mode, top in enumerate(cfg["step_heights_m"]) for height in (0.0, top)]
+    for mode, heights in enumerate(cfg.get("platform_height_levels_m", [])):
+        variants.extend((mode, height) for height in heights[:-1])
+    return variants
+
+
+def terrain_tile_modes(cfg):
+    return [mode for mode, _ in terrain_variants(cfg)]
 
 
 def terrain_tile_heights(cfg):
-    """每个高度模式分配平地/台阶两条通道，tile = 2 * mode + has_platform。"""
-    return [height for platform in active_step_heights(cfg) for height in (0.0, platform)]
+    """所有固定通道的实际高度；关闭某模式时该模式的全部台阶移至地下。"""
+    enabled = cfg.get("platform_enabled", [True] * len(cfg["step_heights_m"]))
+    return [height if enabled[mode] else 0.0 for mode, height in terrain_variants(cfg)]
 
 
 def jump_lane_y(tile_index, cfg):
-    """四条通道以任务区域中心对称排列，避免扩大场地或侵入其他任务区域。"""
-    return (tile_index - (2 * len(cfg["mode_names"]) - 1) / 2) * cfg["lane_spacing_m"]
+    """各高度通道以任务区域中心对称排列。"""
+    return (tile_index - (len(terrain_variants(cfg)) - 1) / 2) * cfg["lane_spacing_m"]
 
 
 def trigger_distance(speed, mode, tables):

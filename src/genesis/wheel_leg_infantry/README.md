@@ -67,7 +67,7 @@ uv run --locked python -m src.genesis.wheel_leg_infantry.eval \
 | Backspace | 显式复位机器人到场地出生位置，并清空 GRU |
 | Enter | 相机对准机器人 |
 
-跳跃沿用保存配置的模式 one-hot、四维时间编码和目标 base 到轮底距离轨迹；相位以 takeoff + flight 的总时长归一化，进入计划 landing 时四维归零。电机参数始终来自共享根配置；按键只启动控制信号，不改机器人位置或实际速度。跳跃计时结束后恢复普通命令；起身期间保持零速度与起身高度，方向/高度按键暂时锁定。跳跃及起身完成后继续运行，保留连续的策略历史。倒地、接触、动作完成、回合时长和地形边界均不会自动复位；R 和 Backspace 会显式复位机器人、传感器、动作与 GRU，数值求解器报错则停止仿真。
+跳跃沿用保存配置的模式 one-hot、四维时间编码和目标 base 到轮底距离轨迹；相位以当前高度模式的 `jump_input_duration_s[mode]` 归一化，模式和相位在该输入窗口结束时同时归零。跳跃控制总时长取阶段总时长与该模式输入时长的较大值，每次跳跃重新按模式选择。电机参数始终来自共享根配置；按键只启动控制信号，不改机器人位置或实际速度。跳跃计时结束后恢复普通命令；起身期间保持零速度与起身高度，方向/高度按键暂时锁定。跳跃及起身完成后继续运行，保留连续的策略历史。倒地、接触、动作完成、回合时长和地形边界均不会自动复位；R 和 Backspace 会显式复位机器人、传感器、动作与 GRU，数值求解器报错则停止仿真。
 
 R 的姿态池由 `tasks/recovery/config.py::get_recovery_reset_cfgs()` 提供，默认通过已有的 `get_reset_pose_cfg()` 解析 `reset_pos.json`。新增姿态时将快照路径追加到 `RECOVERY_RESET_POSES` 即可，也可使用 `"default"` 站立姿态。eval 每次按 R 等概率随机选择一个配置（可能重复，受 `--seed` 控制），共用完整环境 reset 路径并适配当前地形高度；Backspace 仍使用正常站立出生配置。仿真不直接读取姿态文件；也可向 `InteractiveEnv` 注入其他来源的数值姿态配置列表。
 
@@ -174,6 +174,8 @@ TensorBoard 以 `locomotion/`、`recovery/`、`jump/`、`multi_terrain/` 为独�
 
 逐步诊断由任务的 `EPISODE_METRICS` 声明：locomotion 和 multi_terrain 记录高度、姿态、速度跟踪 gate 与机身接触率；recovery 记录高度/姿态 gate、接触率、起身成功率和起身用时；jump 记录接触率、成功率、机身峰值高度和轮子峰值离地高度，不输出恒为 1 的 gate。`alive_gate` 与接触率互补，不重复记录。multi_terrain 的地形子任务统计也只在对应子任务有回合结束时输出。
 
+基座和双腿各 link（前/后连杆及弹簧，不含轮子、云台）的碰撞统一计入 `base_contact`，沿用已有奖励权重和课程。任一 link 的净接触力模长严格超过 `base_contact_force_threshold` 即判接触，每个控制拍只计一次并关闭 `alive_gate`；连续接触达到各任务的 `base_contact_termination_duration_s` 后终止，完全脱离接触时清零计时，配置为 `None` 时不因碰撞终止。critic 的基座底/前/后分区接触观测仍只统计基座。
+
 ## 网络与观测
 
 网络参照 `experiments/beni_rl/rl_cfg.py`：actor 与 critic 都使用观测归一化 → GRU（512 hidden、1 层）→ MLP（512/256/128、ELU）。actor 使用 GaussianDistribution，初始标准差 1.0；PPO 默认学习率 1e-3、rollout 长度 24。
@@ -182,10 +184,10 @@ TensorBoard 以 `locomotion/`、`recovery/`、`jump/`、`multi_terrain/` 为独�
 
 actor 包含 IMU、重力方向、关节/轮测量、6D actions、五维命令、ToF 与四维跳跃阶段编码。命令依次为缩放后的前向速度、偏航速度、高度目标，以及未缩放的两维 jump 模式 one-hot：`JUMP_20=[1,0]`、`JUMP_40=[0,1]`；非 jump 环境的模式为零。critic 再追加速度、接触等仿真真值，以及 baselink 原点的世界坐标 z（不扣除地形高度）。默认 ToF 配置下 actor 为 48D、critic 为 72D；选择任务子集不会改变网络输入维度。原三模式或六维相位 checkpoint 的观测归一化与 GRU 输入层尺寸不同，不能直接续训、加载权重或交互评估，需要重新训练或显式迁移模型。
 
-四维相位为 `[sin(πp), cos(πp), sin(πp/2), cos(πp/2)]`，其中 `p = t / (takeoff + flight)`；模式 one-hot 与相位仅在 `0 ≤ t < takeoff + flight` 输出，计划 landing、助跑及非 jump 任务中两者均为零。默认 takeoff=0.20 s、flight=0.40 s，因此模式 one-hot 与相位在 0.60 s 同时归零；landing 仍持续配置的 0.50 s，完整跳跃回合仍为 1.10 s。任务内部模式编号、落地奖励与 PPO 样本采集继续保留。训练与交互评估使用同一截止时间，并以整数控制步处理 landing 边界。
+四维相位为 `[sin(πp), cos(πp), sin(πp/2), cos(πp/2)]`，其中 `p = t / jump_input_duration_s[mode]`；模式 one-hot 与相位在该窗口内输出，助跑及非 jump 任务中两者均为零。`tasks/jump/config.py::get_cfgs()` 的 `jump_input_duration_s=[0.80, 1.10]` 按 `JUMP_20` / `JUMP_40` 顺序独立配置输入时长，同一高度的平地和台阶共用；`jump_phase_durations_s=durations` 配置阶段时长。每个模式的回合超时取阶段总时长与该模式输入时长的较大值，成功终止最早在对应输入结束后发生；成功奖励仍可在达标时结算，过倾、碰撞、越界等仍可提前终止。训练与交互评估使用同一模式对应的截止时间，并以整数控制步处理边界。旧标量值兼容两种模式共用，缺少字段时沿用阶段总时长。
 
 `JUMP_20` / `JUMP_40` 仅表示跳高，平地与台阶另外采样，不增加独热编码维度。`jump_modes.platform_probabilities` 按两个高度分别配置台阶采样概率，默认 `[0.5, 0.5]`；课程开放台阶后，两种高度都可在平地和台阶上训练。四种高度/地形组合使用独立通道，落台判定按该回合的实际地形计算。
 
-跳跃的 base 到轮底距离参考由 `tasks/jump/config.py::get_cfgs()` 的 `jump_height_reference` 统一配置：`min_distance_m=0.22`、`max_distance_m=0.38`、`retract_duration_s=0.20`。两种模式共用上下限；takeoff 期间从低到高五次平滑伸腿，随后按独立的 `retract_duration_s` 从高到低平滑收腿，完成后保持最低。收腿时长与 flight 独立，相位和模式 one-hot 仍在 takeoff + flight 结束时归零，无需配置各模式的时间/距离节点。
+跳跃的 base 到轮底距离参考由 `tasks/jump/config.py::get_cfgs()` 的 `jump_height_reference` 统一配置：`min_distance_m=0.22`、`max_distance_m=0.38`、`retract_duration_s=0.20`。两种模式共用上下限；takeoff 期间从低到高五次平滑伸腿，随后按独立的 `retract_duration_s` 从高到低平滑收腿，完成后保持最低。收腿时长与 flight、`jump_input_duration_s` 独立，相位和模式 one-hot 在输入窗口结束时归零，无需配置各模式的时间/距离节点。
 
 jump 从空旷跑道静止出生，使用同一策略推理加速；连续达速并站稳后保留物理状态移到指定起跳距离，再发送跳跃编码并开始独立计时。助跑不发奖励、不参与 PPO 更新；跳跃编码更新后产生的轨迹进入 PPO，GRU 保留切换时的隐状态，训练不回放助跑过程。加速容差/超时、起跳距离表、恢复姿态、各任务比例与奖励在对应配置中调整。

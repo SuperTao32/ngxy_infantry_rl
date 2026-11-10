@@ -265,7 +265,7 @@ class TaskConfiguration:
             self.env_cfg[name] = [list(axis_limits) for axis_limits in limits]
 
     def _base_contact_failure(self):
-        """子任务可豁免合法的机身支撑接触。"""
+        """基座或腿部碰撞；子任务可豁免合法的支撑接触。"""
         return self.base_contact > 0.5
 
     def _tilt_failure(self):

@@ -4,6 +4,8 @@
 mixin 后，环境文件可以专注于仿真状态、动作和 reset 数据流。
 """
 
+import math
+
 import torch
 
 
@@ -45,6 +47,19 @@ class CommonRewards:
         )
         return self._standing_command_mask() * excess_speed.sum(dim=1)
 
+    def _reward_standing_still(self):
+        """静止命令下严格趋近零水平速度和零偏航速度，无速度死区。"""
+        lin_scale = float(self.reward_cfg.get("standing_still_lin_vel_scale", 0.02))
+        ang_scale = float(self.reward_cfg.get("standing_still_ang_vel_scale", 0.05))
+        for name, value in (("lin_vel_scale", lin_scale), ("ang_vel_scale", ang_scale)):
+            if not math.isfinite(value) or value <= 0.0:
+                raise ValueError(f"standing_still_{name} must be finite and positive")
+        linear_error = (self.base_lin_vel[:, :2] / lin_scale).square().sum(dim=1)
+        angular_error = (self.base_ang_vel[:, 2] / ang_scale).square()
+        # 用不带保底值的高度/姿态门，静止但未站稳时不发放满额奖励。
+        reward = self.tracking_gate_raw * torch.exp(-linear_error - angular_error)
+        return torch.where(self._standing_command_mask(), reward, 0.0)
+
     def _reward_base_balance(self):
         return torch.sum(torch.square(self.projected_gravity[:, :2]), dim=1)
 
@@ -83,6 +98,7 @@ class CommonRewards:
         return torch.sum(1.0 - self.wheel_contact, dim=1)
 
     def _reward_base_contact(self):
+        """基座或任一腿部 link 碰撞时逐拍惩罚，多 link 同时接触只计一次。"""
         return self.base_contact
 
     def _reward_alive(self):

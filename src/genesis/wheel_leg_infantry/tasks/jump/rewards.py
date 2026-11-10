@@ -1,11 +1,18 @@
 """按起跳、腾空和落地分阶段门控的跳跃奖励。"""
 
+import math
+
 import torch
 
 from .geometry import target_wheel_support
 
 
 class JumpRewards:
+    def _landing_height_reached(self):
+        """仅认可首次合格腾空的目标高度，落地站高不能补足资格。"""
+        state = self.jump_reward_state
+        return state.takeoff_rewarded & (state.peak_clearance >= self.base_height_target)
+
     def _jump_tilt_error(self):
         # 正立 gz=-1，倒立 gz=+1；小角度下约等于倾角平方。
         return 2.0 * torch.clamp(1.0 + self.projected_gravity[:, 2], 0.0, 2.0)
@@ -17,7 +24,12 @@ class JumpRewards:
         return self.jump_invalid
 
     def _reward_landing_airborne(self):
+        """首次触地后，单轮支撑和双轮离地均持续惩罚。"""
         return self.landing_airborne_gate
+
+    def _reward_airborne_wheel_vel(self):
+        """逐轮惩罚实际离地后的关节角速度平方，接地轮不参与。"""
+        return torch.where(self.wheel_airborne, self.wheel_vel.square(), 0.0).sum(dim=1)
 
     def _reward_base_to_wheel_bottom_distance_tracking(self):
         """落地双轮有效支撑时跟踪 base 到轮底的距离参考。"""
@@ -26,10 +38,29 @@ class JumpRewards:
             - self.reward_cfg["height_reference_tolerance_m"],
             min=0.0,
         )
-        return self.jump_landing_gate * torch.exp(-torch.square(error) / self.reward_cfg["height_reference_sigma"])
+        return (self.jump_landing_gate * self._landing_height_reached()
+                * torch.exp(-torch.square(error) / self.reward_cfg["height_reference_sigma"]))
+
+    def _reward_landing_base_height_tracking(self):
+        """首次触地后留出配置的缓冲时间，再奖励 base_link 高度追踪。"""
+        # 实测高度沿用起跳平地的世界 z 基准；落地站姿目标随台面抬高。
+        # 该目标用于落地站姿跟踪，不改变跳高成绩、缺高或失败惩罚的目标。
+        target = self.landing_surface_height + self.commands[:, 2]
+        error = (
+            (self.jump_base_height - target).abs() - self.reward_cfg["height_reference_tolerance_m"]
+        ).clamp_min(0.0)
+        quality = torch.exp(-error.square() / self.reward_cfg["height_reference_sigma"])
+        support = target_wheel_support(
+            self.wheel_center_pos, self.wheel_contact, self.terrain_tile_index, self.task_cfg, self.wheel_radius, margin=0.0,
+        ).to(quality.dtype).mean(dim=1)
+        # 缓冲结束后，单轮支撑给半额、双轮给满额；反弹、机身撑地和无效跳跃不发奖励。
+        ready = self.jump_steps - self.landing_step >= self.landing_base_height_tracking_delay_steps
+        valid = (self.has_landed & ready & self._landing_height_reached()
+                 & (self.base_contact < 0.5) & (self.jump_invalid < 0.5))
+        return torch.where(valid, support * quality, 0.0)
 
     def _reward_tracking_lin_vel(self):
-        """跳跃全程只跟踪前向线速度命令，不约束侧向速度。"""
+        """平地跳和台阶跳全程跟踪指令前向速度。"""
         error = torch.square(self.base_lin_vel[:, 0] - self.commands[:, 0])
         return torch.exp(-error / self.reward_cfg["reference_forward_velocity_sigma"])
 
@@ -49,21 +80,17 @@ class JumpRewards:
         correction = torch.clamp(self.jump_reward_state.revoked_settled_clearance / target, 0.0, 1.0)
         return self.jump_reward_state.height_settlement_event * shortfall + correction
 
-    def _revoked_height_progress(self):
-        return torch.clamp(
-            self.jump_reward_state.revoked_peak_clearance / self.base_height_target, min=0.0
-        )
-
-    def _reward_flight_peak_height(self):
-        """首次双轮腾空按新增峰值给分，超过目标仍线性增长；失稳全额撤回。"""
-        progress = torch.clamp(
-            self.jump_reward_state.peak_clearance / self.base_height_target,
-            min=0.0,
-        )
-        previous = torch.clamp(
-            self.jump_reward_state.previous_peak_clearance / self.base_height_target, min=0.0
-        )
-        return self.flight_gate * torch.clamp(progress - previous, min=0.0) - self._revoked_height_progress()
+    def _reward_flight_height_excess(self):
+        """平地和台阶首次合格腾空只扣新增超高；下降不重复扣罚，失稳不退回已扣部分。"""
+        state = self.jump_reward_state
+        buffer = self.task_cfg.get("ground_base_height_excess_buffer_m", 0.03)
+        excess = torch.zeros_like(state.peak_clearance)
+        for mode, success_height in enumerate(self.task_cfg["ground_success_base_height_m"]):
+            ceiling = success_height + buffer
+            current = (state.peak_clearance - ceiling).clamp_min(0.0)
+            previous = (state.previous_peak_clearance - ceiling).clamp_min(0.0)
+            excess = torch.where(self.jump_mode == mode, (current - previous).clamp_min(0.0), excess)
+        return self.flight_gate * excess / self.base_height_target
 
     def _target_takeoff_velocity(self):
         """按最后一个支撑拍距绝对目标高度的差值计算弹道起跳速度。"""
@@ -76,21 +103,42 @@ class JumpRewards:
         progress = torch.clamp(self.world_vertical_velocity / target, min=-1.0)
         return self.takeoff_gate * progress
 
+    def _reward_takeoff_wheel_push(self):
+        """计划起跳期奖励接触轮向上的法向支撑力，按参考力线性归一化。"""
+        reference = float(self.reward_cfg.get("takeoff_wheel_push_force_reference_n", 200.0))
+        if not math.isfinite(reference) or reference <= 0.0:
+            raise ValueError("takeoff_wheel_push_force_reference_n must be finite and positive")
+        # 力和重力均在机身坐标系；与反重力点积得到世界竖直向上的分量。
+        upward_force = -(self.wheel_normal_force * self.projected_gravity[:, None, :]).sum(dim=-1)
+        support = torch.where(self.wheel_contact > 0.5, upward_force.clamp_min(0.0), 0.0).sum(dim=1)
+        return self.takeoff_gate * support / reference
+
     def _reward_takeoff_vertical_velocity(self):
-        """离地时按最后一个轮地接触拍的 base-link vz 结算一次。"""
+        """连续双轮腾空合格时，按最后一个轮地接触拍的 base-link vz 结算一次。"""
         progress = torch.clamp(
             self.takeoff_contact_vertical_velocity / self._target_takeoff_velocity().clamp_min(1.0), min=0.0
         )
-        return self.jump_takeoff_event * (1.0 - self.jump_invalid) * progress
+        return self.jump_reward_state.takeoff_event * (1.0 - self.jump_invalid) * progress
 
     def _reward_flight_airtime(self):
-        """实际腾空每步给分；框架统一乘 dt，累计奖励 = 权重 × 腾空秒数。"""
-        return self.flight_gate
+        """首次有效腾空按秒给分，累计最多奖励配置的 flight 时长。"""
+        # 非整控制步的时长只奖励最后一拍的剩余比例，累计秒数不向上取整。
+        previous_steps = (self.flight_airtime_steps - 1).clamp_min(0)
+        remaining_steps = self.phase_durations[1] / self.dt - previous_steps.to(self.flight_gate.dtype)
+        return self.flight_gate * remaining_steps.clamp(0.0, 1.0)
+
+    def _bounded_flight_height_progress(self, height):
+        ceiling = height.new_tensor(self.task_cfg["ground_success_base_height_m"])[self.jump_mode]
+        span = (ceiling - self.height_reference_min_m).clamp_min(1e-6)
+        return ((height - self.height_reference_min_m) / span).clamp(0.0, 1.0)
 
     def _reward_flight_height_progress(self):
-        target = self.base_height_target
-        progress = torch.clamp(self.jump_base_height / target, min=0.0)
-        return self.flight_gate * progress
+        """首次合格腾空只发新增高度进度，各模式成功高度处封顶；失稳撤回已发进度。"""
+        state = self.jump_reward_state
+        progress = self._bounded_flight_height_progress(state.peak_clearance)
+        previous = self._bounded_flight_height_progress(state.previous_peak_clearance)
+        revoked = self._bounded_flight_height_progress(state.revoked_peak_clearance)
+        return self.flight_gate * (progress - previous).clamp_min(0.0) - revoked
 
     def _reward_flight_wheel_clearance(self):
         ceiling = torch.clamp(self.jump_base_height - 0.20, min=0.0)
@@ -110,6 +158,16 @@ class JumpRewards:
         error = torch.mean(torch.square(self.leg_length - target), dim=1)
         return self.flight_gate * torch.exp(-error / self.reward_cfg["leg_length_sigma"])
 
+    def _reward_flight_leg_angle(self):
+        """腾空时分别惩罚左右虚拟腿摆角超过容差的部分，单位 rad²。"""
+        excess = (self.leg_angle.abs() - self.flight_leg_angle_limit_rad).clamp_min(0.0)
+        return self.flight_gate * excess.square().mean(dim=1)
+
+    def _reward_landing_base_acceleration(self):
+        """首次触地当拍及之后惩罚 base_link 三轴运动加速度平方。"""
+        # 不依赖双轮有效落台或姿态门，单轮/机身先触地和失稳不能免除冲击惩罚。
+        return self.has_landed * self.base_link_acceleration.square().sum(dim=1)
+
     def _reward_landing_vertical_velocity(self):
         """首次着陆结算触地前 base_link 世界竖直速度平方，配合负权重惩罚。"""
         # 取最后腾空拍，避免接触冲量改变触地当拍速度；向上/向下均惩罚。
@@ -125,7 +183,8 @@ class JumpRewards:
         support = target_wheel_support(
             self.wheel_center_pos, self.wheel_contact, self.terrain_tile_index, self.task_cfg, self.wheel_radius, margin=0.0,
         ).any(dim=1)
-        return self.jump_landing_event * impact_quality * attitude_quality * support * (self.jump_invalid < 0.5)
+        return (self.jump_landing_event * self._landing_height_reached()
+                * impact_quality * attitude_quality * support * (self.jump_invalid < 0.5))
 
     def _reward_landing_stability(self):
         tilt_error = self._jump_tilt_error()
@@ -137,7 +196,7 @@ class JumpRewards:
             -tilt_error / self.reward_cfg["landing_tilt_sigma"]
             -angular_error / self.reward_cfg["landing_ang_vel_sigma"]
         )
-        return self.jump_landing_gate * quality
+        return self.jump_landing_gate * self._landing_height_reached() * quality
 
     def _reward_leg_extension_at_limit(self):
         """实测腿长到限位后，惩罚实际下发目标中继续伸腿的电机角差（rad²）。"""
@@ -159,13 +218,11 @@ class JumpRewards:
     def _reward_action_rate(self):
         return torch.sum(torch.square(self.actions - self.last_actions), dim=1)
 
-    def _reward_target_landing(self):
-        return self.jump_landing_gate * self._reward_landing_stability()
-
     def _reward_task_success(self):
-        return self.task_success_event
+        # 通用死亡判定晚于任务状态更新；同拍死亡不能领取成功奖励。
+        return self.task_success_event * self._landing_height_reached() * ~self.terminated_buf
 
     def _reward_task_failure(self):
-        """失败当拍按未完成的高度比例惩罚，达到目标后此项为零。"""
-        shortfall = torch.clamp(1.0 - self.jump_base_height / self.base_height_target, 0.0, 1.0)
+        """按首次合格腾空的高度缺额惩罚，落地后站高不能减少失败惩罚。"""
+        shortfall = torch.clamp(1.0 - self.jump_reward_state.peak_clearance / self.base_height_target, 0.0, 1.0)
         return self.task_failure_event * shortfall

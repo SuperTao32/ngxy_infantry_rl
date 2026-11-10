@@ -12,10 +12,14 @@ def get_cfgs():
 
 def _reward_cfg() -> dict:
     return {
+        # 指数静止奖励的速度尺度；偏差达到一个尺度时衰减到 exp(-1)，无死区。
+        "standing_still_lin_vel_scale": 0.03,  # m/s，约束水平 vx、vy。
+        "standing_still_ang_vel_scale": 0.05,  # rad/s，约束偏航 wz。
         "reward_scales": {
             "tracking_lin_vel": -0.5,
             "tracking_ang_vel": -0.5,
             "standing_drift": 0.0,
+            "standing_still": 0.0,
             "gated_tracking_lin_vel": 2.0,
             "gated_tracking_ang_vel": 2.0,
             "base_balance": -5.0,
@@ -97,6 +101,7 @@ def _curriculum_cfg() -> dict:
                     },
                     "reward_scales": {
                         "standing_drift": -2.0,
+                        # "standing_still": 0.5,
                         "tracking_lin_vel": -2.0,
                         "tracking_ang_vel": -3.0,
                         "height_gate": 10.0,
@@ -125,6 +130,7 @@ def _curriculum_cfg() -> dict:
                     },
                     "reward_scales": {
                         "standing_drift": -5.0,
+                        # "standing_still": 1.0,
                         "gated_tracking_lin_vel": 5.0,
                         "gated_tracking_ang_vel": 7.0,
                         "base_balance": -15.0,
@@ -157,7 +163,10 @@ def _curriculum_cfg() -> dict:
                         "floor": 0.05,
                     },
                     "reward_scales": {
-                        "standing_drift": -20.0,
+                        "standing_drift": -10.0,
+                        # "standing_still": 2.0,
+                        "wheel_action_rate": -2.0,
+                        "leg_action_rate": -0.3,
                         "gated_tracking_lin_vel": 5.0,
                         "gated_tracking_ang_vel": 7.0,
                         "base_balance": -15.0,
@@ -190,7 +199,7 @@ def _curriculum_cfg() -> dict:
                         "floor": 0.05,
                     },
                     "reward_scales": {
-                        "standing_drift": -20.0,
+                        "standing_drift": -10.0,
                         "gated_tracking_lin_vel": 5.0,
                         "gated_tracking_ang_vel": 7.0,
                         "base_balance": -15.0,

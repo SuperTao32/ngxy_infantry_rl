@@ -131,9 +131,9 @@ def get_env_cfg() -> dict:
         # 场景与共享域随机化；eval 可通过 --terrain 选择地形。
         "terrain": default_terrain_cfg("plane"),
         "randomization": default_randomization_cfg(dynamics_enabled=True, sensors_enabled=True),
-        # 接触判定阈值。
+        # 接触判定阈值；基座与腿部共用 base_contact 阈值、奖励和终止计时。
         "wheel_contact_force_threshold": 1.0,
-        "base_contact_force_threshold": 5.0,
+        "base_contact_force_threshold": 1.0,
         # 回合、命令重采样与终止默认值；各任务可独立覆盖。
         "episode_length_s": 100.0,
         "resampling_time_s": 10.0,
@@ -256,9 +256,9 @@ def get_curriculum_cfg() -> dict:
                 "targets": {
                     # 只填写需要改变的权重；空字典继承上一阶段的分配。
                     "task_weights": {
-                        "locomotion": 3.0,
+                        "locomotion": 5.0,
                         "recovery": 1.0,
-                        "jump": 2.0,
+                        "jump": 3.0,
                         "multi_terrain": 0.0,
                     },
                     "domain_rand": {"strength": 0.0},

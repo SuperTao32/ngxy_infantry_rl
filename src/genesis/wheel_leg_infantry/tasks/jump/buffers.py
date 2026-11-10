@@ -6,7 +6,7 @@ import torch
 import torch.nn.functional as F
 
 from .config import MODE_NAMES, PHASE_NAMES
-from .geometry import terrain_tile_heights
+from .geometry import terrain_tile_heights, terrain_tile_modes
 from .height_reference import resolve_height_reference, resolve_retract_duration
 from .phase import PHASE_ENCODING_DIM, phase_encoding
 from .reward_state import JumpRewardState
@@ -24,6 +24,14 @@ class JumpBuffers:
         sigma = float(self.reward_cfg["height_reference_sigma"])
         if not math.isfinite(tolerance) or tolerance < 0.0 or not math.isfinite(sigma) or sigma <= 0.0:
             raise ValueError("height reference tolerance must be non-negative and sigma positive, both finite")
+        delay = self.reward_cfg.get("landing_base_height_tracking_delay_s", 0.20)
+        if isinstance(delay, bool) or not isinstance(delay, (int, float)) or not math.isfinite(delay) or delay < 0.0:
+            raise ValueError("landing_base_height_tracking_delay_s must be finite and non-negative")
+        self.landing_base_height_tracking_delay_steps = math.ceil(delay / self.dt - 1e-9)
+        leg_angle_limit = float(self.reward_cfg.get("flight_leg_angle_limit_deg", 10.0))
+        if not math.isfinite(leg_angle_limit) or not 0.0 <= leg_angle_limit < 180.0:
+            raise ValueError("flight_leg_angle_limit_deg must be finite and in [0, 180)")
+        self.flight_leg_angle_limit_rad = math.radians(leg_angle_limit)
         max_tilt = float(self.env_cfg.get("jump_max_tilt_deg", 45.0))
         if not math.isfinite(max_tilt) or not 0.0 < max_tilt < 90.0:
             raise ValueError("jump_max_tilt_deg must be between 0 and 90 degrees")
@@ -40,6 +48,8 @@ class JumpBuffers:
 
         # 本轮任务：reset 时从地形通道确定；jump 期间冻结，不因提前终止而重新采样。
         self.jump_mode = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
+        # 仅物理 reset 分配，不在助跑切入 jump 时刷新；隔离升降级前的旧回合。
+        self.height_assignment_epoch = torch.zeros_like(self.jump_mode)
         self.jump_mode_one_hot = torch.zeros((self.num_envs, len(MODE_NAMES)), dtype=gs.tc_float, device=self.device)
         self.base_height_target = torch.zeros(self.num_envs, dtype=gs.tc_float, device=self.device)
         self.landing_surface_height = torch.zeros_like(self.base_height_target)
@@ -48,12 +58,16 @@ class JumpBuffers:
         # 实测几何与运动：每步覆盖；max_jump_base_height 为未经有效性筛选的原始峰值。
         # 奖励认可的峰值单独由 jump_reward_state 保存，失稳时可撤销，不能与原始峰值合并。
         self.wheel_center_pos = torch.zeros((self.num_envs, 2, 3), dtype=gs.tc_float, device=self.device)
+        self.wheel_airborne = torch.zeros((self.num_envs, 2), dtype=torch.bool, device=self.device)
         self.base_to_wheel_bottom_distance = torch.zeros_like(self.base_height_target)
         self.wheel_clearance = torch.zeros_like(self.base_height_target)
         self.max_wheel_clearance = torch.zeros_like(self.base_height_target)
         self.jump_base_height = torch.zeros_like(self.base_height_target)
         self.max_jump_base_height = torch.zeros_like(self.base_height_target)
         self.world_vertical_velocity = torch.zeros_like(self.base_height_target)
+        self.last_base_link_velocity = torch.zeros((self.num_envs, 3), dtype=gs.tc_float, device=self.device)
+        self.base_link_acceleration = torch.zeros_like(self.last_base_link_velocity)
+        self.flight_airtime_steps = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
         self.takeoff_contact_vertical_velocity = torch.zeros_like(self.base_height_target)  # 最后一拍支撑速度。
         self.takeoff_contact_base_height = torch.zeros_like(self.base_height_target)  # 与支撑速度同拍的 base 高度。
         self.last_airborne_vertical_velocity = torch.zeros_like(self.base_height_target)  # 触地前一拍速度。
@@ -63,13 +77,14 @@ class JumpBuffers:
         # has_taken_off 为物理离地，不等于奖励要求的“连续腾空达到最短时间”。
         self.has_taken_off = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         self.has_landed = torch.zeros_like(self.has_taken_off)
+        self.landing_step = torch.zeros_like(self.jump_mode)  # 首次触地时的 jump_steps，后续触地/反弹不重置。
         self.phase_features = torch.zeros((self.num_envs, PHASE_ENCODING_DIM), dtype=gs.tc_float, device=self.device)  # actor 时间编码。
 
         # 本拍奖励门控：每步重新计算，条件消失即归零，不记录历史。
         self.takeoff_gate = torch.zeros_like(self.base_height_target)  # 计划起跳期且尚有安全轮支撑。
         self.flight_gate = torch.zeros_like(self.base_height_target)  # 首次起跳后、首次触地前的有效腾空。
         self.jump_landing_gate = torch.zeros_like(self.base_height_target)  # 已落地且双轮有效支撑目标面。
-        self.landing_airborne_gate = torch.zeros_like(self.base_height_target)  # 已落地后再次双轮离地。
+        self.landing_airborne_gate = torch.zeros_like(self.base_height_target)  # 首次触地后仍有任一轮未着地。
 
         # 单拍事件：只在边沿发生时置 1，下一步重算；用于一次性奖励。
         self.jump_takeoff_event = torch.zeros_like(self.base_height_target)  # 首次物理离地。
@@ -94,7 +109,7 @@ class JumpBuffers:
             self.num_envs,
             dt=self.dt,
             min_airborne_time_s=float(self.env_cfg.get("takeoff_min_airborne_time_s", 0.10)),
-            horizon=round(self.phase_cycle_s / self.dt),
+            horizon=self.max_episode_length,
             device=self.device,
             dtype=gs.tc_float,
         )
@@ -105,13 +120,16 @@ class JumpBuffers:
         self.jump_reward_state.reset(env_idx)
         for buffer in self._jump_episode_buffers():
             buffer[selected] = 0
+        # 物理 reset 和保速切入 jump 后均以当前世界系速度重新起算，避免跨回合差分。
+        self.last_base_link_velocity[selected] = self.robot.get_vel()[selected]
         # t=0 的四维编码为 [0, 1, 0, 1]；仅初始化选中的环境。
         self.phase_features[selected] = phase_encoding(
-            torch.zeros(1, dtype=gs.tc_float, device=self.device), self.phase_input_duration_s
+            torch.zeros(1, dtype=gs.tc_float, device=self.device), 1.0
         )
 
         # 本轮模式由地形通道给定；只在这里刷新配置派生量。
-        self.jump_mode[selected] = self.terrain_tile_index[selected] // 2
+        modes = self.terrain_tile_index.new_tensor(terrain_tile_modes(self.task_cfg))
+        self.jump_mode[selected] = modes[self.terrain_tile_index[selected]]
         self.jump_mode_one_hot[selected] = F.one_hot(self.jump_mode[selected], len(MODE_NAMES)).to(gs.tc_float)
         targets = self.commands.new_tensor(self.task_cfg["clearance_targets_m"])
         heights = self.commands.new_tensor(terrain_tile_heights(self.task_cfg))
@@ -122,14 +140,15 @@ class JumpBuffers:
         """需要在回合边界清零的逐环境状态；全量/局部 reset 共用这一份清单。"""
         return (
             # 实测量及用于差分/事件结算的历史量。
-            self.wheel_center_pos, self.base_to_wheel_bottom_distance,
+            self.wheel_center_pos, self.wheel_airborne, self.base_to_wheel_bottom_distance,
             self.wheel_clearance, self.max_wheel_clearance,
             self.jump_base_height, self.max_jump_base_height,
             self.world_vertical_velocity, self.takeoff_contact_vertical_velocity,
+            self.last_base_link_velocity, self.base_link_acceleration, self.flight_airtime_steps,
             self.takeoff_contact_base_height,
             self.last_airborne_vertical_velocity, self.impact_vertical_speed,
             # 物理阶段历史。
-            self.has_taken_off, self.has_landed,
+            self.has_taken_off, self.has_landed, self.landing_step,
             # 本拍奖励门控。
             self.takeoff_gate, self.flight_gate, self.jump_landing_gate, self.landing_airborne_gate,
             # 单拍事件。

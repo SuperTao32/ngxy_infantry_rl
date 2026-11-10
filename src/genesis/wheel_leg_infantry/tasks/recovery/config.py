@@ -1,4 +1,4 @@
-"""恢复任务独立配置；连续站稳后结束回合。"""
+"""恢复任务独立配置；连续站稳后保持静止，直到回合时限。"""
 
 from pathlib import Path
 
@@ -114,6 +114,8 @@ def get_cfgs():
         "stand_up_leg_angle_tolerance_deg": 10.0,  # 双腿角度均在 ±10° 内时满奖励。
         "stand_up_leg_angle_sigma": 0.5,
         "stand_up_wheel_push_force_reference_n": 250.0,  # 双轮向上法向支撑力之和达到此值时饱和。
+        "standing_still_lin_vel_scale": 0.03,  # m/s，与 locomotion 的严格静止尺度一致。
+        "standing_still_ang_vel_scale": 0.05,  # rad/s，偏差达到此尺度时衰减到 exp(-1)。
         "reward_scales": {
             "stand_up_success": 50.0,
             "stand_up_speed": 50.0,
@@ -122,6 +124,10 @@ def get_cfgs():
             "wheel_ground_distance": -50.0,
             "tracking_lin_vel": -2.0,
             "tracking_ang_vel": -3.0,
+            "standing_drift": -10.0,
+            # "standing_still": 2.0,
+            "leg_action_rate": -0.2,
+            "wheel_action_rate": -2.0,
             "leg_symmetry": -5.0,
             "wheel_airborne": -5.0,
             "base_contact": -10.0,

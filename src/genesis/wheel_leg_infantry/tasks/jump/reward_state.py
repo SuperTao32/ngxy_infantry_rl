@@ -18,6 +18,7 @@ class JumpRewardState:
         self.takeoff_rewarded = torch.zeros(num_envs, dtype=torch.bool, device=device)
         self.height_settled = torch.zeros_like(self.takeoff_rewarded)
         self.peak_clearance = torch.zeros(num_envs, dtype=dtype, device=device)
+        self.pending_peak_clearance = torch.zeros_like(self.peak_clearance)
         self.revoked_peak_clearance = torch.zeros_like(self.peak_clearance)
         self.revoked_settled_clearance = torch.zeros_like(self.peak_clearance)
         self.previous_peak_clearance = torch.zeros_like(self.peak_clearance)
@@ -27,7 +28,7 @@ class JumpRewardState:
     def reset(self, env_idx=None):
         for value in (
             self.airborne_steps, self.max_airborne_steps, self.takeoff_rewarded,
-            self.height_settled, self.peak_clearance, self.revoked_peak_clearance,
+            self.height_settled, self.peak_clearance, self.pending_peak_clearance, self.revoked_peak_clearance,
             self.previous_peak_clearance,
             self.revoked_settled_clearance,
             self.takeoff_event, self.height_settlement_event,
@@ -38,7 +39,7 @@ class JumpRewardState:
                 value.masked_fill_(env_idx, 0)
 
     def update(
-        self, airborne, clearance, landing_event, episode_steps, *, takeoff_eligible, valid_jump=None
+        self, airborne, clearance, landing_event, episode_steps, *, takeoff_eligible, valid_jump=None, horizon=None
     ):
         # 高度进度已在腾空时发放；无论空中还是落地失稳都须一次性追回。
         # 缺高惩罚仅在此前已结算时补扣，否则结束时会按零高度完整结算。
@@ -66,11 +67,19 @@ class JumpRewardState:
         )
         self.takeoff_event.copy_(qualified)
         self.takeoff_rewarded.logical_or_(qualified)
-        # 只计实际腾空时的base 原点相对起跳地面的高度，地面支撑时不累计峰值。
+        # 短暂卸载不立即领取整段站立高度的峰值奖励；连续双轮腾空合格后，
+        # 再一次性认可该连续片段的峰值，避免漏掉资格确认前已经经过的顶点。
+        self.pending_peak_clearance.copy_(torch.where(
+            airborne, torch.maximum(self.pending_peak_clearance, clearance), 0.0
+        ))
         self.previous_peak_clearance.copy_(self.peak_clearance)
         self.peak_clearance.copy_(
-            torch.where(airborne, torch.maximum(self.peak_clearance, clearance), self.peak_clearance)
+            torch.where(
+                airborne & self.takeoff_rewarded,
+                torch.maximum(self.peak_clearance, self.pending_peak_clearance), self.peak_clearance,
+            )
         )
-        settle = ((landing_event > 0.5) | (episode_steps >= self.horizon)) & ~self.height_settled
+        horizon = self.horizon if horizon is None else horizon
+        settle = ((landing_event > 0.5) | (episode_steps >= horizon)) & ~self.height_settled
         self.height_settlement_event.copy_(settle)
         self.height_settled.logical_or_(settle)
