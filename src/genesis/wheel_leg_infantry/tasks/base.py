@@ -1,5 +1,6 @@
 """任务组件协议：共享物理状态，独立持有配置、奖励和回合状态。
 
+``env_ids`` 保留任务配额，``mask`` 表示当前执行本任务的行（成功后可借给 locomotion）。
 所有任务使用统一 batch 的索引。写入公共 buffer 时必须限制到 ``mask``；
 专用 buffer 可以覆盖整个 batch，任务管理器仅收集本任务对应的行。
 """
@@ -131,7 +132,7 @@ class Task(CommonRewards, TaskConfiguration):
             selected = mask & ((self._get_reward_scale(name) != 0) | (total != 0))
             if selected.any():
                 metrics["reward_" + name] = total[selected]
-        lengths = self.episode_length_buf[mask].clamp_min(1)
+        lengths = self._episode_steps()[mask].clamp_min(1)
         for name, total in self.episode_metric_sums.items():
             metrics["metric_" + name] = total[mask] / lengths
         metrics["episode_duration_s"] = lengths * self.dt
@@ -175,6 +176,12 @@ class Task(CommonRewards, TaskConfiguration):
 
     def _episode_timeout(self):
         return self.episode_length_buf >= math.ceil(self.env_cfg["episode_length_s"] / self.dt)
+
+    def _episode_steps(self):
+        return self.episode_length_buf
+
+    def remaining_episode_steps(self):
+        return math.ceil(self.env_cfg["episode_length_s"] / self.dt) - self.episode_length_buf
 
     def _task_termination(self):
         return torch.zeros_like(self.mask)

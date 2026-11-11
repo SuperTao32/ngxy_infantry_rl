@@ -163,7 +163,7 @@ def get_obs_cfg() -> dict:
         # ToF 开启时为 (36 + 4 * history_frames)D；关闭时为 36D。
         "tof": default_tof_cfg(
             include_in_observation=True,
-            history_frames=3,
+            history_frames=1,
             update_hz=50.0,  # ToF 更新频率；历史仅在新测距帧到来时推进。
             max_range_m=1.0,  # 测距量程，单位 m；独立于观测缩放参考距离。
             # 观测 = clamp(距离 / 参考距离, 0, 1)，单位 m。
@@ -237,13 +237,28 @@ def get_curriculum_cfg() -> dict:
             },
             {
                 "name": "recovery",
-                "start_iteration": 4000,
+                "start_iteration": 2000,
                 "targets": {
                     "task_weights": {
-                        "locomotion": 2.0,
+                        "locomotion": 4.0,
                         "recovery": 1.0,
                         "jump": 0.0,
                         "multi_terrain": 0.0,
+                    },
+                    "domain_rand": {"strength": 0.0},
+                    "sensor_noise": {"strength": 0.0},
+                    "wheel_slip": {"strength": 0.0},
+                },
+            },
+            {
+                "name": "multiterrain",
+                "start_iteration": 2500,
+                "targets": {
+                    "task_weights": {
+                        "locomotion": 4.0,
+                        "recovery": 1.0,
+                        "jump": 0.0,
+                        "multi_terrain": 4.0,
                     },
                     "domain_rand": {"strength": 0.0},
                     "sensor_noise": {"strength": 0.0},
@@ -256,10 +271,10 @@ def get_curriculum_cfg() -> dict:
                 "targets": {
                     # 只填写需要改变的权重；空字典继承上一阶段的分配。
                     "task_weights": {
-                        "locomotion": 5.0,
+                        "locomotion": 4.0,
                         "recovery": 1.0,
                         "jump": 3.0,
-                        "multi_terrain": 0.0,
+                        "multi_terrain": 3.0,
                     },
                     "domain_rand": {"strength": 0.0},
                     "sensor_noise": {"strength": 0.0},

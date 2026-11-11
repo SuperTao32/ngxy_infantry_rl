@@ -444,6 +444,9 @@ class JumpTask(JumpApproach, JumpRewards, JumpBuffers, Task):
     def _episode_timeout(self):
         return self.jump_active & (self.jump_steps >= self.mode_episode_lengths[self.jump_mode])
 
+    def remaining_episode_steps(self):
+        return self.mode_episode_lengths[self.jump_mode] - self.jump_steps
+
     def _task_success(self):
         # 落稳成功可提前记录、奖励，但不能截短模式和相位输入。
         return self.task_success & self.jump_active & (self.jump_steps >= self.phase_input_steps[self.jump_mode])

@@ -204,43 +204,43 @@ def _get_curriculum_cfg():
                     },
                 },
             },
-            {
-                "name": "with_platform",
-                "start_iteration": 300,
-                "targets": {
-                    "terrain": {
-                        "mode_probabilities": [1 / 3, 2 / 3],
-                        "platform_enabled": [True, True],
-                    },
-                    "command_ranges": {
-                        "lin_vel_range": [0.0, 3.0],
-                    },
-                    "reward_scales": {
-                        "base_balance": -10.0,
-                        "airborne_wheel_vel": -0.03,
-                        "leg_extension_at_limit": -10.0,
-                        "base_contact": -20.0,
-                        "flight_height_excess": -100000.0,
-                        "takeoff_upward_velocity": 0.0,
-                        "takeoff_wheel_push": 0.0,
-                        "takeoff_vertical_velocity": 0.0,
-                        # 腾空
-                        "flight_airtime": {"with_platform": 0.0, "without_platform": 1.0},
-                        "flight_balance": 5.0,
-                        "flight_height_progress": {"with_platform": 100.0, "without_platform": 500.0},
-                        "flight_height_tracking": {"with_platform": 0.0, "without_platform": 50.0},
-                        "flight_wheel_clearance": {"without_platform": 0.0, "with_platform": 100.0},
-                        # 落地
-                        "landing_vertical_velocity": -30.0,
-                        "landing_base_acceleration": -0.03,  # 三轴加速度平方和；100 m/s² 持续一拍扣 1。
-                        "soft_landing": 50.0,
-                        "landing_stability": 50.0,
-                        # 任务结果
-                        "task_success": {"with_platform": 3000.0, "without_platform": 2000.0},
-                        "task_failure": {"with_platform": -100.0, "without_platform": -50.0},
-                    },
-                },
-            },
+            # {
+            #     "name": "with_platform",
+            #     "start_iteration": 300,
+            #     "targets": {
+            #         "terrain": {
+            #             "mode_probabilities": [1 / 3, 2 / 3],
+            #             "platform_enabled": [True, True],
+            #         },
+            #         "command_ranges": {
+            #             "lin_vel_range": [0.0, 3.0],
+            #         },
+            #         "reward_scales": {
+            #             "base_balance": -10.0,
+            #             "airborne_wheel_vel": -0.03,
+            #             "leg_extension_at_limit": -10.0,
+            #             "base_contact": -20.0,
+            #             "flight_height_excess": -100000.0,
+            #             "takeoff_upward_velocity": 0.0,
+            #             "takeoff_wheel_push": 0.0,
+            #             "takeoff_vertical_velocity": 0.0,
+            #             # 腾空
+            #             "flight_airtime": {"with_platform": 0.0, "without_platform": 1.0},
+            #             "flight_balance": 5.0,
+            #             "flight_height_progress": {"with_platform": 100.0, "without_platform": 500.0},
+            #             "flight_height_tracking": {"with_platform": 0.0, "without_platform": 50.0},
+            #             "flight_wheel_clearance": {"without_platform": 0.0, "with_platform": 100.0},
+            #             # 落地
+            #             "landing_vertical_velocity": -30.0,
+            #             "landing_base_acceleration": -0.03,  # 三轴加速度平方和；100 m/s² 持续一拍扣 1。
+            #             "soft_landing": 50.0,
+            #             "landing_stability": 50.0,
+            #             # 任务结果
+            #             "task_success": {"with_platform": 3000.0, "without_platform": 2000.0},
+            #             "task_failure": {"with_platform": -100.0, "without_platform": -50.0},
+            #         },
+            #     },
+            # },
         ],
     }
 

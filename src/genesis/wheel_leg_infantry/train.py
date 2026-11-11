@@ -146,6 +146,7 @@ def _train(args, parser, workers):
             **env_kwargs(configs),
             steps_per_iteration=configs["train_cfg"]["num_steps_per_env"],
             show_viewer=args.vis and workers.rank == 0,
+            initial_training_iteration=plan.next_iteration if plan else 0,
         )
         runner = PolicyRunner(
             env, configs["train_cfg"], str(run_dir), device=str(gs.device), workers=workers,

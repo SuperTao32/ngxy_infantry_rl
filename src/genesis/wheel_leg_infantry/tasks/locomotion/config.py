@@ -77,7 +77,7 @@ def _curriculum_cfg() -> dict:
             },
             {
                 "name": "locomotion",
-                "start_iteration": 1000,
+                "start_iteration": 300,
                 "targets": {
                     "standing_reward": {"tracking_sigma": 0.10},
                     "reset_ranges": {
@@ -112,7 +112,7 @@ def _curriculum_cfg() -> dict:
             },
             {
                 "name": "locomotion2",
-                "start_iteration": 2000,
+                "start_iteration": 800,
                 "targets": {
                     "standing_reward": {"tracking_sigma": 0.05},
                     "command_ranges": {
@@ -140,7 +140,7 @@ def _curriculum_cfg() -> dict:
             },
             {
                 "name": "locomotion_rand",
-                "start_iteration": 3000,
+                "start_iteration": 1500,
                 "targets": {
                     "standing_reward": {"tracking_sigma": 0.02},
                     "reset_ranges": {
@@ -174,39 +174,39 @@ def _curriculum_cfg() -> dict:
                     },
                 },
             },
-            {
-                "name": "locomotion_loose",
-                "start_iteration": 4000,
-                "targets": {
-                    "standing_reward": {"tracking_sigma": 0.02},
-                    "reset_ranges": {
-                        "base_init_pos_range": [[0.0, 0.0], [0.0, 0.0], [0.22, 0.24]],
-                        "base_init_rpy_offset_range_deg": [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]],
-                        "base_init_lin_vel_range": [[-0.5, 0.5], [0.0, 0.0], [0.0, 0.0]],
-                        "base_init_ang_vel_range": [[0.0, 0.0], [0.0, 0.0], [-1.0, 1.0]],
-                    },
-                    "command_ranges": {
-                        "standing_probability": 0.25,
-                        "lin_vel_range": [-3.2, 3.2],
-                        "ang_vel_range": [-5.0, 5.0],
-                        "base_height_range": [0.20, 0.38],
-                    },
-                    "tracking_gate": {
-                        "height_full_error": 0.02,
-                        "height_zero_error": 0.04,
-                        "attitude_full_angle_deg": 2.0,
-                        "attitude_zero_angle_deg": 5.0,
-                        "floor": 0.05,
-                    },
-                    "reward_scales": {
-                        "standing_drift": -10.0,
-                        "gated_tracking_lin_vel": 5.0,
-                        "gated_tracking_ang_vel": 7.0,
-                        "base_balance": -15.0,
-                        "base_contact": -15.0,
-                    },
-                },
-            },
+            # {
+            #     "name": "locomotion_loose",
+            #     "start_iteration": 2500,
+            #     "targets": {
+            #         "standing_reward": {"tracking_sigma": 0.02},
+            #         "reset_ranges": {
+            #             "base_init_pos_range": [[0.0, 0.0], [0.0, 0.0], [0.22, 0.24]],
+            #             "base_init_rpy_offset_range_deg": [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]],
+            #             "base_init_lin_vel_range": [[-0.5, 0.5], [0.0, 0.0], [0.0, 0.0]],
+            #             "base_init_ang_vel_range": [[0.0, 0.0], [0.0, 0.0], [-1.0, 1.0]],
+            #         },
+            #         "command_ranges": {
+            #             "standing_probability": 0.25,
+            #             "lin_vel_range": [-3.2, 3.2],
+            #             "ang_vel_range": [-5.0, 5.0],
+            #             "base_height_range": [0.20, 0.38],
+            #         },
+            #         "tracking_gate": {
+            #             "height_full_error": 0.02,
+            #             "height_zero_error": 0.04,
+            #             "attitude_full_angle_deg": 2.0,
+            #             "attitude_zero_angle_deg": 5.0,
+            #             "floor": 0.05,
+            #         },
+            #         "reward_scales": {
+            #             "standing_drift": -10.0,
+            #             "gated_tracking_lin_vel": 5.0,
+            #             "gated_tracking_ang_vel": 7.0,
+            #             "base_balance": -15.0,
+            #             "base_contact": -15.0,
+            #         },
+            #     },
+            # },
             # {
             #     "name": "full_range",
             #     "start_iteration": 4000,

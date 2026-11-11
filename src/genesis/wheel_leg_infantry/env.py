@@ -1,6 +1,9 @@
 """统一轮腿环境：场景、控制、传感器、四任务调度及显式观测。"""
 
 import math
+from copy import deepcopy
+import gc
+import time
 
 import numpy as np
 import genesis as gs
@@ -29,7 +32,7 @@ from .terrains.manager import TerrainManager
 from .tasks.task_config import TaskConfiguration
 from .utils.tracking_gate import DEFAULT_TRACKING_GATE_CFG
 from .tasks.manager import TaskManager
-from .tasks.manager import task_metric_tag
+from .tasks.manager import task_counts_at, task_metric_tag
 from .tasks.jump.config import MODE_NAMES
 from .tasks.jump.phase import PHASE_ENCODING_DIM
 from .terrains.training import TrainingTerrain
@@ -51,7 +54,20 @@ class WheelLegInfantryEnv(TaskConfiguration):
         show_viewer=False,
         *,
         evaluation=False,
+        initial_training_iteration=0,
+        terrain_tasks=None,
     ):
+        if initial_training_iteration < 0:
+            raise ValueError("initial_training_iteration cannot be negative")
+        self._scene_constructor = dict(
+            num_envs=num_envs, env_cfg=deepcopy(env_cfg), obs_cfg=deepcopy(obs_cfg),
+            reward_cfg=deepcopy(reward_cfg), command_cfg=deepcopy(command_cfg),
+            curriculum_cfg=deepcopy(curriculum_cfg), steps_per_iteration=steps_per_iteration,
+            show_viewer=show_viewer, evaluation=evaluation,
+        )
+        self._requested_terrain_tasks = terrain_tasks
+        self._scene_rebuild_iteration = None
+        self.terrain_rebuild_seconds = 0.0
         self.evaluation = evaluation
         ############################# 配置阶段 ###############################
         # 确定设备
@@ -231,8 +247,8 @@ class WheelLegInfantryEnv(TaskConfiguration):
         self._validate_configuration()
 
         # 课程注册及第 0 阶段配置
-        self.global_step = 0
-        self.training_iteration = 0
+        self.training_iteration = int(initial_training_iteration)
+        self.global_step = self.training_iteration * self.steps_per_iteration
         self.curriculum = CurriculumManager(self.curriculum_cfg)
         self.curriculum.register_target("command_ranges", self._apply_command_ranges)
         self.curriculum.register_target("tracking_gate", self._apply_tracking_gate)
@@ -242,8 +258,8 @@ class WheelLegInfantryEnv(TaskConfiguration):
         self.curriculum.register_target("sensor_noise", self._apply_sensor_noise)
         self.curriculum.register_target("wheel_slip", self.wheel_slip.apply_curriculum)
         self._register_task_curriculum()
-        if self.curriculum.update(0, force=True):
-            print(f"[curriculum] stage={self.curriculum.current_stage_name} step=0")
+        if self.curriculum.update(self.training_iteration, force=True):
+            print(f"[curriculum] stage={self.curriculum.current_stage_name} iteration={self.training_iteration}")
 
         ############################# 初始化阶段 ###############################
         # 创建 scene
@@ -520,7 +536,25 @@ class WheelLegInfantryEnv(TaskConfiguration):
     def _register_task_curriculum(self):
         self.task_manager = TaskManager(self, self.env_cfg["tasks"])
         self.curriculum.register_target("task_weights", self.task_manager.set_weights)
-        self.terrain = TrainingTerrain(self.task_manager.tasks)
+        loaded = self._requested_terrain_tasks
+        if loaded is None and not self.evaluation:
+            loaded = self.required_terrain_tasks(self.training_iteration)
+        if (loaded is not None and not self.evaluation
+                and self.required_terrain_tasks(self.training_iteration) - set(loaded)):
+            raise ValueError("Terrain selection must include every allocated task and locomotion continuation")
+        self.terrain = TrainingTerrain(self.task_manager.tasks, loaded_tasks=loaded)
+        if not self.evaluation:
+            print(f"[terrain] loaded={sorted(self.terrain.loaded_tasks)}; "
+                  f"deferred={sorted(self.task_manager.tasks.keys() - self.terrain.loaded_tasks)}", flush=True)
+
+    def required_terrain_tasks(self, iteration):
+        manager = self.task_manager
+        counts = task_counts_at(manager.configs, self.num_envs, self.curriculum_cfg, iteration)
+        required = {name for name, count in zip(manager.tasks, counts) if count}
+        # Successful tasks can continue as locomotion even when its quota is zero.
+        if "locomotion" in manager.tasks:
+            required.add("locomotion")
+        return required
 
     def _add_terrain(self):
         self.terrain_entity = self.terrain.add_to_scene(self.scene)
@@ -541,6 +575,8 @@ class WheelLegInfantryEnv(TaskConfiguration):
         return self.get_observations()
 
     def step(self, actions):
+        if self._scene_rebuild_iteration is not None:
+            raise RuntimeError("Finish the PPO update and call rebuild_pending_terrain() before the next rollout")
         """执行一个控制步，返回观测、奖励、重置标志和附加统计。"""
         # 课程在 rollout 最后一拍结算后切换，下一拍动作使用新任务的观测和 GRU 状态。
         self.global_step += 1
@@ -666,7 +702,7 @@ class WheelLegInfantryEnv(TaskConfiguration):
         solver_error = self.scene.rigid_solver.get_error_envs_mask().bool()
 
         self.terminated_buf = persistent_tilt | persistent_base_contact | solver_error | self._task_termination()
-        # 成功是终局而非失败：不发 death，也不作为 time_out bootstrap。
+        # 成功不发 death；结算后如有剩余时间，改采 locomotion 并撤销 reset。
         task_success = self._task_success() & ~self.terminated_buf
         time_out &= ~(task_success | self.terminated_buf)
         self.reset_buf = self.terminated_buf | time_out | task_success
@@ -744,8 +780,14 @@ class WheelLegInfantryEnv(TaskConfiguration):
             raise ValueError("training iteration cannot be negative")
         self.training_iteration = int(iteration)
         self.global_step = self.training_iteration * self.steps_per_iteration
-        self.curriculum.update(self.training_iteration, force=True)
+        # Resolve legacy progress before taking a snapshot for a scene rebuild.
         self.task_manager.restore_legacy_progress(self.training_iteration)
+        terrain = self.__dict__.get("terrain")
+        if isinstance(terrain, TrainingTerrain) and self.required_terrain_tasks(iteration) - terrain.loaded_tasks:
+            self._scene_rebuild_iteration = self.training_iteration
+            self.rebuild_pending_terrain()
+            return
+        self.curriculum.update(self.training_iteration, force=True)
         self.task_manager.reallocate(self.training_iteration)
         self.task_manager.update_curricula(force=True)
         self.reset()
@@ -756,17 +798,64 @@ class WheelLegInfantryEnv(TaskConfiguration):
     def load_training_state_dict(self, state, *, allow_new_tasks=False):
         self.task_manager.load_state_dict(state, allow_new_tasks=allow_new_tasks)
 
+    def rebuild_pending_terrain(self):
+        """Expand geometry after PPO consumed the completed rollout; keep this env object."""
+        iteration = self.__dict__.get("_scene_rebuild_iteration")
+        if iteration is None:
+            return False
+        loaded = self.terrain.loaded_tasks | self.required_terrain_tasks(iteration)
+        state = deepcopy(self.training_state_dict())
+        constructor = deepcopy(self._scene_constructor)
+        # RSL-RL retains the last observation TensorDict between updates. Its
+        # tensors must receive the new reset observation before the next act().
+        previous_obs, previous_critic = self.obs_buf, self.critic_obs_buf
+        start = time.perf_counter()
+        if previous_obs.is_cuda:
+            torch.cuda.synchronize(previous_obs.device)
+        self.scene.destroy()
+        self.__dict__.clear()
+        gc.collect()
+        WheelLegInfantryEnv.__init__(
+            self, **constructor, initial_training_iteration=iteration, terrain_tasks=loaded,
+        )
+        self.load_training_state_dict(state)
+        self.set_training_iteration(iteration)
+        with torch.inference_mode():
+            previous_obs.copy_(self.obs_buf)
+            previous_critic.copy_(self.critic_obs_buf)
+        self.terrain_rebuild_seconds = time.perf_counter() - start
+        print(f"[terrain] iteration={iteration}; loaded={sorted(loaded)}; "
+              f"rebuild={self.terrain_rebuild_seconds:.2f}s; simulator episodes restarted", flush=True)
+        return True
+
     # ============ 回合重置与命令 ============
     def _reset_training_step(self):
         if not self.evaluation:
             self.task_manager.advance_progress(self.training_iteration, self.extras.get("ppo_train_mask"))
+        continued_episode = self._continue_successful_tasks()
         if self.evaluation or self.global_step % self.steps_per_iteration:
             self._reset_idx(self.reset_buf)
+            self._merge_episode_metrics(continued_episode)
             return
 
         # 先用旧任务及课程快照真实结束回合，再改变分组；迁移不进入成功率窗口。
         episode = self._collect_episode_metrics(self.reset_buf) if self.reset_buf.any() else {}
         self.training_iteration = self.global_step // self.steps_per_iteration
+        if (isinstance(self.terrain, TrainingTerrain)
+                and self.required_terrain_tasks(self.training_iteration) - self.terrain.loaded_tasks):
+            # A built Genesis Scene cannot accept new entities. Finish this
+            # rollout against old geometry and rebuild only after the PPO update.
+            # Continuing episodes are truncations, while true terminal outcomes
+            # retain their existing bootstrap semantics.
+            continuing = ~self.reset_buf
+            episode = self._collect_episode_metrics(torch.ones_like(self.reset_buf))
+            self.extras["time_outs"][continuing] = 1.0
+            self.reset_buf.fill_(True)
+            self._scene_rebuild_iteration = self.training_iteration
+            episode.update(self.task_manager.metrics())
+            self.extras["episode"] = episode
+            self._merge_episode_metrics(continued_episode)
+            return
         if self.curriculum.update(self.training_iteration):
             print(f"[curriculum] stage={self.curriculum.current_stage_name} iteration={self.training_iteration}")
         changed = self.task_manager.reallocate(self.training_iteration)
@@ -777,6 +866,65 @@ class WheelLegInfantryEnv(TaskConfiguration):
         self._reset_idx(self.reset_buf, record_episode=False)
         episode.update(self.task_manager.metrics())
         self.extras["episode"] = episode
+        self._merge_episode_metrics(continued_episode)
+
+    def _continue_successful_tasks(self):
+        manager = self.task_manager
+        success = self.extras["task_successes"]
+        if not success.any():
+            return {}
+        remaining = torch.zeros_like(self.episode_length_buf)
+        for name, task in manager.active_tasks():
+            if name != "locomotion":
+                selected = success & task.mask
+                remaining[selected] = task.remaining_episode_steps()[selected]
+        mask = success & (remaining > 0)
+        if not mask.any():
+            return {}
+
+        # 原任务的奖励、成功率和课程已结算；后续失败不再改写这次成功。
+        episode = self._collect_episode_metrics(mask)
+        manager.continue_with_locomotion(mask, remaining)
+        locomotion = manager.tasks["locomotion"]
+        locomotion.clear_episode_sums(mask)
+        ids = mask.nonzero(as_tuple=False).flatten()
+        centers, tiles = locomotion.terrain.sample_spawn_tiles(ids)
+        positions = self.base_pos[ids].clone()
+        positions[:, :2] = centers
+        positions[:, 2] -= self.terrain_height[ids]
+        # 只平移到空旷平地，保留姿态、关节、速度、动作及 GRU 历史。
+        self.robot.set_pos(positions, envs_idx=ids, zero_velocity=False)
+        self.base_pos[ids] = positions
+        self.terrain_height[ids] = 0.0
+        self.base_height[ids] = positions[:, 2]
+        self.terrain_spawn_centers[ids] = centers
+        self.terrain_tile_index[ids] = tiles
+        locomotion.terrain_tile_index[ids] = tiles
+        self.tilt_out_steps[ids] = 0
+        self.base_contact_steps[ids] = 0
+        self._copy_termination_steps(locomotion)
+        commands = locomotion._sample_commands(locomotion.command_cfg, locomotion.commands_limit)
+        self.commands[ids] = commands[ids]
+        self.reset_buf[ids] = False
+
+        if self.tof is not None:
+            self.tof_distances[ids] = self.tof.read(after_reset=True, env_ids=ids, strength=self.sensor_noise.strength)
+            self.tof_clock.reset(ids)
+            if self.tof_history is not None:
+                self.tof_history.reset(self.tof_distances, ids)
+                self.true_tof_distances[ids] = self.tof.read_ground_truth(after_reset=True, env_ids=ids)
+                self.true_tof_history.reset(self.true_tof_distances, ids)
+        return episode
+
+    def _merge_episode_metrics(self, episode):
+        if not episode:
+            return
+        current = self.extras.setdefault("episode", {})
+        for key, value in episode.items():
+            if key in current and isinstance(value, torch.Tensor) and isinstance(current[key], torch.Tensor):
+                current[key] = torch.cat((current[key].reshape(-1), value.reshape(-1)))
+            else:
+                current[key] = value
 
     def _reset_idx(self, env_idx=None, *, record_episode=None):
         """统一按布尔 mask 重置；None 为手动全量重置，不记录结束回合。"""
@@ -789,6 +937,7 @@ class WheelLegInfantryEnv(TaskConfiguration):
 
         # 在状态清零前保存结束回合的统计；手动 reset 不产生 episode 日志。
         episode = self._collect_episode_metrics(reset_mask) if record_episode else None
+        self.task_manager.restore_episode_tasks(reset_mask)
 
         self.base_contact_regions.reset(reset_mask)
         (
@@ -922,9 +1071,7 @@ class WheelLegInfantryEnv(TaskConfiguration):
             getattr(self, name)[task.mask] = value
 
     def _resample_commands(self, envs_mask):
-        for task in self.task_manager.tasks.values():
-            if not len(task.env_ids):
-                continue
+        for _, task in self.task_manager.active_tasks():
             mask = task.mask & envs_mask
             task._resample_commands(mask)
 
@@ -933,9 +1080,7 @@ class WheelLegInfantryEnv(TaskConfiguration):
         self.task_manager.update_curricula()
 
     def _update_tracking_gate(self):
-        for name, task in self.task_manager.tasks.items():
-            if not len(task.env_ids):
-                continue
+        for name, task in self.task_manager.active_tasks():
             task._update_tracking_gate()
             if name == "jump":
                 for field in ("height_gate", "attitude_gate", "tracking_gate_raw", "tracking_gate"):
@@ -945,9 +1090,7 @@ class WheelLegInfantryEnv(TaskConfiguration):
                 getattr(self, field)[task.mask] = 1.0 if name == "jump" else values[task.mask]
 
     def _update_task_state(self):
-        for task in self.task_manager.tasks.values():
-            if not len(task.env_ids):
-                continue
+        for _, task in self.task_manager.active_tasks():
             task._update_task_state()
             self._copy_termination_steps(task)
 
@@ -964,7 +1107,10 @@ class WheelLegInfantryEnv(TaskConfiguration):
         return self.task_manager.masked("_tilt_failure")
 
     def _episode_timeout(self):
-        return self.task_manager.masked("_episode_timeout")
+        manager = self.task_manager
+        return torch.where(manager.continuation_mask,
+                           self.episode_length_buf >= manager.continuation_end_steps,
+                           manager.masked("_episode_timeout"))
 
     def _task_termination(self):
         return self.task_manager.masked("_task_termination")

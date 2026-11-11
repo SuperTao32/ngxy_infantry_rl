@@ -47,18 +47,23 @@ class TrainingTerrain:
     is_plane = False
     config = {"preset": "training_tasks", "boundary_margin": 0.25}
 
-    def __init__(self, tasks):
+    def __init__(self, tasks, *, loaded_tasks=None):
         self.tasks = tasks
+        self.loaded_tasks = frozenset(tasks if loaded_tasks is None else loaded_tasks)
+        if not self.loaded_tasks or self.loaded_tasks - tasks.keys():
+            raise ValueError("loaded terrain tasks must be a nonempty subset of configured tasks")
         # Jump support geometry uses absolute lane y; keep it at y=0.
         offsets = {"jump": 0.0, "locomotion": -24.0, "recovery": -48.0, "multi_terrain": 24.0}
         for name, task in tasks.items():
             task.terrain = TaskTerrainRegion(task.terrain, offsets[name])
-        self.tile_size = tuple(max(task.terrain.tile_size[i] for task in tasks.values()) for i in (0, 1))
-        self.max_collision_pairs = max(task.terrain.max_collision_pairs for task in tasks.values())
+        self.tile_size = tuple(max(tasks[name].terrain.tile_size[i] for name in self.loaded_tasks) for i in (0, 1))
+        self.max_collision_pairs = max(tasks[name].terrain.max_collision_pairs for name in self.loaded_tasks)
 
     def add_to_scene(self, scene):
         entities = []
-        for task in self.tasks.values():
+        for name, task in self.tasks.items():
+            if name not in self.loaded_tasks:
+                continue
             terrain = task.terrain
             added = terrain.add_to_scene(OffsetScene(scene, (0., terrain.offset_y, 0.), terrain.tile_size))
             entities.extend(added if isinstance(added, tuple) else (added,))
@@ -81,11 +86,13 @@ class TrainingTerrain:
 
     def height_at(self, xy):
         # All non-flat regions occupy disjoint y ranges; flat surfaces are z=0.
-        return sum(task.terrain.height_at(xy) for task in self.tasks.values())
+        return sum(self.tasks[name].terrain.height_at(xy) for name in self.tasks if name in self.loaded_tasks)
 
     def out_of_bounds(self, xy, centers):
         result = torch.zeros(len(xy), dtype=torch.bool, device=xy.device)
-        for task in self.tasks.values():
+        for name, task in self.tasks.items():
+            if name not in self.loaded_tasks:
+                continue
             result[task.mask] = task.terrain.out_of_bounds(xy[task.mask], centers[task.mask])
         return result
 

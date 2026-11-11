@@ -80,8 +80,7 @@ class RecoveryTask(RecoveryRewards, Task):
         self.stand_up.enforce_commands(self.commands, mask=self.mask)
 
     def _task_success(self):
-        # 站稳事件只发奖励，回合到时才以成功终局结束，留出时间学习保持静止。
-        return ~self.stand_up.active & self._episode_timeout()
+        return ~self.stand_up.active
 
     def episode_metrics(self, mask):
         success = ~self.stand_up.active

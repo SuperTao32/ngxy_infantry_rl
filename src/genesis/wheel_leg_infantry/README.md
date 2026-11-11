@@ -2,6 +2,8 @@
 
 四个任务在一个 `WheelLegInfantryEnv`、一个 Genesis Scene 和一份 PPO rollout 中训练同一 actor/critic。默认权重为 `locomotion:recovery:jump:multi_terrain = 2:0:1:0`；各任务的回合可以独立结束，GRU 按各环境的 done 重置。
 
+除 locomotion 外，任务成功后先结算该任务的奖励、成功率与课程，再将机器人平移到 locomotion 平地区域，用原回合剩余时间采样 locomotion。切换保留姿态、关节、速度、动作和 GRU 历史，立即采样当前 locomotion 课程的命令并刷新 ToF 历史；后续奖励及有效样本计入 locomotion，任务配额不变。剩余时间用完、物理失败或越界时正常 reset，下一回合恢复原分配任务。recovery 首次站稳即可切换；jump 仍等待该模式输入窗口结束，剩余预算按跳跃计时计算、不含助跑；多地形保留间断停车扩展的时长。单任务训练即使未选择 locomotion，也会自动建立零配额的 locomotion 组件。
+
 ## 入口
 
 从仓库根目录执行：
@@ -37,7 +39,9 @@ uv run --locked python -m src.genesis.wheel_leg_infantry.eval \
   -e infantry --terrain plane
 ```
 
-训练默认构建全部任务，零权重任务暂不采样，可由后续课程启用。`--tasks` 支持多个名称并限制可分配的任务集合；若只选择初始权重为零的任务，需要同时用 `--task-weights` 设置正权重。每个正权重任务至少分配一个环境，所有权重不能同时为零；multi_terrain 的正配额还需容纳其内部课程。`--task-weights` 覆盖初始比例，后续仍遵循配置中的阶段分配。
+训练保留所选任务的配置与课程状态，物理地形按全局配额延迟加载：起始只加入当前获得配额的任务地形；任务首次获得正配额时，再加入它的几何。locomotion 还承接其他任务成功后的平地行走，因此始终保留其地形。全程零配额任务的地形不会进入物理场景或 ToF 的 BVH。`--tasks` 支持多个名称并限制可分配的任务集合；若只选择初始权重为零的任务，需要同时用 `--task-weights` 设置正权重。每个正权重任务至少分配一个环境，所有权重不能同时为零；multi_terrain 的正配额还需容纳其内部课程。`--task-weights` 覆盖初始比例，后续仍遵循配置中的阶段分配。
+
+Genesis 普通场景建成后不能直接追加实体，因此新增任务地形时会在完整 rollout 和 PPO 更新结束后重建一次场景，首次加载可能包含内核编译停顿。重建前先保存刚完成轮次的 checkpoint。切换时保留 actor/critic、归一化统计、优化器及所有任务课程进度；尚未结束的仿真回合按 timeout 截断，重建后重置机器人与 GRU 状态。已经加载的任务后续调权重或暂停时不重复重建。控制台的 `[terrain]` 显示已加载及待加载任务，`Perf/terrain_rebuild_time` 单独记录切换成本。续训根据恢复轮次直接构建当前需要的地形；交互评估继续按所选评估场景加载。
 
 `--load-weight CHECKPOINT` 加载 actor/critic 的完整模型状态，包括 GRU 权重、动作分布参数及观测归一化统计；使用当前配置创建新版本，优化器、全局迭代数、任务课程和 GRU 隐状态重新初始化。可自由选择任务集合及权重，网络结构与观测/动作维度须兼容源 checkpoint；不需要源目录中的 `cfgs.pkl`。此模式的 `--max-iterations` 为从第 0 轮开始的训练轮数，不能与 `--resume`、`--checkpoint` 或 `--resume-config current` 同用，来源路径记录到 `run_metadata.json`。
 

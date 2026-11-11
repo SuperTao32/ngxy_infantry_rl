@@ -21,13 +21,13 @@ RECOVERY_RESET_DIFFICULTY_RANGE = [0, 0]  # 只测 0 级；None 使用清单全�
 
 `reset_pos.json` 使用 `RESET_POSE`，其余裸文件名自动位于 `RESET_POSE_DIR`（`reset_pos/` 子目录）；也支持 `"default"`、绝对路径及显式相对路径（相对工作目录）。要复用训练清单，可写 `RECOVERY_RESET_POSES = RESET_POSE_DIFFICULTIES.copy()`，再按 eval 难度范围筛选。难度只用于筛选，不是采样权重；每次 R 可重复抽到同一个姿态。未配置文件不会自动加载，筛选无候选时会明确报错。旧式 Path/字符串 tuple/list 继续使用原路径规则，不进行难度筛选。eval 启动时从当前源码读取清单；它不使用 checkpoint 保存的训练池或动态释放概率。
 
-恢复成功需要连续满足高度、姿态、腿角、接触和速度条件。站稳当拍只发放一次起身成功和速度奖励，不立即结束回合；此后继续保持零线速度、零偏航角速度和起身高度命令，直到 `episode_length_s`（默认从 reset 起共 5 s）再作为成功终局结束。保持期间物理失败仍会提前终止。恢复任务和另外三个任务共用动作缩放、观测与 GRU policy。
+恢复成功需要连续满足高度、姿态、腿角、接触和速度条件。站稳当拍发放一次起身成功和速度奖励并结算 recovery 统计；随后平移到空旷平地，剩余 `episode_length_s`（默认从 reset 起共 5 s）用于 locomotion 训练，复用其当前课程的命令、奖励和终止规则。切换不产生 done，保留速度和 GRU 历史；回合结束后恢复 recovery 分配。恢复任务和另外三个任务共用动作缩放、观测与 GRU policy。
 
-尚未完成起身便超时或越界截断的 recovery 回合，以及任意阶段发生物理失败的回合，统一触发一次 `death` 惩罚，数值由 `reward_scales.death` 控制，不乘控制步长。已完成起身后的超时或越界截断不扣分；物理失败优先，同拍存在多个结束原因也只扣一次。未成功回合的超时继续保留原有的价值 bootstrap 处理，其他任务的 `death` 规则不变。起身用时在首次站稳后冻结，不包含后续静止阶段。
+尚未完成起身便超时或越界截断的 recovery 回合，以及 recovery 阶段发生物理失败的回合，统一触发一次 `death` 惩罚，数值由 `reward_scales.death` 控制，不乘控制步长。物理失败优先，同拍存在多个结束原因也只扣一次。未成功回合的超时继续保留原有的价值 bootstrap 处理。切到 locomotion 后的失败使用 locomotion 的 death 规则，不改变已结算的 recovery 成功。起身用时在首次站稳后冻结。
 
-`standing_drift` 从首次站稳当拍开始持续生效，起身阶段为 0。它复用公共的水平速度 L1 漂移项：`sum(clamp(abs(base_lin_vel_xy) - standing_drift_deadband, min=0))`，默认死区 0.01 m/s，不乘姿态/高度 gate。`reward_scales.standing_drift` 默认 -20.0，按控制步长缩放，漂移越小惩罚越少；日志为 `recovery/rewards/standing_drift`。普通续训沿用存档权重；旧存档要启用此项，使用 `--resume-config current`。
+`standing_drift` 在首次站稳当拍生效，起身阶段为 0；之后切到 locomotion 的对应奖励。它复用公共的水平速度 L1 漂移项：`sum(clamp(abs(base_lin_vel_xy) - standing_drift_deadband, min=0))`，默认死区 0.01 m/s，不乘姿态/高度 gate。`reward_scales.standing_drift` 默认 -20.0，按控制步长缩放，漂移越小惩罚越少；日志为 `recovery/rewards/standing_drift`。普通续训沿用存档权重；旧存档要启用此项，使用 `--resume-config current`。
 
-`standing_still` 同样从首次站稳当拍开始逐拍发放，起身阶段为 0，直到回合结束；它与 `standing_drift` 一起约束后续静止，不依赖单拍的 `just_completed`。此项复用 locomotion 的公共指数奖励：`height_gate * attitude_gate * exp(-(vx² + vy²) / lin_scale² - wz² / ang_scale²)`，仅静止命令下生效，无速度死区，直接追踪真实水平零线速度和零偏航角速度。默认 `standing_still_lin_vel_scale=0.01 m/s`、`standing_still_ang_vel_scale=0.02 rad/s`，尺度越小越严格；高度/姿态门不带保底值，门关闭时奖励为 0。`reward_scales.standing_still` 默认 2.0，按控制步长缩放，站稳且速度为零时每步贡献 `2.0 * dt`，日志为 `recovery/rewards/standing_still`。普通续训沿用存档权重；旧存档启用此项需使用 `--resume-config current`。
+`standing_still` 同样只在 recovery 首次站稳当拍结算，之后使用 locomotion 的奖励配置。此项复用 locomotion 的公共指数奖励：`height_gate * attitude_gate * exp(-(vx² + vy²) / lin_scale² - wz² / ang_scale²)`，仅静止命令下生效，无速度死区，直接追踪真实水平零线速度和零偏航角速度。默认 `standing_still_lin_vel_scale=0.01 m/s`、`standing_still_ang_vel_scale=0.02 rad/s`，尺度越小越严格；高度/姿态门不带保底值，门关闭时奖励为 0。`reward_scales.standing_still` 默认 2.0，按控制步长缩放，站稳且速度为零时每步贡献 `2.0 * dt`，日志为 `recovery/rewards/standing_still`。普通续训沿用存档权重；旧存档启用此项需使用 `--resume-config current`。
 
 Recovery 的 `base_height` 使用姿态混合惩罚：`active * (height-target)**2 + (1-active) * clamp(H_REF-height, min=0) / 15`。`active` 由 `-projected_gravity[:, 2]` 计算，倾角 ≤30° 为 1，≥80°（包括翻面）为 0，中间按余弦线性过渡。height 使用相对当地地面的机身高度，target 使用当前高度命令；`stand_up_height_reference_m` 是 H_REF，默认 0.22 m，旧存档未配置时取 `stand_up.height`。权重仍为 `reward_scales.base_height=-10.0`，按控制步长缩放。
 

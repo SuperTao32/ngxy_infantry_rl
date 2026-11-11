@@ -399,8 +399,11 @@ class MultiTerrainTask(MultiTerrainRewards, MultiTerrainBuffers, Task):
 
     def _episode_timeout(self):
         # 独立计时不受 runner.init_at_random_ep_len 修改的 episode_length_buf 干扰。
+        return self.remaining_episode_steps() <= 0
+
+    def remaining_episode_steps(self):
         duration = self._value("episode_length_s") + self.intermittent.timeout_extension(self)
-        return self.task_steps >= (duration / self.dt).ceil().long()
+        return (duration / self.dt).ceil().long() - self.task_steps
 
     def _task_termination(self):
         outside = ~self._task_in_corridor(self.base_pos[:, :2])

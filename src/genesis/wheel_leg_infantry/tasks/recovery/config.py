@@ -8,7 +8,7 @@ RESET_POSE = Path(__file__).with_name("reset_pos.json")
 
 # 配置中列出的 pose 文件位于此目录；CLI --recovery-poses 可显式指定其他来源。
 RESET_POSE_DIR = Path(__file__).with_name("reset_pos")
-DYNAMIC_RESET_PROBABILITY = 0.2
+DYNAMIC_RESET_PROBABILITY = 0.5
 
 # 默认训练池的完整清单：文件名 -> 难度，非负整数，越大越难。
 # reset_pos.json 使用 RESET_POSE，其余文件相对 RESET_POSE_DIR；不扫描目录。
@@ -45,7 +45,7 @@ def get_recovery_training_reset_cfg(sources=None):
         "side_lying_angle_deg": SIDE_LYING_ANGLE_DEG,
         "dynamic_probability": DYNAMIC_RESET_PROBABILITY,
         "dynamic": {
-            "lift_height_range": [0.05, 0.15],
+            "lift_height_range": [0.10, 0.20],
             "pitch_offset_range_deg": [-10.0, 10.0],
             # 基座线速度与角速度均为世界系；关节初始速度仍为零。
             "base_lin_vel_range": [[-0.15, 0.15], [-0.15, 0.15], [-0.2, 0.0]],
@@ -124,8 +124,6 @@ def get_cfgs():
             "wheel_ground_distance": -50.0,
             "tracking_lin_vel": -2.0,
             "tracking_ang_vel": -3.0,
-            "standing_drift": -10.0,
-            # "standing_still": 2.0,
             "leg_action_rate": -0.2,
             "wheel_action_rate": -2.0,
             "leg_symmetry": -5.0,

@@ -100,11 +100,32 @@ def initial_task_counts(configs, num_envs, curriculum_cfg=None):
     return initial
 
 
+def task_counts_at(configs, num_envs, curriculum_cfg, iteration):
+    """Resolve cumulative global quotas at a training iteration without side effects."""
+    curriculum = CurriculumManager(curriculum_cfg)
+    weights = {}
+    if curriculum.enabled:
+        for stage in curriculum.stages:
+            if stage["start_iteration"] > iteration:
+                break
+            weights.update(stage.get("targets", {}).get("task_weights", {}))
+    return allocate_task_counts(configs, num_envs, weights)
+
+
 class TaskManager:
     def __init__(self, env, configs):
         self.env = env
+        # 单独训练 recovery/jump/多地形时，也提供零配额的成功后平地任务。
+        self._implicit_locomotion = "locomotion" not in configs
+        if self._implicit_locomotion:
+            config = dict(task_configs("locomotion"), weight=0.0)
+            config["curriculum_cfg"]["reference_num_envs"] = next(iter(configs.values()))["curriculum_cfg"].get("reference_num_envs", 8192)
+            configs = {**configs, "locomotion": config}
         self.configs = configs
         self.tasks = {}
+        self.continuation_mask = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+        self.continuation_end_steps = torch.zeros(env.num_envs, dtype=torch.long, device=env.device)
+        self.locomotion_start_steps = torch.zeros_like(self.continuation_end_steps)
         self.weights = {name: config["weight"] for name, config in configs.items()}
         self.progress = {name: TaskCurriculumProgress(config["curriculum_cfg"], steps_per_iteration=env.steps_per_iteration)
                          for name, config in configs.items()}
@@ -112,11 +133,13 @@ class TaskManager:
         self._legacy_progress = set()
         start = 0
         counts = initial_task_counts(configs, env.num_envs, env.curriculum_cfg)
+        if getattr(env, "training_iteration", 0):
+            counts = task_counts_at(configs, env.num_envs, env.curriculum_cfg, env.training_iteration)
         for (name, config), count in zip(configs.items(), counts):
             ids = torch.arange(start, start + count, device=env.device)
             self.tasks[name] = task_class(name)(env, name, config, ids)
             if count:
-                self.progress[name].mark_allocated(0)
+                self.progress[name].mark_allocated(getattr(env, "training_iteration", 0))
             start += count
 
     def set_weights(self, values):
@@ -148,7 +171,33 @@ class TaskManager:
             offset += missing
             if not torch.equal(ids, task.env_ids):
                 task.set_env_ids(ids)
+        self._refresh_task_masks()
         return changed
+
+    def _refresh_task_masks(self):
+        for name, task in self.tasks.items():
+            task.mask.zero_()
+            task.mask[task.env_ids] = True
+            if name == "locomotion":
+                task.mask |= self.continuation_mask
+            else:
+                task.mask &= ~self.continuation_mask
+
+    def continue_with_locomotion(self, mask, remaining_steps):
+        self.continuation_mask |= mask
+        self.locomotion_start_steps[mask] = self.env.episode_length_buf[mask]
+        self.continuation_end_steps[mask] = self.env.episode_length_buf[mask] + remaining_steps[mask]
+        self._refresh_task_masks()
+
+    def restore_episode_tasks(self, reset_mask):
+        self.continuation_mask[reset_mask] = False
+        self.locomotion_start_steps[reset_mask] = 0
+        self.continuation_end_steps[reset_mask] = 0
+        self._refresh_task_masks()
+
+    def active_tasks(self):
+        # locomotion 可以在零配额时接收其他任务成功后的行，不做逐步 GPU -> CPU 同步。
+        return ((name, task) for name, task in self.tasks.items() if len(task.env_ids) or name == "locomotion")
 
     def training_mask(self):
         valid = torch.ones(self.env.num_envs, dtype=torch.bool, device=self.env.device)
@@ -159,10 +208,8 @@ class TaskManager:
 
     def advance_progress(self, iteration, train_mask=None):
         if train_mask is None:
-            for name, task in self.tasks.items():
-                self.progress[name].advance(len(task.env_ids), world_size=self.world_size, iteration=iteration)
-            return
-        counts = torch.stack([train_mask[task.env_ids].sum() for task in self.tasks.values()])
+            train_mask = torch.ones(self.env.num_envs, dtype=torch.bool, device=self.env.device)
+        counts = torch.stack([(train_mask & task.mask).sum() for task in self.tasks.values()])
         # 异步助跑使各 rank 的有效样本数不同，必须汇总实测数量而非乘 world_size。
         if self.world_size > 1:
             dist.all_reduce(counts, op=dist.ReduceOp.SUM)
@@ -191,15 +238,14 @@ class TaskManager:
                                       sampled_env_steps=float(self.progress[name].sampled_env_steps)).items()}
 
     def call(self, method, *args):
-        for task in self.tasks.values():
-            if len(task.env_ids) or method in {"bind_buffers", "clear_episode_sums", "after_step"}:
-                getattr(task, method)(*args)
+        tasks = self.tasks.items() if method in {"bind_buffers", "clear_episode_sums", "after_step"} else self.active_tasks()
+        for _, task in tasks:
+            getattr(task, method)(*args)
 
     def masked(self, method):
         result = torch.zeros(self.env.num_envs, dtype=torch.bool, device=self.env.device)
-        for task in self.tasks.values():
-            if len(task.env_ids):
-                result |= task.mask & getattr(task, method)()
+        for _, task in self.active_tasks():
+            result |= task.mask & getattr(task, method)()
         return result
 
     def state_dict(self):
@@ -210,7 +256,8 @@ class TaskManager:
         """恢复已有任务；current 续训可新增任务，其独立课程从零开始。"""
         removed = set(state) - self.tasks.keys()
         added = self.tasks.keys() - set(state)
-        if removed or (added and not allow_new_tasks):
+        required_added = added - ({"locomotion"} if self._implicit_locomotion else set())
+        if removed or (required_added and not allow_new_tasks):
             raise ValueError(
                 "Checkpoint task set differs from the current training configuration; "
                 "use --resume-config current to add tasks, and retain all checkpoint tasks"

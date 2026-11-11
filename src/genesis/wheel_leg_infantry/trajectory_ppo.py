@@ -89,6 +89,7 @@ class TrajectoryStorage(RolloutStorage):
 
 class TrajectoryPPO(PPO):
     def __init__(self, actor, critic, storage, **kwargs):
+        self.on_rollout_end = None
         storage = TrajectoryStorage(
             storage.training_type, storage.num_envs, storage.num_transitions_per_env,
             storage.observations[0], storage.actions_shape, storage.device,
@@ -149,10 +150,15 @@ class TrajectoryPPO(PPO):
             count = int(available)
         if not count:
             self.storage.clear()
+            if self.on_rollout_end is not None:
+                self.on_rollout_end()
             return {"value": 0., "surrogate": 0., "entropy": 0.}
         configured_batches = self.num_mini_batches
         self.num_mini_batches = min(configured_batches, count)
         try:
-            return super().update()
+            losses = super().update()
         finally:
             self.num_mini_batches = configured_batches
+        if self.on_rollout_end is not None:
+            self.on_rollout_end()
+        return losses

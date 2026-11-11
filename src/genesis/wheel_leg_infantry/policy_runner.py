@@ -1,6 +1,9 @@
 """统一 PPO runner：一个 actor/critic，保存所有任务的课程状态。"""
 
 from copy import deepcopy
+from pathlib import Path
+
+import torch
 
 from .tools.run_utils import load_runner_class
 
@@ -17,6 +20,28 @@ class PolicyRunner(load_runner_class()):
             if train_cfg[role]["class_name"] == "RNNModel":
                 train_cfg[role]["class_name"] = "src.genesis.wheel_leg_infantry.trajectory_ppo:TrajectoryRNNModel"
         super().__init__(env, train_cfg, *args, **kwargs)
+        if callable(getattr(env, "rebuild_pending_terrain", None)):
+            if torch.device(self.device) != torch.device(env.device):
+                raise ValueError("Deferred terrain loading requires the policy and environment on the same device")
+            self.alg.on_rollout_end = self._rebuild_terrain
+
+    def _rebuild_terrain(self):
+        iteration = getattr(self.env, "_scene_rebuild_iteration", None)
+        if iteration is not None and self.logger.writer is not None:
+            # The update just finished; save it before a potentially expensive
+            # scene build so interruption can resume directly into the new stage.
+            self.current_learning_iteration = iteration - 1
+            self.save(str(Path(self.logger.log_dir) / f"model_{self.current_learning_iteration}.pt"))
+        # New simulator tensors must be ordinary tensors even when learn() was
+        # called from an inference context. Model/optimizer objects stay intact.
+        with torch.inference_mode(False), torch.no_grad():
+            if self.env.rebuild_pending_terrain():
+                self.alg.actor.reset()
+                self.alg.critic.reset()
+                if self.logger.writer is not None:
+                    self.logger.writer.add_scalar(
+                        "Perf/terrain_rebuild_time", self.env.terrain_rebuild_seconds, self.env.training_iteration,
+                    )
 
     def _configure_multi_gpu(self):
         workers = self.workers

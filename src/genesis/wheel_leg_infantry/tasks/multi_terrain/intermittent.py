@@ -180,18 +180,18 @@ class IntermittentTraversal:
             getattr(self, name)[selected] = sampled
 
     def apply_commands(self, env):
-        moving = self.enabled & ~self.paused
+        moving = env.mask & self.enabled & ~self.paused
         env.commands[moving] = self.move_commands[moving]
         predictive = moving & self.value(env, "predictive_braking").bool()
         env.commands[predictive, 0] = torch.minimum(
             env.commands[predictive, 0], self.value(env, "crossing_speed_m_s")[predictive])
-        approach = self.enabled & (self.phase == self.APPROACH)
+        approach = env.mask & self.enabled & (self.phase == self.APPROACH)
         env.commands[approach, 0] = torch.minimum(
             env.commands[approach, 0], self.value(env, "approach_speed_m_s")[approach])
         drills = env.parking.drill & moving
         env.commands[drills, 0] = torch.minimum(env.commands[drills, 0], self.value(env, "approach_speed_m_s")[drills])
         # 静止只覆盖线速度和偏航速度，机身高度保留本回合的采样值。
-        env.commands[self.paused, :2] = 0
+        env.commands[env.mask & self.paused, :2] = 0
 
     def update(self, env, wheels):
         # 此拍奖励对应刚执行的命令，阶段转换后的命令在奖励结算后才写入。
