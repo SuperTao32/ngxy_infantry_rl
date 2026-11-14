@@ -26,7 +26,8 @@ def _cast_collision_subset(
     eps: float,
 ):
     for row, ray, face in qd.ndrange(env_ids.shape[0], origins.shape[1], dyn_info.faces.verts_idx.shape[0]):
-        env = env_ids[row]
+        # Torch nonzero/arange use int64; Quadrants field indices require int32.
+        env = qd.cast(env_ids[row], qd.i32)
         geom = dyn_info.faces.geom_idx[face]
         link = dyn_info.geoms.link_idx[geom]
         link_index = [link, env] if qd.static(rigid_config.batch_links_info) else link

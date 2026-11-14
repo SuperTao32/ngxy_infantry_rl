@@ -873,11 +873,12 @@ class WheelLegInfantryEnv(TaskConfiguration):
         success = self.extras["task_successes"]
         if not success.any():
             return {}
-        remaining = torch.zeros_like(self.episode_length_buf)
+        # Task budgets can be int64 even when Genesis episode counters are int32.
+        remaining = torch.zeros_like(manager.continuation_end_steps)
         for name, task in manager.active_tasks():
             if name != "locomotion":
                 selected = success & task.mask
-                remaining[selected] = task.remaining_episode_steps()[selected]
+                remaining[selected] = task.remaining_episode_steps()[selected].to(remaining.dtype)
         mask = success & (remaining > 0)
         if not mask.any():
             return {}

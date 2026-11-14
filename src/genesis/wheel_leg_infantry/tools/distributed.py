@@ -4,7 +4,6 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 import os
 import signal
-import subprocess
 import sys
 
 import torch
@@ -12,7 +11,7 @@ import torch.distributed as dist
 
 
 def launch_training(num_gpus, argv, *, cpu=False):
-    """Launch one torchrun worker per GPU; existing torchrun workers continue inline."""
+    """Replace the CLI with torchrun; existing workers continue inline."""
     world_size = int(os.getenv("WORLD_SIZE", "1"))
     if cpu and (world_size > 1 or (num_gpus is not None and num_gpus > 1)):
         raise ValueError("--cpu cannot be used with multi-GPU training")
@@ -28,12 +27,14 @@ def launch_training(num_gpus, argv, *, cpu=False):
     if not dist.is_nccl_available():
         raise ValueError("Multi-GPU training requires a PyTorch build with NCCL support")
     print(f"[train] launching {num_gpus} GPU workers", flush=True)
-    result = subprocess.run([
+    # Keep the externally managed PID as the torchrun agent. Its signal handlers
+    # forward termination to workers and enforce a graceful-shutdown deadline,
+    # including workers that torchrun starts in separate process groups.
+    os.execv(sys.executable, [
         sys.executable, "-m", "torch.distributed.run", "--standalone", "--nnodes=1",
         f"--nproc-per-node={num_gpus}", "--module", "src.genesis.wheel_leg_infantry.train", *argv,
     ])
-    if result.returncode:
-        raise SystemExit(result.returncode if result.returncode > 0 else 128 - result.returncode)
+    # A successful exec never returns; this also permits a mocked exec in tests.
     return True
 
 

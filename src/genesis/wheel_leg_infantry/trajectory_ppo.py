@@ -1,7 +1,7 @@
 """只用可训练控制步更新 PPO，保留异步环境的连续跳跃轨迹。"""
 
 import torch
-from tensordict import TensorDict
+from torch.nn.utils.rnn import PackedSequence
 
 from rsl_rl.algorithms import PPO
 from rsl_rl.models import RNNModel
@@ -9,21 +9,37 @@ from rsl_rl.models.mlp_model import MLPModel
 from rsl_rl.storage import RolloutStorage
 
 
+def normalize_advantages(advantages):
+    std = advantages.std() if advantages.numel() > 1 else 0.
+    return (advantages - advantages.mean()) / (std + 1e-8)
+
+
 class TrajectoryRNNModel(RNNModel):
     def get_latent(self, obs, masks=None, hidden_state=None):
         if masks is None:
             return super().get_latent(obs, masks, hidden_state)
         latent = MLPModel.get_latent(self, obs)
-        latent, _ = self.rnn.rnn(latent, hidden_state)
-        # 不等长轨迹不能使用框架按固定环境步数 reshape 的 unpad。
-        # 保留 [1, 有效样本数, hidden]，与 PPO 的 [time, batch] 数据布局一致。
-        return latent.transpose(0, 1)[masks.T].unsqueeze(0)
+        # Accept padded callers too; storage itself only materializes valid rows.
+        latent = latent.transpose(0, 1)[masks.T] if latent.shape[:2] == masks.shape else latent.squeeze(0)
+        lengths = masks.sum(dim=0)
+        order = lengths.argsort(descending=True, stable=True)
+        times, columns = masks[:, order].nonzero(as_tuple=True)
+        offsets = lengths.cumsum(0) - lengths
+        packed_indices = offsets[order[columns]] + times
+        packed = PackedSequence(
+            latent[packed_indices], masks.sum(dim=1).cpu(), order, order.argsort(),
+        )
+        output, _ = self.rnn.rnn(packed, hidden_state)
+        # Undo time-major packing without constructing a padded GRU output.
+        latent = output.data.new_empty(output.data.shape).index_copy_(0, packed_indices, output.data)
+        return latent.unsqueeze(0)
 
 
 class TrajectoryStorage(RolloutStorage):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.train_mask = torch.zeros(self.num_transitions_per_env, self.num_envs, dtype=torch.bool, device=self.device)
+        self.normalize_advantages_per_batch = False
 
     def add_transition(self, transition):
         self.train_mask[self.step].copy_(transition.train_mask)
@@ -41,10 +57,13 @@ class TrajectoryStorage(RolloutStorage):
         def take(value):
             return value[times, envs].unsqueeze(0)
 
+        advantages = take(self.advantages)
+        if self.normalize_advantages_per_batch:
+            advantages = normalize_advantages(advantages)
         return self.Batch(
             observations=observations,
             actions=take(self.actions), values=take(self.values),
-            advantages=take(self.advantages), returns=take(self.returns),
+            advantages=advantages, returns=take(self.returns),
             old_actions_log_prob=take(self.actions_log_prob),
             old_distribution_params=tuple(take(value) for value in self.distribution_params),
             hidden_states=hidden_states, masks=masks,
@@ -60,19 +79,32 @@ class TrajectoryStorage(RolloutStorage):
     def recurrent_mini_batch_generator(self, num_mini_batches, num_epochs=8):
         starts, ends = self.trajectory_bounds()
         lengths = ends[:, 1] - starts[:, 1] + 1
+        if not 1 <= num_mini_batches <= len(starts):
+            raise ValueError("Recurrent minibatches require at least one trajectory per batch")
+        # Greedy contiguous partitions of shuffled trajectories fit this budget:
+        # every non-final full batch consumes at least ceil(total / batches).
+        budget = (int(lengths.sum()) + num_mini_batches - 1) // num_mini_batches + int(lengths.max()) - 1
         for _ in range(num_epochs):
-            for indices in torch.randperm(len(starts), device=self.device).tensor_split(num_mini_batches):
+            order = torch.randperm(len(starts), device=self.device)
+            cumulative = lengths[order].cumsum(0).cpu()
+            begin, consumed = 0, 0
+            for batch_index in range(num_mini_batches):
+                end = int(torch.searchsorted(cumulative, consumed + budget, right=True))
+                # Reserve one whole trajectory for each remaining batch.
+                end = min(end, len(starts) - (num_mini_batches - batch_index - 1))
+                indices = order[begin:end]
+                sample_count = int(cumulative[end - 1]) - consumed
+                begin, consumed = end, int(cumulative[end - 1])
                 first = starts[indices]
                 length = lengths[indices]
                 time = torch.arange(int(length.max()), device=self.device)[:, None]
                 masks = time < length[None, :]
-                times = (time + first[None, :, 1]).clamp_max(self.num_transitions_per_env - 1)
-                envs = first[None, :, 0].expand_as(times)
-                observations = TensorDict(
-                    {key: value[times, envs].masked_fill(~masks[..., None], 0.)
-                     for key, value in self.observations.items()},
-                    batch_size=masks.shape, device=self.device,
+                rows = torch.repeat_interleave(
+                    torch.arange(len(indices), device=self.device), length, output_size=sample_count,
                 )
+                times = torch.arange(sample_count, device=self.device) - (length.cumsum(0) - length)[rows] + first[rows, 1]
+                envs = first[rows, 0]
+                observations = self.observations[times, envs].unsqueeze(0)
 
                 def hidden(saved):
                     if saved is None:
@@ -82,7 +114,7 @@ class TrajectoryStorage(RolloutStorage):
 
                 # 目标与模型的输出均按轨迹优先顺序展平，不含助跑或 padding。
                 yield self._batch(
-                    times.T[masks.T], envs.T[masks.T], observations,
+                    times, envs, observations,
                     hidden_states=(hidden(self.saved_hidden_state_a), hidden(self.saved_hidden_state_c)), masks=masks,
                 )
 
@@ -135,8 +167,7 @@ class TrajectoryPPO(PPO):
             self.normalize_advantage_per_mini_batch = per_batch
         valid_advantages = st.advantages[st.train_mask]
         if not per_batch and valid_advantages.numel():
-            std = valid_advantages.std() if valid_advantages.numel() > 1 else 0.
-            st.advantages[st.train_mask] = (valid_advantages - valid_advantages.mean()) / (std + 1e-8)
+            st.advantages[st.train_mask] = normalize_advantages(valid_advantages)
         st.advantages[~st.train_mask] = 0.
         st.returns[~st.train_mask] = 0.
 
@@ -155,10 +186,17 @@ class TrajectoryPPO(PPO):
             return {"value": 0., "surrogate": 0., "entropy": 0.}
         configured_batches = self.num_mini_batches
         self.num_mini_batches = min(configured_batches, count)
+        per_batch = self.normalize_advantage_per_mini_batch
+        previous_normalization = self.storage.normalize_advantages_per_batch
+        # Normalize locally so the inherited PPO cannot call std() on one value.
+        self.storage.normalize_advantages_per_batch = per_batch
+        self.normalize_advantage_per_mini_batch = False
         try:
             losses = super().update()
         finally:
             self.num_mini_batches = configured_batches
+            self.normalize_advantage_per_mini_batch = per_batch
+            self.storage.normalize_advantages_per_batch = previous_normalization
         if self.on_rollout_end is not None:
             self.on_rollout_end()
         return losses

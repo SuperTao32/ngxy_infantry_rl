@@ -237,7 +237,7 @@ def get_curriculum_cfg() -> dict:
             },
             {
                 "name": "recovery",
-                "start_iteration": 2000,
+                "start_iteration": 1500,
                 "targets": {
                     "task_weights": {
                         "locomotion": 4.0,
@@ -252,7 +252,7 @@ def get_curriculum_cfg() -> dict:
             },
             {
                 "name": "multiterrain",
-                "start_iteration": 2500,
+                "start_iteration": 1700,
                 "targets": {
                     "task_weights": {
                         "locomotion": 4.0,
@@ -267,7 +267,7 @@ def get_curriculum_cfg() -> dict:
             },
             {
                 "name": "jump",
-                "start_iteration": 4500,
+                "start_iteration": 6000,
                 "targets": {
                     # 只填写需要改变的权重；空字典继承上一阶段的分配。
                     "task_weights": {

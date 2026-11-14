@@ -184,9 +184,12 @@ class TaskManager:
                 task.mask &= ~self.continuation_mask
 
     def continue_with_locomotion(self, mask, remaining_steps):
+        # Promote before both indexed writes and addition: Genesis may use int32.
+        start_steps = self.env.episode_length_buf[mask].to(self.locomotion_start_steps.dtype)
+        remaining = remaining_steps[mask].to(self.continuation_end_steps.dtype)
         self.continuation_mask |= mask
-        self.locomotion_start_steps[mask] = self.env.episode_length_buf[mask]
-        self.continuation_end_steps[mask] = self.env.episode_length_buf[mask] + remaining_steps[mask]
+        self.locomotion_start_steps[mask] = start_steps
+        self.continuation_end_steps[mask] = start_steps + remaining
         self._refresh_task_masks()
 
     def restore_episode_tasks(self, reset_mask):
