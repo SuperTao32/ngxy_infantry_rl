@@ -1,0 +1,103 @@
+"""环境自身的 locomotion 奖励项。
+
+这里只描述“测量什么”，正负号和相对权重全部留在根 ``config.py`` 配置中。拆成
+mixin 后，环境文件可以专注于仿真状态、动作和 reset 数据流。
+"""
+
+import torch
+
+
+class LocomotionRewards:
+    def _standing_command_mask(self):
+        # 只由命令决定，避免实际漂移后退出静止约束；高度命令不参与判定。
+        return (
+            (self.commands[:, 0].abs() < self.reward_cfg.get("standing_lin_vel_threshold", 0.02))
+            & (self.commands[:, 1].abs() < self.reward_cfg.get("standing_ang_vel_threshold", 0.02))
+        )
+
+    def _tracking_sigma(self):
+        moving_sigma = self.reward_cfg["tracking_sigma"]
+        # 旧 checkpoint 缺少此配置时保持原来的跟踪容差。
+        return torch.where(
+            self._standing_command_mask(),
+            self.reward_cfg.get("standing_tracking_sigma", moving_sigma),
+            moving_sigma,
+        )
+
+    def _reward_tracking_lin_vel(self):
+        return torch.square(self.base_lin_vel[:, 0] - self.commands[:, 0])
+
+    def _reward_tracking_ang_vel(self):
+        return torch.square(self.base_ang_vel[:, 2] - self.commands[:, 1])
+
+    def _reward_gated_tracking_lin_vel(self):
+        error = torch.square(self.base_lin_vel[:, 0] - self.commands[:, 0])
+        return self.tracking_gate * torch.exp(-error / self._tracking_sigma())
+
+    def _reward_gated_tracking_ang_vel(self):
+        error = torch.square(self.base_ang_vel[:, 2] - self.commands[:, 1])
+        return self.tracking_gate * torch.exp(-error / self._tracking_sigma())
+
+    def _reward_standing_drift(self):
+        """静止命令下的水平 L1 漂移；保留平衡死区，不乘姿态/高度 gate。"""
+        excess_speed = torch.clamp_min(
+            self.base_lin_vel[:, :2].abs() - self.reward_cfg.get("standing_drift_deadband", 0.01), 0.0
+        )
+        return self._standing_command_mask() * excess_speed.sum(dim=1)
+
+    def _reward_standing_still(self):
+        """静止命令下严格趋近零水平速度和零偏航速度，无速度死区。"""
+        lin_scale = float(self.reward_cfg.get("standing_still_lin_vel_scale", 0.02))
+        ang_scale = float(self.reward_cfg.get("standing_still_ang_vel_scale", 0.05))
+        linear_error = (self.base_lin_vel[:, :2] / lin_scale).square().sum(dim=1)
+        angular_error = (self.base_ang_vel[:, 2] / ang_scale).square()
+        # 用不带保底值的高度/姿态门，静止但未站稳时不发放满额奖励。
+        reward = self.tracking_gate_raw * torch.exp(-linear_error - angular_error)
+        return torch.where(self._standing_command_mask(), reward, 0.0)
+
+    def _reward_base_balance(self):
+        # 小角度下约等于倾角平方，倒立时也有惩罚。
+        return 2.0 * (1.0 + self.projected_gravity[:, 2]).clamp(0.0, 2.0)
+
+    def _reward_leg_symmetry(self):
+        return torch.square(self.leg_angle[:, 0] - self.leg_angle[:, 1])
+
+    def _reward_leg_symmetry_bonus(self):
+        error = torch.square(self.leg_angle[:, 0] - self.leg_angle[:, 1])
+        return torch.exp(-error / 0.04)
+
+    def _reward_base_height(self):
+        # base_height 是机身世界 z 减去当前位置地面 z；在坡面和起伏路面上
+        # 不应把地形自身的海拔变化算成跟踪误差。
+        return torch.square(self.base_height - self.commands[:, 2])
+
+    def _reward_height_gate(self):
+        # 直接奖励高度门的开启程度，不依赖姿态门，避免高度还没学会时奖励消失。
+        return self.height_gate
+
+    def _reward_joint_vel(self):
+        return torch.sum(torch.square(self.joint_vel), dim=1)
+
+    def _reward_leg_action_rate(self):
+        """惩罚相邻控制拍的腿部动作变化，抑制逐拍反向振荡。"""
+        delta = self.actions[:, :self.num_joints] - self.last_actions[:, :self.num_joints]
+        return torch.sum(delta.square(), dim=1)
+
+    def _reward_wheel_action_rate(self):
+        wheel = slice(self.num_joints, self.num_joints + self.num_wheels)
+        delta = self.actions[:, wheel] - self.last_actions[:, wheel]
+        return torch.sum(delta.square(), dim=1)
+
+    def _reward_wheel_airborne(self):
+        """按未接触地面的轮子数量惩罚离地：双轮接触为 0，单轮/双轮离地为 1/2。"""
+        return torch.sum(1.0 - self.wheel_contact, dim=1)
+
+    def _reward_base_contact(self):
+        """基座或任一腿部 link 碰撞时逐拍惩罚，多 link 同时接触只计一次。"""
+        return self.base_contact
+
+    def _reward_alive(self):
+        return self.alive_gate
+
+    def _reward_death(self):
+        return self.terminated_buf.to(dtype=self.reward_buf.dtype)
