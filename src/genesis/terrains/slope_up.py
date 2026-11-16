@@ -42,7 +42,7 @@ class SlopeUp(TerrainGeometry):
         height = ((local_xy[:, 0] - self.start_x) / self.ramp_length).clamp(0, 1) * self.height
         return self.height - height if self.descending else height
 
-    def add_to_scene(self, scene):
+    def add_to_scene(self, scene, *, offset=(0.0, 0.0, 0.0)):
         import genesis as gs
         import numpy as np
         import trimesh
@@ -51,15 +51,14 @@ class SlopeUp(TerrainGeometry):
         entities = []
         for x0, x1, z0, z1 in self.segments:
             if z0 == z1:
-                morph = gs.morphs.Box(lower=(x0, -half_y, -self.base_thickness), upper=(x1, half_y, z0),
-                                      fixed=True, batch_fixed_verts=False)
+                entities.append(self.add_box(scene, (x0, -half_y, -self.base_thickness), (x1, half_y, z0), offset))
             else:
                 vertices = np.array([(x, y, z) for x, top in ((x0, z0), (x1, z1))
                                      for y in (-half_y, half_y) for z in (-self.base_thickness, top)])
                 mesh = trimesh.convex.convex_hull(vertices)
                 morph = gs.morphs.MeshSet(files=(mesh,), fixed=True, convexify=True,
-                                          decimate=False, batch_fixed_verts=False)
-            entities.append(scene.add_entity(morph))
+                                          decimate=False, batch_fixed_verts=False, pos=offset)
+                entities.append(scene.add_entity(morph))
         return tuple(entities)
 
 

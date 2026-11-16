@@ -55,10 +55,9 @@ class Stairs(TerrainGeometry):
             boxes.append(((lower_x, min_y, 0.0), (upper_x, max_y, height)))
         return tuple(boxes)
 
-    def add_to_scene(self, scene):
-        import genesis as gs
+    def add_to_scene(self, scene, *, offset=(0.0, 0.0, 0.0)):
         return tuple(
-            scene.add_entity(gs.morphs.Box(lower=lower, upper=upper, fixed=True, batch_fixed_verts=False))
+            self.add_box(scene, lower, upper, offset)
             for lower, upper in self.boxes
         )
 

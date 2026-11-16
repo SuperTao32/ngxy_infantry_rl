@@ -1,4 +1,4 @@
-"""命令输入接口：仅在 env 的 resample_commands 中开始跳跃。"""
+"""命令输入接口：支持重采样触发和评估时的即时跳跃。"""
 
 from copy import deepcopy
 import math
@@ -45,6 +45,14 @@ class Jump:
         if type(mode) is not int or not 0 <= mode < len(MODE_NAMES):
             raise ValueError(f"jump mode must be an integer in [0, {len(MODE_NAMES)})")
         self.buffers.pending_mode[mask] = mode
+
+    def trigger(self, mask, mode=0):
+        """平地立即跳跃；恢复、跳跃或由特殊地形接管命令的行忽略请求。"""
+        env = self.env
+        selected = mask & ~env.recovery.buffers.active & ~self.buffers.active & ~env.terrain_cross.assigned
+        self.request(selected, mode)
+        self.on_resample(env, selected, env.commands[:, 0].clone())
+        return selected
 
     def on_resample(self, env, mask, previous_vx):
         """缓存已采样的新命令，沿用重采样前的 vx 插入 jump。"""

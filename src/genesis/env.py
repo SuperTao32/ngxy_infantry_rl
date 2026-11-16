@@ -32,6 +32,7 @@ from .rewards import LocomotionRewards
 from .reward_buffer import RewardBuffer
 from .tasks.recovery import Recovery
 from .tasks.jump import Jump
+from .tasks.terrain_cross import TerrainCross
 from .utils.tracking_gate import DEFAULT_TRACKING_GATE_CFG
 
 
@@ -67,7 +68,7 @@ class WheelLegInfantryEnv(LocomotionRewards, EnvironmentConfiguration):
         self.steps_per_iteration = int(steps_per_iteration)  # PPO runner 每采满 steps_per_iteration 个控制步完成一轮
         self.tracking_gate_cfg = {}
         self._apply_tracking_gate(reward_cfg.get("tracking_gate", DEFAULT_TRACKING_GATE_CFG))
-        self.terrain = TerrainManager(env_cfg.get("terrain"))
+        self.terrain = TerrainManager(env_cfg["terrain"])
         # 记录 TerrainManager 补齐后的配置，保证课程、日志与运行状态一致。
         self.env_cfg["terrain"] = self.terrain.config
 
@@ -101,6 +102,7 @@ class WheelLegInfantryEnv(LocomotionRewards, EnvironmentConfiguration):
         self.imu_cfg = self.sensor_noise.imu_options(obs_cfg.get("imu", {}))
         self.imu_acc_scale = float(obs_cfg["obs_scales"].get("lin_acc", 1.0 / 9.81))
         self.tof_cfg = resolve_tof_cfg(obs_cfg.get("tof"))
+        self.tof_observation_enabled = False
         self.tof_clock = ToFSamplingClock(self.tof_cfg, self.dt, num_envs, self.device) if self.tof_cfg["enabled"] else None
 
         # 地形接触几何和跳跃奖励共用的物理参数。
@@ -241,6 +243,9 @@ class WheelLegInfantryEnv(LocomotionRewards, EnvironmentConfiguration):
         self.curriculum.register_target("domain_rand", self.domain_rand.apply_curriculum)
         self.curriculum.register_target("sensor_noise", self._apply_sensor_noise)
         self.curriculum.register_target("wheel_slip", self.wheel_slip.apply_curriculum)
+        self.curriculum.register_target("tof", self._apply_tof_curriculum)
+        self.curriculum.register_target("terrain_cross", self._apply_terrain_cross_curriculum)
+        self.curriculum.register_target("terrain_weights", self._apply_terrain_weights)
         if self.curriculum.update(self.training_iteration, force=True):
             print(f"[curriculum] stage={self.curriculum.current_stage_name} iteration={self.training_iteration}")
 
@@ -467,6 +472,7 @@ class WheelLegInfantryEnv(LocomotionRewards, EnvironmentConfiguration):
         # 组件只持有自己的状态，不复制 env 的物理 buffer 或创建场景。
         self.recovery = Recovery(self, self.env_cfg["recovery"])
         self.jump = Jump(self, self.env_cfg["jump"])
+        self.terrain_cross = TerrainCross(self, self.env_cfg["terrain_cross"])
 
         # 初始reset环境
         self.reset()
@@ -492,15 +498,27 @@ class WheelLegInfantryEnv(LocomotionRewards, EnvironmentConfiguration):
 
 
     # ============ 训练与评估接口 ============
-    def reset(self):
-        """重置全部并行环境并返回重置后的 actor/critic 观测。"""
-        self.recovery.metrics.clear()
-        self.jump.metrics.clear()
-        for count in self.termination_counts.values():
-            count.zero_()
-        self._reset_idx()
-        self._update_observations()
-        return self.get_observations()
+    def reset(self, *, recovery=None):
+        """重置并返回观测；recovery 可仅对本次复位强制使用/跳过姿态池。"""
+        sampler = self.recovery.reset_sampler
+        if recovery is True and sampler is None:
+            raise ValueError("Recovery reset requires a configured recovery pose pool")
+        probability = sampler.probability if sampler is not None else None
+        try:
+            if sampler is not None and recovery is not None:
+                sampler.probability = float(recovery)
+            self.recovery.metrics.clear()
+            self.jump.metrics.clear()
+            self.terrain_cross.metrics.clear()
+            self.terrain_cross.level_metrics.clear()
+            for count in self.termination_counts.values():
+                count.zero_()
+            self._reset_idx()
+            self._update_observations()
+            return self.get_observations()
+        finally:
+            if sampler is not None:
+                sampler.probability = probability
 
     def step(self, actions):
         """执行一个控制步，返回观测、奖励、重置标志和附加统计。"""
@@ -581,6 +599,7 @@ class WheelLegInfantryEnv(LocomotionRewards, EnvironmentConfiguration):
 
         ########### 判断终止 ###########
         time_out = self._update_termination()
+        self.terrain_cross.update(self)
 
         ########### 计算奖励 ###########
         self.reward_buf.zero_()
@@ -589,6 +608,7 @@ class WheelLegInfantryEnv(LocomotionRewards, EnvironmentConfiguration):
 
         ########### 重采样指令 ###########
         self.jump.apply_commands(self.commands)
+        self.terrain_cross.apply_commands(self.commands)
         resample_commands = (self.episode_length_buf % self.resample_step == 0) | self.recovery.buffers.just_completed
         # 刚结束 jump 的行已应用缓存命令，本拍不再次采样。
         self._resample_commands(resample_commands & ~self.reset_buf & ~self.jump.buffers.just_completed)
@@ -639,7 +659,6 @@ class WheelLegInfantryEnv(LocomotionRewards, EnvironmentConfiguration):
 
     def _update_observations(self):
         """所有 actor/critic 观测在此显式列出；字典顺序就是网络输入顺序。"""
-        empty = self.base_pos.new_empty((self.num_envs, 0))
         jump_mode, jump_phase = self._get_jump_observations()
         commands = torch.concatenate((self.commands * self.commands_scale, jump_mode), dim=-1)
 
@@ -653,14 +672,14 @@ class WheelLegInfantryEnv(LocomotionRewards, EnvironmentConfiguration):
             "wheel_vel": self.measured_wheel_vel * self.obs_scales["wheel_vel"],  # 2
             "leg_length": self.measured_leg_length * self.obs_scales["leg_length"],  # 2
             "actions": self.actions,  # 6
-            "tof_distance": self.tof_history.observation() if self.tof_cfg["include_in_observation"] else empty,
+            "tof_distance": self._tof_observation(self.tof_history),
             "commands": commands,  # 5：速度、偏航速度、高度目标、两维 jump 模式 one-hot
             "jump_phase": jump_phase,  # 4：时间相位编码
         }
         self.obs_buf = torch.concatenate(tuple(self.obs_components.values()), dim=-1)
 
         # critic：与 actor 对齐的通道显式使用真值，再追加特权状态。
-        # 未启用 jump 时保留零通道；关闭的 ToF 使用零宽通道。
+        # 未启用 jump 时保留零通道；ToF 课程同时控制 actor/critic 的固定宽度输入。
         self.critic_obs_components = {
             "imu_ang_vel": self.true_imu_ang_vel * self.obs_scales["ang_vel"],  # 3
             "imu_lin_acc": self.true_imu_lin_acc * self.imu_acc_scale,  # 3
@@ -670,7 +689,7 @@ class WheelLegInfantryEnv(LocomotionRewards, EnvironmentConfiguration):
             "wheel_vel": self.wheel_vel * self.obs_scales["wheel_vel"],  # 2
             "leg_length": self.leg_length * self.obs_scales["leg_length"],  # 2
             "actions": self.actions,  # 6
-            "tof_distance": self.true_tof_history.observation() if self.tof_cfg["include_in_observation"] else empty,
+            "tof_distance": self._tof_observation(self.true_tof_history),
             "commands": commands,  # 5
             "jump_phase": jump_phase,  # 4
             # critic特权观测
@@ -701,13 +720,19 @@ class WheelLegInfantryEnv(LocomotionRewards, EnvironmentConfiguration):
             "locomotion": self.rewards.state_dict(),
             "recovery": self.recovery.rewards.state_dict(),
             "jump": self.jump.rewards.state_dict(),
+            "terrain_cross": self.terrain_cross.state_dict(),
+            "terrain_difficulty": self.terrain.state_dict(),
         }
 
     def load_training_state_dict(self, state, *, restore_reward_scales=True):
+        if "terrain_difficulty" in state:
+            self.terrain.load_state_dict(state["terrain_difficulty"])
         if restore_reward_scales:
             self.rewards.load_state_dict(state["locomotion"])
             self.recovery.rewards.load_state_dict(state["recovery"])
             self.jump.rewards.load_state_dict(state["jump"])
+            if "terrain_cross" in state:
+                self.terrain_cross.load_state_dict(state["terrain_cross"])
         self.set_training_iteration(state["iteration"])
 
 
@@ -729,6 +754,30 @@ class WheelLegInfantryEnv(LocomotionRewards, EnvironmentConfiguration):
         if jump is not None:
             jump.apply_curriculum(values)
 
+    def _apply_tof_curriculum(self, values):
+        enabled = bool(values["enabled"])
+        if enabled and not (self.tof_cfg["enabled"] and self.tof_cfg["include_in_observation"]):
+            raise ValueError("ToF curriculum requires tof.enabled=True and include_in_observation=True at scene creation")
+        self.tof_observation_enabled = enabled
+
+    def _apply_terrain_cross_curriculum(self, values):
+        for name, options in values["terrains"].items():
+            for section, overrides in options.items():
+                self.env_cfg["terrain_cross"]["terrains"][name][section].update(deepcopy(overrides))
+        terrain_cross = self.__dict__.get("terrain_cross")
+        if terrain_cross is not None:
+            terrain_cross.apply_curriculum(values)
+
+    def _apply_terrain_weights(self, values):
+        if self.terrain.is_mixture:
+            self.terrain.set_weights(values)
+
+    def _tof_observation(self, history):
+        if history is None:
+            return self.base_pos.new_empty((self.num_envs, 0))
+        observation = history.observation()
+        return observation if self.tof_observation_enabled else torch.zeros_like(observation)
+
     def _update_episode_metrics(self):
         mask = ~self.recovery.buffers.was_active & ~self.jump.buffers.was_active
         self.locomotion_steps.add_(mask)
@@ -742,13 +791,17 @@ class WheelLegInfantryEnv(LocomotionRewards, EnvironmentConfiguration):
         if not self.evaluation and self.global_step % self.steps_per_iteration == 0:
             metrics = self.recovery.metrics.collect("recovery")
             metrics.update(self.jump.metrics.collect("jump"))
+            metrics.update(self.terrain_cross.metrics.collect("terrain_cross"))
+            metrics.update(self.terrain_cross.level_metrics.collect("terrain_cross"))
+            metrics.update(self.terrain.update_curriculum())
             for name, count in self.termination_counts.items():
                 metrics[f"termination/{name}"] = count.clone()
                 count.zero_()
-            self.extras.setdefault("episode", {}).update(metrics)
             self.training_iteration = self.global_step // self.steps_per_iteration
             if self.curriculum.update(self.training_iteration):
                 print(f"[curriculum] stage={self.curriculum.current_stage_name} iteration={self.training_iteration}")
+            metrics.update(self.terrain.sampling_metrics())
+            self.extras.setdefault("episode", {}).update(metrics)
 
     def _reset_idx(self, env_idx=None, *, record_episode=None):
         """统一按布尔 mask 重置；None 为手动全量重置，不记录结束回合。"""
@@ -829,6 +882,7 @@ class WheelLegInfantryEnv(LocomotionRewards, EnvironmentConfiguration):
         self._update_encoder_measurements(reset_env_ids)
         self.jump.reset(reset_mask)
         self.recovery.reset(self, reset_mask)
+        self.terrain_cross.reset(self, reset_mask)
         if self.tof is not None:
             self.tof.reset(reset_env_ids, strength=self.sensor_noise.strength)
             self.tof_distances[reset_env_ids] = self.tof.read(
@@ -858,6 +912,7 @@ class WheelLegInfantryEnv(LocomotionRewards, EnvironmentConfiguration):
         episode = self.rewards.metrics(reset_mask, "locomotion")
         episode.update(self.recovery.rewards.metrics(reset_mask, "recovery"))
         episode.update(self.jump.rewards.metrics(reset_mask, "jump"))
+        episode.update(self.terrain_cross.episode_metrics(reset_mask))
         lengths = self.locomotion_steps[reset_mask].clamp_min(1)
         for name, total in self.episode_metric_sums.items():
             episode["locomotion/metric_" + name] = total[reset_mask] / lengths
@@ -868,13 +923,15 @@ class WheelLegInfantryEnv(LocomotionRewards, EnvironmentConfiguration):
 
 
     def _resample_commands(self, mask, *, allow_jump=True):
-        selected = mask & ~self.recovery.buffers.active & ~self.jump.buffers.active
+        """仅平地周期采样普通命令/跳跃；特殊地形持有 reset 时的命令。"""
+        selected = mask & ~self.terrain_cross.assigned & ~self.recovery.buffers.active & ~self.jump.buffers.active
         if selected.any():
             previous_vx = self.commands[:, 0].clone() if allow_jump else None
             commands = self._sample_commands(self.command_cfg, self.commands_limit)
             self.commands[selected] = commands[selected]
             if allow_jump:
                 self.jump.on_resample(self, selected, previous_vx)
+        self.terrain_cross.apply_commands(self.commands)
         self.recovery.apply_commands(self.commands)
 
     # ============ 奖励和终止 ============
@@ -885,6 +942,7 @@ class WheelLegInfantryEnv(LocomotionRewards, EnvironmentConfiguration):
         self.reward_buf.copy_(self.rewards.compute(locomotion))
         self.reward_buf.add_(self.recovery.compute_rewards())
         self.reward_buf.add_(self.jump.compute_rewards())
+        self.reward_buf.add_(self.terrain_cross.compute_rewards())
 
     def _base_contact_failure(self):
         return (self.base_contact > 0.5) & ~self.recovery.buffers.was_active

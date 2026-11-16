@@ -1,4 +1,4 @@
-"""评估入口：加载 v2 配置，运行策略并可用键盘输入 locomotion 命令。"""
+"""评估入口：加载 v2 配置，支持键盘控制 locomotion、jump 和 recovery。"""
 
 import argparse
 from copy import deepcopy
@@ -12,7 +12,7 @@ from .tools.run_utils import load_run_configs, resolve_checkpoint, resolve_run_d
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="Evaluate an infantry policy with optional keyboard locomotion commands")
+    parser = argparse.ArgumentParser(description="Evaluate an infantry policy with optional keyboard locomotion, jump and recovery commands")
     parser.add_argument("-e", "--exp-name", "--exp_name", default="wheel_leg_infantry")
     parser.add_argument("--log-root", default="logs")
     parser.add_argument("--version")
@@ -73,6 +73,7 @@ def main(argv=None):
                 from .tools.keyboard import KeyboardCommand
                 keyboard = KeyboardCommand(env)
                 print("[eval] arrows=vx/wz, PgUp/PgDn=height, Space=stop, Backspace=reset, Enter=focus")
+                print("[eval] J=jump, 1/2=JUMP_20/JUMP_40, R=random pose reset/recover (Backspace skips pose pool)")
             step = 0
             while args.steps is None or step < args.steps:
                 if args.vis and not env.scene.viewer.is_alive():

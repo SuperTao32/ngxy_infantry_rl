@@ -9,14 +9,14 @@ from ..robust.sensor_randomization import ToFRandomization, sanitize_tof_distanc
 
 
 def default_tof_cfg(
-    *, include_in_observation=True, history_frames=1, update_hz=50.0, max_range_m=1.2,
+    *, enabled=False, include_in_observation=True, history_frames=1, update_hz=50.0, max_range_m=1.2,
     forward_reference_distance_m=1.0, downward_reference_distance_m=0.5,
 ):
     # base_link 坐标为 X 前、Y 左、Z 上；前向组位于前侧底缘，下向组位于底部左右。
     # 主体碰撞盒底面为 z=-0.167001，前面为 x=0.267485。
     # 光心向外留出余量，默认 ±5 mm 安装误差下也不会进入主体碰撞盒。
     return {
-        "enabled": False,
+        "enabled": enabled,
         "include_in_observation": include_in_observation,
         "history_frames": history_frames,
         "update_hz": update_hz,

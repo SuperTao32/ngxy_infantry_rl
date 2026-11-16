@@ -27,6 +27,7 @@ class PlatformRidgeDown(TerrainGeometry):
         super().__init__(parameters, tile_size, horizontal_scale, boundary_margin=boundary_margin)
         self.boxes = self._box_bounds(parameters)
         self.travel_direction = 1.0
+        self.start_x = self.boxes[1 if self.ascending else 2][0][0]
         # 上行越过凸台后落到第二平台；下行经过第一平台后落到地面。
         self.traversal_end = self.boxes[2 if self.ascending else 1][1][0]
 
@@ -71,10 +72,9 @@ class PlatformRidgeDown(TerrainGeometry):
             ((second_start, min_y, base_z), (second_end, max_y, base_z + values["second_height"])),
         )
 
-    def add_to_scene(self, scene):
-        import genesis as gs
+    def add_to_scene(self, scene, *, offset=(0.0, 0.0, 0.0)):
         return tuple(
-            scene.add_entity(gs.morphs.Box(lower=lower, upper=upper, fixed=True, batch_fixed_verts=False))
+            self.add_box(scene, lower, upper, offset)
             for lower, upper in self.boxes
         )
 

@@ -1,6 +1,6 @@
-"""环境配置入口：locomotion、机器人、PPO 和课程；恢复/跳跃为可选组件。
+"""环境配置入口：locomotion、机器人、PPO、课程与恢复/跳跃/越障组件。
 
-env_cfg.recovery / env_cfg.jump 分别配置 reset 恢复和命令输入，不再按任务划分环境。
+env_cfg.recovery / jump / terrain_cross 分别配置恢复、跳跃和越障，不按任务划分环境。
 """
 
 import math
@@ -10,6 +10,7 @@ from .sensors.tof import default_tof_cfg
 from .terrains import default_terrain_cfg
 from .tasks.recovery.config import get_cfg as get_recovery_cfg
 from .tasks.jump.config import get_cfg as get_jump_cfg
+from .tasks.terrain_cross.config import get_cfg as get_terrain_cross_cfg
 
 FRAMEWORK = "wheel_leg_infantry_v2"
 
@@ -116,15 +117,25 @@ def get_env_cfg() -> dict:
         "wheel_vel_scale": 30.0,
         # 固定一拍动作延迟；不属于 domain_rand。
         "simulate_action_latency": True,
-        # 场景与域随机化；eval 可通过 --terrain 选择地形。
-        "terrain": default_terrain_cfg("plane"),
+        # 预建各等级地块；按成功率升降级，仅影响后续 reset。eval 仍选择固定单地形。
+        "terrain": {
+            **default_terrain_cfg("mixture"),
+            "curriculum": {"enabled": True, "min_completed": 100, "promote_threshold": 0.95, "demote_threshold": 0.1},
+            "tiles": [
+                {"preset": "plane", "difficulty": 0, "weight": 1.0},
+                {"preset": "slope_up", "difficulty": 0, "weight": 0.0},
+                {"preset": "slope_down", "difficulty": 0, "weight": 0.0},
+                {"preset": "square_wave", "difficulty": 0, "weight": 0.0},
+                {"preset": "stairs", "difficulty": 0, "weight": 0.0},
+            ],
+        },
         "randomization": default_randomization_cfg(dynamics_enabled=True, sensors_enabled=True),
         # 接触判定阈值；基座与腿部共用 base_contact 阈值、奖励和终止计时。
         "wheel_contact_force_threshold": 1.0,
         "base_contact_force_threshold": 1.0,
         # 回合、命令重采样与终止默认值；可由课程调整。
-        "episode_length_s": 100.0,
-        "resampling_time_s": 10.0,
+        "episode_length_s": 48.0,
+        "resampling_time_s": 8.0,
         # 连续超限一段时间才终止，给策略留下恢复窗口。
         "termination_if_roll_greater_than": 60.0,
         "termination_if_pitch_greater_than": 60.0,
@@ -139,6 +150,7 @@ def get_env_cfg() -> dict:
         "control_dt": 0.01,
         "recovery": get_recovery_cfg(),
         "jump": get_jump_cfg(),
+        "terrain_cross": get_terrain_cross_cfg(),
     }
 
 
@@ -151,9 +163,10 @@ def get_obs_cfg() -> dict:
             "pos_offset": [0.0, 0.0, 0.0],
         },
         # actor 包含 6D actions、5D 命令（运动目标与两维 jump 模式）及 4D 跳跃阶段编码。
-        # ToF 开启时为 (36 + 4 * history_frames)D；关闭时为 36D。
+        # 固定保留 ToF 通道，课程开启前输入全零；共 (36 + 4 * history_frames)D。
         "tof": default_tof_cfg(
-            include_in_observation=False,
+            enabled=True,
+            include_in_observation=True,
             history_frames=1,
             update_hz=50.0,  # ToF 更新频率；历史仅在新测距帧到来时推进。
             max_range_m=1.0,  # 测距量程，单位 m；独立于观测缩放参考距离。
@@ -249,6 +262,8 @@ def get_curriculum_cfg() -> dict:
                     # 概率为 0 时关闭；后续课程阶段可覆盖，不需要单独 enabled 开关。
                     "recovery": {"probability": 0.0},
                     "jump": {"probability": 0.0},
+                    "tof": {"enabled": False},
+                    "terrain_weights": {"plane": 1.0},  # 未列出的地形权重为 0，先学平地。
                     "reset_ranges": {
                         "base_init_pos_range": [[0.0, 0.0], [0.0, 0.0], [0.22, 0.22]],
                         "base_init_rpy_offset_range_deg": [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]],
@@ -274,7 +289,7 @@ def get_curriculum_cfg() -> dict:
             },
             {
                 "name": "locomotion",
-                "start_iteration": 300,
+                "start_iteration": 500,
                 "targets": {
                     "standing_reward": {
                         "tracking_sigma": 0.1,
@@ -308,7 +323,7 @@ def get_curriculum_cfg() -> dict:
             },
             {
                 "name": "locomotion2",
-                "start_iteration": 800,
+                "start_iteration": 1000,
                 "targets": {
                     "standing_reward": {
                         "tracking_sigma": 0.05,
@@ -370,6 +385,14 @@ def get_curriculum_cfg() -> dict:
                 "start_iteration": 4000,
                 "targets": {
                     "jump": {"probability": 0.20},
+                },
+            },
+            {
+                "name": "terrain_cross",
+                "start_iteration": 10000,
+                "targets": {
+                    "tof": {"enabled": True},
+                    "terrain_weights": {"plane": 0.6, "stairs": 0.1, "slope_down": 0.1, "slope_up": 0.1, "square_wave": 0.1},
                 },
             },
         ],

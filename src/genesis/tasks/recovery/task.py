@@ -27,10 +27,10 @@ class Recovery:
             self.reset_sampler.apply_curriculum(values)
             self.config["reset_pos"]["probability"] = self.reset_sampler.probability
 
-    def sample_reset_pose(self, env, env_ids, positions):
-        """按概率使用快照，其余环境保留默认模板及 env 已采样的位置。"""
+    def sample_reset_pose(self, env, env_ids, positions, *, eligible):
+        """只对 eligible 平地环境按概率使用快照，其余保持默认模板。"""
         if self.reset_sampler is not None:
-            return self.reset_sampler.sample(env, env_ids, positions)
+            return self.reset_sampler.sample(env, env_ids, positions, eligible=eligible)
         return env.init_base_quat.expand(len(env_ids), -1), env.init_dof_pos.expand(len(env_ids), -1)
 
     def ensure_reset_clearance(self, env, env_ids, state):

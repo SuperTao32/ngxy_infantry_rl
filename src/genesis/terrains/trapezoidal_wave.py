@@ -31,6 +31,9 @@ class TrapezoidalWave(TerrainGeometry):
             raise ValueError("trapezoidal_wave.slope_angle_deg must be between 0 and 90 degrees")
         self.ramp_length = self.height / math.tan(math.radians(angle))
         self.period = 2.0 * (self.platform_length + self.ramp_length)
+        self.start_x = self.platform_length / 2.0
+        # 从出生高平台经过一次下坡、低平台和上坡，到下一个高平台的起点。
+        self.traversal_end = self.period - self.platform_length / 2.0
         # x=0 位于高平台中央，+x 方向依次经过下坡、低平台、上坡。
         self.segments = self._build_segments()
 
@@ -78,11 +81,11 @@ class TrapezoidalWave(TerrainGeometry):
             ])
             yield trimesh.convex.convex_hull(vertices)
 
-    def add_to_scene(self, scene):
+    def add_to_scene(self, scene, *, offset=(0.0, 0.0, 0.0)):
         import genesis as gs
 
         return tuple(
-            scene.add_entity(gs.morphs.MeshSet(files=(mesh,), fixed=True, convexify=True, decimate=False, batch_fixed_verts=False))
+            scene.add_entity(gs.morphs.MeshSet(files=(mesh,), fixed=True, convexify=True, decimate=False, batch_fixed_verts=False, pos=offset))
             for mesh in self.meshes()
         )
 

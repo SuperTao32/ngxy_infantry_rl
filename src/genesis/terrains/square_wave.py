@@ -39,11 +39,9 @@ class SquareWave(TerrainGeometry):
         inside = (world_xy[:, 0].abs() <= self.tile_size[0] / 2) & (world_xy[:, 1].abs() <= self.tile_size[1] / 2)
         return (inside & high).to(world_xy.dtype) * self.height
 
-    def add_to_scene(self, scene):
-        import genesis as gs
-
+    def add_to_scene(self, scene, *, offset=(0.0, 0.0, 0.0)):
         return tuple(
-            scene.add_entity(gs.morphs.Box(lower=lower, upper=upper, fixed=True, batch_fixed_verts=False))
+            self.add_box(scene, lower, upper, offset)
             for lower, upper in self.boxes
         )
 

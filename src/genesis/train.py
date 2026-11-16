@@ -27,7 +27,7 @@ def main(argv=None):
         "--num-gpus", "--num_gpus", type=int, metavar="N",
         help="launch N GPU workers, e.g. 2 for dual-GPU training (default: 1, or torchrun worker count)",
     )
-    parser.add_argument("--max-iterations", "--max_iterations", type=int, default=10000)
+    parser.add_argument("--max-iterations", "--max_iterations", type=int, default=20001)
     parser.add_argument("--seed", type=int, default=32)
     parser.add_argument("-v", "--vis", action="store_true")
     parser.add_argument("--cpu", action="store_true")

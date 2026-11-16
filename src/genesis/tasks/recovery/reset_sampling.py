@@ -47,7 +47,7 @@ class RecoveryResetSampler:
             raise ValueError("recovery.reset_pos.probability must be in [0, 1]")
         self.probability = probability
 
-    def sample(self, env, env_ids, positions):
+    def sample(self, env, env_ids, positions, *, eligible):
         """每行独立选择快照或默认复位，仅快照行叠加模板位置。"""
         count = len(env_ids)
         nominal_quat = env.init_base_quat.expand(count, -1).clone()
@@ -56,6 +56,7 @@ class RecoveryResetSampler:
         if self.probability == 0.0:
             return nominal_quat, dof_pos
         selected = torch.rand(count, device=self.templates.device) < self.probability
+        selected &= eligible
         selected_rows = selected.nonzero(as_tuple=False).flatten()
         if not len(selected_rows):
             return nominal_quat, dof_pos

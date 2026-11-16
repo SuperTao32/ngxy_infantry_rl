@@ -18,23 +18,15 @@ class EnvironmentConfiguration:
             self.base_init_pos_upper,
             (num_resets,),
         )
-        # 按 recovery 概率选择快照；未命中或组件关闭时保留 env 默认模板与位置范围。
-        nominal_quat, reset_dof_pos = self.recovery.sample_reset_pose(self, env_ids, reset_base_pos)
         terrain_centers, terrain_tile_index = self.terrain.sample_spawn_tiles(env_ids)
-        # 快照与位置扰动组合后，再转换到当前 terrain 的出生 patch。
-        reset_base_pos[:, :2] += terrain_centers
+        nominal_quat, reset_dof_pos = self.recovery.sample_reset_pose(
+            self, env_ids, reset_base_pos, eligible=~self.terrain_cross.special_tiles(terrain_tile_index),
+        )
         rpy_offset_deg = sample_uniform(
             self.base_init_rpy_lower,
             self.base_init_rpy_upper,
             (num_resets,),
         )
-        self.terrain.adjust_spawn(reset_base_pos, rpy_offset_deg, terrain_tile_index)
-        terrain_height = self.terrain.height_at(reset_base_pos[:, :2])
-        reset_base_pos[:, 2] += terrain_height
-        quat_offset = xyz_to_quat(rpy_offset_deg, rpy=True, degrees=True)
-        # RPY 范围始终是对 nominal_quat 的局部旋转扰动，零范围保留快照朝向。
-        reset_base_quat = transform_quat_by_quat(quat_offset, nominal_quat)
-
         reset_base_lin_vel = sample_uniform(
             self.base_init_lin_vel_lower,
             self.base_init_lin_vel_upper,
@@ -45,6 +37,16 @@ class EnvironmentConfiguration:
             self.base_init_ang_vel_upper,
             (num_resets,),
         )
+        # 特殊地形使用默认关节姿态，并覆盖全局课程的位置、姿态扰动和初速度。
+        self.terrain_cross.adjust_reset(
+            reset_base_pos, rpy_offset_deg, reset_base_lin_vel, reset_base_ang_vel, terrain_tile_index, env_ids,
+        )
+        reset_base_pos[:, :2] += terrain_centers
+        self.terrain.adjust_spawn(reset_base_pos, rpy_offset_deg, terrain_tile_index)
+        terrain_height = self.terrain.height_at(reset_base_pos[:, :2])
+        reset_base_pos[:, 2] += terrain_height
+        quat_offset = xyz_to_quat(rpy_offset_deg, rpy=True, degrees=True)
+        reset_base_quat = transform_quat_by_quat(quat_offset, nominal_quat)
         reset_projected_gravity = transform_by_quat(
             self.global_gravity_dir.expand(num_resets, -1),
             inv_quat(reset_base_quat),
@@ -108,23 +110,24 @@ class EnvironmentConfiguration:
 
     def _update_tracking_gate(self):
         """根据高度目标和机身倾角更新平滑 AND 门控。"""
+        config = self.terrain_cross.tracking_gate_parameters(self.tracking_gate_cfg)
         height_error = torch.abs(self.base_height - self.commands[:, 2])
         self.height_gate = smooth_gate(
             height_error,
-            self.tracking_gate_cfg["height_full_error"],
-            self.tracking_gate_cfg["height_zero_error"],
+            config["height_full_error"],
+            config["height_zero_error"],
         )
 
         # 保留重力 z 的符号，区分正立与倒立，倾角范围为 [0, pi]。
         tilt = torch.atan2(torch.linalg.vector_norm(self.projected_gravity[:, :2], dim=1), -self.projected_gravity[:, 2])
         self.attitude_gate = smooth_gate(
             tilt,
-            math.radians(self.tracking_gate_cfg["attitude_full_angle_deg"]),
-            math.radians(self.tracking_gate_cfg["attitude_zero_angle_deg"]),
+            config["attitude_full_angle_deg"] * (math.pi / 180.0),
+            config["attitude_zero_angle_deg"] * (math.pi / 180.0),
         )
 
         self.tracking_gate_raw = self.height_gate * self.attitude_gate
-        gate_floor = self.tracking_gate_cfg["floor"]
+        gate_floor = config["floor"]
         self.tracking_gate = gate_floor + (1.0 - gate_floor) * self.tracking_gate_raw
 
     def _build_commands_scale(self):

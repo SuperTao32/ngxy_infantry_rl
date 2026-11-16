@@ -10,8 +10,8 @@ class TerrainGeometry(ABC):
         self.boundary_margin = boundary_margin
 
     @abstractmethod
-    def add_to_scene(self, scene):
-        """创建实际碰撞实体，返回单个实体或实体元组。"""
+    def add_to_scene(self, scene, *, offset=(0.0, 0.0, 0.0)):
+        """将局部几何平移到 offset，返回单个碰撞实体或实体元组。"""
 
     @abstractmethod
     def height_at(self, local_xy):
@@ -25,3 +25,13 @@ class TerrainGeometry(ABC):
 
     def create_morph(self):
         raise RuntimeError("segmented terrain contains multiple morphs; use add_to_scene()")
+
+    @staticmethod
+    def add_box(scene, lower, upper, offset):
+        import genesis as gs
+
+        return scene.add_entity(gs.morphs.Box(
+            lower=tuple(a + b for a, b in zip(lower, offset)),
+            upper=tuple(a + b for a, b in zip(upper, offset)),
+            fixed=True, batch_fixed_verts=False,
+        ))

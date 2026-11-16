@@ -36,9 +36,9 @@ def get_reward_cfg():
         "flight_leg_angle_limit_deg": 3.0,  # 相对机身的腾空虚拟腿摆角容差。
         "takeoff_wheel_push_force_reference_n": 400.0,  # 两轮向上法向支撑力之和的归一化参考，单位 N。
         "reward_scales": {
-            "base_balance": -5.0,
-            "leg_symmetry": -5.0,
-            "leg_symmetry_bonus": 2.0,
+            "base_balance": -10.0,
+            "leg_symmetry": -10.0,
+            "leg_symmetry_bonus": 5.0,
             "tracking_lin_vel": 2.0,
             "tracking_ang_vel": 5.0,
             "joint_vel": -0.005,
@@ -46,7 +46,7 @@ def get_reward_cfg():
             "wheel_action_rate": -1.0,
             "leg_action_rate": -0.1,
             "leg_extension_at_limit": -5.0,
-            "base_contact": -100.0,
+            "base_contact": -150.0,
             "jump_invalid": -10.0,
             "takeoff_event": 100.0,
             "flight_height_shortfall": -300.0,
@@ -57,7 +57,7 @@ def get_reward_cfg():
             "takeoff_vertical_velocity": 2000.0,
             # 腾空
             "flight_airtime": 2.0,
-            "flight_balance": 10.0,
+            "flight_balance": 15.0,
             "flight_height_progress": 1200.0,
             "flight_height_tracking": 100.0,
             # 当前按平地跳权重结算。
@@ -66,8 +66,8 @@ def get_reward_cfg():
             # 落地
             "landing_vertical_velocity": -20.0,
             "landing_base_acceleration": -0.01,  # 三轴加速度平方和；100 m/s² 持续一拍扣 1。
-            "soft_landing": 10.0,
-            "landing_stability": 50.0,
+            "soft_landing": 20.0,
+            "landing_stability": 100.0,
             "landing_airborne": -10.0,  # 首次触地后，任一轮仍未着地即逐步惩罚。
             # 任务结果
             "death": -100.0,

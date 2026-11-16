@@ -12,11 +12,18 @@ LEVELS = {0: {}}
 
 
 class Plane(TerrainGeometry):
+    def __init__(self, parameters, *args, **kwargs):
+        super().__init__(parameters, *args, **kwargs)
+        self.finite = parameters.get("finite", False)
+
     def create_morph(self):
         import genesis as gs
         return gs.morphs.Plane()
 
-    def add_to_scene(self, scene):
+    def add_to_scene(self, scene, *, offset=(0.0, 0.0, 0.0)):
+        if self.finite:
+            half_x, half_y = (size / 2 for size in self.tile_size)
+            return self.add_box(scene, (-half_x, -half_y, -0.1), (half_x, half_y, 0.0), offset)
         return scene.add_entity(self.create_morph())
 
     def height_at(self, local_xy):
