@@ -186,9 +186,9 @@ def get_obs_cfg() -> dict:
             "wheel_vel": 1.0 / 50.0,
             "base_height": 1.0 / 0.35,
             "leg_length": 1.0 / 0.35,
-            "normal_force": 1.0 / 400.0,  # 每轮法向合力
-            "base_normal_force": 1.0 / 400.0,  # 每个机身分区的法向力大小之和。
-            "tangential_force": 1.0 / 200.0,  # 每轮切向合力
+            "normal_force": 1.0 / 100.0,  # 每轮法向合力
+            "base_normal_force": 1.0 / 100.0,  # 每个机身分区的法向力大小之和。
+            "tangential_force": 1.0 / 100.0,  # 每轮切向合力
         },
     }
 
@@ -230,7 +230,6 @@ def get_reward_cfg() -> dict:
             "tracking_lin_vel": -0.5,
             "tracking_ang_vel": -0.5,
             "standing_drift": 0.0,
-            "standing_still": 0.0,
             "gated_tracking_lin_vel": 2.0,
             "gated_tracking_ang_vel": 2.0,
             "base_balance": -5.0,
@@ -246,8 +245,6 @@ def get_reward_cfg() -> dict:
             "alive": 5.0,
             "death": -100.0,
         },
-        "standing_still_lin_vel_scale": 0.03,
-        "standing_still_ang_vel_scale": 0.05,
     }
 
 
@@ -389,7 +386,7 @@ def get_curriculum_cfg() -> dict:
             },
             {
                 "name": "terrain_cross",
-                "start_iteration": 10000,
+                "start_iteration": 9000,
                 "targets": {
                     "tof": {"enabled": True},
                     "terrain_weights": {"plane": 0.6, "stairs": 0.1, "slope_down": 0.1, "slope_up": 0.1, "square_wave": 0.1},

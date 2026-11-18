@@ -25,16 +25,20 @@ class RewardBuffer:
     def _get_scale(self, name):
         return self.scales[name]
 
-    def compute(self, mask):
+    def compute(self, mask, *, scale_overrides=None, exclude=(), mask_overrides=None):
+        """按所有者 mask 结算，允许个别奖励使用独立的生效窗口。"""
         self.value.zero_()
-        if not mask.any():
+        if not mask.any() and not mask_overrides:
             return self.value
         for name in self.scales:
-            scale = self._get_scale(name)
+            if name in exclude:
+                continue
+            scale = scale_overrides[name] if scale_overrides is not None and name in scale_overrides else self._get_scale(name)
             if not isinstance(scale, torch.Tensor) and scale == 0.0:
                 continue
             weight = scale * (1.0 if name in self.event_rewards else self.dt)
-            value = torch.where(mask, self.functions[name]() * weight, 0.0)
+            reward_mask = mask_overrides.get(name, mask) if mask_overrides else mask
+            value = torch.where(reward_mask, self.functions[name]() * weight, 0.0)
             self.value.add_(value)
             self.episode_sums[name].add_(value)
         return self.value

@@ -47,9 +47,10 @@ class Jump:
         self.buffers.pending_mode[mask] = mode
 
     def trigger(self, mask, mode=0):
-        """平地立即跳跃；恢复、跳跃或由特殊地形接管命令的行忽略请求。"""
+        """立即跳跃；手动 eval 可在特殊地形触发，自动模式仍由地形接管。"""
         env = self.env
-        selected = mask & ~env.recovery.buffers.active & ~self.buffers.active & ~env.terrain_cross.assigned
+        terrain_available = ~env.terrain_cross.assigned | getattr(env, "manual_control", False)
+        selected = mask & ~env.recovery.buffers.active & ~self.buffers.active & terrain_available
         self.request(selected, mode)
         self.on_resample(env, selected, env.commands[:, 0].clone())
         return selected

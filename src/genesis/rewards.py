@@ -45,16 +45,6 @@ class LocomotionRewards:
         )
         return self._standing_command_mask() * excess_speed.sum(dim=1)
 
-    def _reward_standing_still(self):
-        """静止命令下严格趋近零水平速度和零偏航速度，无速度死区。"""
-        lin_scale = float(self.reward_cfg.get("standing_still_lin_vel_scale", 0.02))
-        ang_scale = float(self.reward_cfg.get("standing_still_ang_vel_scale", 0.05))
-        linear_error = (self.base_lin_vel[:, :2] / lin_scale).square().sum(dim=1)
-        angular_error = (self.base_ang_vel[:, 2] / ang_scale).square()
-        # 用不带保底值的高度/姿态门，静止但未站稳时不发放满额奖励。
-        reward = self.tracking_gate_raw * torch.exp(-linear_error - angular_error)
-        return torch.where(self._standing_command_mask(), reward, 0.0)
-
     def _reward_base_balance(self):
         # 小角度下约等于倾角平方，倒立时也有惩罚。
         return 2.0 * (1.0 + self.projected_gravity[:, 2]).clamp(0.0, 2.0)

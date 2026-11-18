@@ -5,8 +5,46 @@ import math
 import torch
 
 
-class TerrainCrossBuffers:
+class StairsDownLanding:
+    """首次接触最后一级下方地面后，独立计满落地振荡窗口。"""
+
     def __init__(self, env, config):
+        self.dt = env.dt
+        self.configure(config)
+        self.started = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+        self.steps_left = torch.zeros(env.num_envs, dtype=torch.long, device=env.device)
+        self.gate = torch.zeros_like(self.started)
+
+    def configure(self, config):
+        duration = float(config["duration_s"])
+        angular_weight = float(config["ang_vel_weight"])
+        tolerance = float(config["surface_tolerance_m"])
+        if (not all(math.isfinite(value) for value in (duration, angular_weight, tolerance))
+                or duration <= 0 or angular_weight < 0 or tolerance <= 0):
+            raise ValueError("stairs landing_stability requires positive duration/tolerance and nonnegative ang_vel_weight")
+        self.window_steps = max(1, math.ceil(duration / self.dt - 1e-9))
+        self.angular_weight, self.surface_tolerance = angular_weight, tolerance
+
+    def reset(self, mask):
+        self.started[mask] = False
+        self.steps_left[mask] = 0
+        self.gate[mask] = False
+
+    def update(self, env, buffers, wheels, edge_x):
+        wheel_height = env.terrain.height_at(wheels[..., :2].reshape(-1, 2)).reshape(wheels.shape[:2])
+        beyond_edge = wheels[..., 0] - env.terrain_spawn_centers[:, :1] > edge_x[:, None]
+        on_surface = (wheels[..., 2] - env.wheel_radius - wheel_height).abs() <= self.surface_tolerance
+        contact = (beyond_edge & on_surface & (env.wheel_contact > 0.5)).any(dim=1)
+        landed = buffers.assigned & buffers.started & (buffers.elapsed_steps > 1) & contact & ~self.started
+        self.steps_left.sub_(1).clamp_min_(0)
+        self.steps_left.copy_(torch.where(landed, self.window_steps, self.steps_left))
+        self.started.logical_or_(landed)
+        self.gate.copy_(buffers.assigned & (self.steps_left > 0))
+
+
+class TerrainCrossBuffers:
+    def __init__(self, env, config, *, landing_config=None):
+        self.landing = StairsDownLanding(env, landing_config) if landing_config is not None else None
         self.hold_steps = max(1, math.ceil(config["success_hold_s"] / env.dt - 1e-9))
         self.min_upright_cos = math.cos(math.radians(config["max_tilt_deg"]))
         bool_names = ("assigned", "started", "active", "was_active", "success", "failure", "started_event")
@@ -22,6 +60,8 @@ class TerrainCrossBuffers:
         ))
 
     def reset(self, env, mask, assigned, goals):
+        if self.landing is not None:
+            self.landing.reset(mask)
         for value in self._episode_buffers:
             value[mask] = 0
         self.assigned[mask] = assigned[mask]

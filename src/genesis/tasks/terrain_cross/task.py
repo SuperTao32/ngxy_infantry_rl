@@ -33,9 +33,18 @@ class TerrainCross:
         if errors:
             raise ValueError("Invalid terrain_cross config:\n- " + "\n- ".join(errors))
         self._tile_goals = env.commands.new_tensor(goals)
-        self.buffers = {name: TerrainCrossBuffers(env, self.config) for name in self.names}
+        self.buffers = {
+            name: TerrainCrossBuffers(
+                env, self.config,
+                landing_config=self.config["terrains"][name].get("landing_stability") if name == "stairs" else None,
+            )
+            for name in self.names
+        }
         self.rewards = {
-            name: TerrainCrossRewards(env, self.buffers[name], self.config["terrains"][name]["reward_scales"])
+            name: TerrainCrossRewards(
+                env, self.buffers[name], self.config["terrains"][name]["reward_scales"],
+                wheel_wall_config=self.config["terrains"][name].get("wheel_wall_force"),
+            )
             for name in self.names
         }
         self.metrics = TaskMetrics(env.device, self.names)
@@ -67,6 +76,8 @@ class TerrainCross:
     def prepare_reset(self, env_ids, tiles):
         """先确定停车回合，出生位置和后续命令使用同一次抽样。"""
         self.parking[env_ids] = False
+        if getattr(self.env, "manual_control", False):
+            return
         groups = self._tile_groups[tiles]
         for index, name in enumerate(self.names):
             ids = env_ids[groups == index]
@@ -106,6 +117,8 @@ class TerrainCross:
         )
 
     def apply_commands(self, commands):
+        if getattr(self.env, "manual_control", False):
+            return
         commands[self.assigned] = self.commands[self.assigned]
 
     def reset(self, env, mask):
@@ -134,6 +147,9 @@ class TerrainCross:
         level_ids = self._tile_level_groups[env.terrain_tile_index]
         for buffers in self.buffers.values():
             buffers.update(env, rear_x, in_lane)
+            if buffers.landing is not None:
+                edge_x = self._tile_goals[env.terrain_tile_index] - self.config["finish_distance_m"]
+                buffers.landing.update(env, buffers, wheels, edge_x)
             self.metrics.start(buffers.started_event, self.terrain_ids)
             finished = (buffers.success_event > 0) | (buffers.failure_event > 0)
             self.metrics.finish(finished, buffers.success, invalid=env.terminated_buf, modes=self.terrain_ids)
@@ -142,11 +158,22 @@ class TerrainCross:
             if not env.evaluation:
                 env.terrain.record_results(env.terrain_tile_index, finished, buffers.success)
 
-    def compute_rewards(self):
+    def reward_scale_overrides(self, scales):
+        """整回合按所属地形覆盖同名 locomotion 权重；未配置的项继承全局。"""
+        overrides = {}
+        for index, name in enumerate(self.names):
+            terrain_scales = self.rewards[name].scales
+            for key in terrain_scales.keys() & scales.keys():
+                overrides[key] = torch.where(
+                    self.terrain_ids == index, terrain_scales[key], overrides.get(key, scales[key]),
+                )
+        return overrides
+
+    def compute_rewards(self, *, exclude=()):
         self.value.zero_()
         for name, rewards in self.rewards.items():
             buffers = self.buffers[name]
-            self.value.add_(rewards.compute(buffers.was_active | (buffers.failure_event > 0)))
+            self.value.add_(rewards.compute(buffers.was_active | (buffers.failure_event > 0), exclude=exclude))
         return self.value
 
     def episode_metrics(self, mask):
@@ -177,6 +204,10 @@ class TerrainCross:
                 self.reset_sampler.configure(name, self.config["terrains"][name]["reset"])
             if "commands" in options:
                 self.command_limits[name] = self._command_limits(name)
+            if "landing_stability" in options and self.buffers[name].landing is not None:
+                self.buffers[name].landing.configure(self.config["terrains"][name]["landing_stability"])
+            if "wheel_wall_force" in options:
+                self.rewards[name].configure_wheel_wall_force(self.config["terrains"][name]["wheel_wall_force"])
         if any("tracking_gate" in options for options in values["terrains"].values()):
             self._configure_tracking_gate()
 

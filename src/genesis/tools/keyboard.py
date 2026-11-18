@@ -34,6 +34,11 @@ class KeyboardCommand:
                 f"command_{name}_{key.name.lower()}", key, key_action=KeyAction.PRESS,
                 callback=self.requests.put, args=((name, amount),), allow_overload=False,
             ))
+        if getattr(env, "manual_control", False):
+            bindings.append(Keybind(
+                "command_drive", Key.L, key_action=KeyAction.PRESS,
+                callback=self.requests.put, args=(("drive", 0),), allow_overload=False,
+            ))
         env.scene.viewer.register_keybinds(*bindings, overwrite=True)
 
     def update(self):
@@ -67,6 +72,10 @@ class KeyboardCommand:
                     print("[eval] jump ignored: recovery/jump is active or terrain commands take priority")
             elif axis == "stop":
                 self.command[:2] = [0.0, 0.0]
+                if getattr(self.env, "manual_control", False):
+                    self.env.return_to_drive()
+            elif axis == "drive":
+                self.env.return_to_drive()
             else:
                 lower, upper = self.ranges[axis]
                 self.command[axis] = min(max(self.command[axis] + amount, lower), upper)
@@ -74,5 +83,6 @@ class KeyboardCommand:
         return reset
 
     def _write_command(self):
-        selected = ~self.env.recovery.buffers.active & ~self.env.jump.buffers.active & ~self.env.terrain_cross.assigned
+        terrain_available = ~self.env.terrain_cross.assigned | getattr(self.env, "manual_control", False)
+        selected = ~self.env.recovery.buffers.active & ~self.env.jump.buffers.active & terrain_available
         self.env.commands[selected] = self.env.commands.new_tensor(self.command)

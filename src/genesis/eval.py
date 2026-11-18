@@ -24,6 +24,8 @@ def main(argv=None):
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--vis", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--cpu", action="store_true")
+    parser.add_argument("--control", choices=("manual", "auto"),
+                        help="default: manual with viewer, auto without viewer")
     parser.add_argument("--output", type=Path)
     add_randomization_arguments(parser, evaluation=True)
     args = parser.parse_args(argv)
@@ -31,6 +33,9 @@ def main(argv=None):
         parser.error("--steps must be positive")
     if not args.vis and args.steps is None:
         parser.error("--no-vis requires --steps")
+    control = args.control or ("manual" if args.vis else "auto")
+    if control == "manual" and not args.vis:
+        parser.error("--control manual requires --vis for keyboard input")
     terrain = default_terrain_cfg(args.terrain)
     if args.terrain_size is not None:
         terrain["tile_size"] = args.terrain_size
@@ -54,17 +59,19 @@ def main(argv=None):
     apply_randomization_arguments(configs["env_cfg"], configs["obs_cfg"], args)
     import genesis as gs
     from .env import WheelLegInfantryEnv
+    from .tools.interactive_env import InteractiveEnv
     from .policy_runner import PolicyRunner
     gs.init(backend=gs.cpu if args.cpu else gs.gpu, precision="32", seed=args.seed, logging_level="warning")
     try:
-        env = WheelLegInfantryEnv(
+        env_class = InteractiveEnv if control == "manual" else WheelLegInfantryEnv
+        env = env_class(
             1, **env_kwargs(configs), evaluation=True, initial_training_iteration=iteration,
             steps_per_iteration=configs["train_cfg"]["num_steps_per_env"], show_viewer=args.vis,
         )
         runner = PolicyRunner(env, configs["train_cfg"], None, device=str(gs.device))
         runner.load(str(checkpoint), load_cfg=dict(actor=True, critic=True, optimizer=False, iteration=False, rnd=False), map_location=str(gs.device))
         policy = runner.get_inference_policy(device=str(gs.device))
-        print(f"[eval] checkpoint: {checkpoint}; terrain: {args.terrain}")
+        print(f"[eval] checkpoint: {checkpoint}; terrain: {args.terrain}; control: {control}")
         with torch.inference_mode():
             policy.reset()
             obs = env.reset()
@@ -74,6 +81,10 @@ def main(argv=None):
                 keyboard = KeyboardCommand(env)
                 print("[eval] arrows=vx/wz, PgUp/PgDn=height, Space=stop, Backspace=reset, Enter=focus")
                 print("[eval] J=jump, 1/2=JUMP_20/JUMP_40, R=random pose reset/recover (Backspace skips pose pool)")
+                if control == "manual":
+                    print("[eval] L=drive; continuous simulation, use Backspace to reset")
+                else:
+                    print("[eval] special terrains own commands; keyboard driving is available on plane")
             step = 0
             while args.steps is None or step < args.steps:
                 if args.vis and not env.scene.viewer.is_alive():
@@ -86,7 +97,7 @@ def main(argv=None):
                 obs, _, dones, _ = env.step(policy(obs))
                 policy.reset(dones)
                 step += 1
-        summary = dict(checkpoint=str(checkpoint), terrain=terrain, steps=step, simulated_seconds=step * env.dt)
+        summary = dict(checkpoint=str(checkpoint), terrain=terrain, control=control, steps=step, simulated_seconds=step * env.dt)
         print(json.dumps(summary, ensure_ascii=False, indent=2))
         if args.output:
             args.output.parent.mkdir(parents=True, exist_ok=True)

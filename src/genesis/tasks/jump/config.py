@@ -64,9 +64,9 @@ def get_reward_cfg():
             "flight_wheel_clearance": 100.0,
             "flight_leg_angle": -100.0,
             # 落地
-            "landing_vertical_velocity": -20.0,
+            "landing_vertical_velocity": 0.0,
             "landing_base_acceleration": -0.01,  # 三轴加速度平方和；100 m/s² 持续一拍扣 1。
-            "soft_landing": 20.0,
+            "soft_landing": 0.0,
             "landing_stability": 100.0,
             "landing_airborne": -10.0,  # 首次触地后，任一轮仍未着地即逐步惩罚。
             # 任务结果

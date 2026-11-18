@@ -939,10 +939,11 @@ class WheelLegInfantryEnv(LocomotionRewards, EnvironmentConfiguration):
 
     def _compute_rewards(self):
         locomotion = ~self.recovery.buffers.was_active & ~self.jump.buffers.was_active
-        self.reward_buf.copy_(self.rewards.compute(locomotion))
+        overrides = self.terrain_cross.reward_scale_overrides(self.rewards.scales)
+        self.reward_buf.copy_(self.rewards.compute(locomotion, scale_overrides=overrides))
         self.reward_buf.add_(self.recovery.compute_rewards())
         self.reward_buf.add_(self.jump.compute_rewards())
-        self.reward_buf.add_(self.terrain_cross.compute_rewards())
+        self.reward_buf.add_(self.terrain_cross.compute_rewards(exclude=self.rewards.scales))
 
     def _base_contact_failure(self):
         return (self.base_contact > 0.5) & ~self.recovery.buffers.was_active

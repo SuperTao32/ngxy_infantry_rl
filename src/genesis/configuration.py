@@ -20,7 +20,8 @@ class EnvironmentConfiguration:
         )
         terrain_centers, terrain_tile_index = self.terrain.sample_spawn_tiles(env_ids)
         nominal_quat, reset_dof_pos = self.recovery.sample_reset_pose(
-            self, env_ids, reset_base_pos, eligible=~self.terrain_cross.special_tiles(terrain_tile_index),
+            self, env_ids, reset_base_pos,
+            eligible=~self.terrain_cross.special_tiles(terrain_tile_index) | getattr(self, "manual_control", False),
         )
         rpy_offset_deg = sample_uniform(
             self.base_init_rpy_lower,
