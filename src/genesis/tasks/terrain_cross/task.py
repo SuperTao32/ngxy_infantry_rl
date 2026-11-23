@@ -113,7 +113,10 @@ class TerrainCross:
     def apply_commands(self, commands):
         if getattr(self.env, "manual_control", False):
             return
-        commands[self.assigned] = self.commands[self.assigned]
+        selected = self.assigned
+        if self.env.evaluation:
+            selected = selected & ~self.env.jump.buffers.active
+        commands[selected] = self.commands[selected]
 
     def reset(self, env, mask):
         self.terrain_ids[mask] = self._tile_groups[env.terrain_tile_index[mask]]

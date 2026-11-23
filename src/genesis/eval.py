@@ -80,7 +80,7 @@ def main(argv=None):
                 from .tools.keyboard import KeyboardCommand
                 keyboard = KeyboardCommand(env)
                 print("[eval] arrows=vx/wz, PgUp/PgDn=height, Space=stop, Backspace=reset, Enter=focus")
-                print("[eval] J=jump, 1/2=JUMP_20/JUMP_40, R=random pose reset/recover (Backspace skips pose pool)")
+                print("[eval] J=restart jump immediately, 1/2=JUMP_20/JUMP_40, R=random pose reset/recover (Backspace skips pose pool)")
                 if control == "manual":
                     print("[eval] L=drive; continuous simulation, use Backspace to reset")
                 else:

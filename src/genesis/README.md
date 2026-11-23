@@ -44,7 +44,7 @@ terrain["commands"] = {
 出生点 `x = 地块中心 x + 障碍起点 x - 采样距离`，y 位于地块中线；默认姿态叠加采样 yaw。
 这些参数覆盖普通课程的复位扰动；即使 recovery 概率为 1，特殊地形仍保持默认姿态。
 所有特殊地形只在 reset 时采样一次独立命令，整回合跳过周期重采样，优先于普通课程和 jump，
-键盘命令或即时跳跃也不能覆盖。成功后仍保持地形命令，直到物理回合结束。
+训练时键盘命令或即时跳跃也不能覆盖；eval 手动控制使用键盘命令，自动控制中按 J 可临时接管 jump，结束后恢复地形命令。成功后仍保持地形命令，直到物理回合结束。
 特殊地形仅在物理 reset 时按 `commands.standing_probability` 抽取停车回合；
 默认 `None` 表示跟随全局 `standing_probability` 课程，也可以为某类地形单独配置概率。
 ToF 启用时，只有停车回合按前向射线安装位置、出生高度与 yaw 自动计算出生距离：
@@ -133,8 +133,10 @@ recovery 的 `config.py` 中，`RESET_POSE_FILES` 指定 `reset_pos/` 内的文�
 
 `jump.request(mask, mode=0)` 只排队，下一次命令重采样时触发。
 `jump.trigger(mask, mode=0)` 立即开始跳跃并缓存当前 locomotion 命令，恢复或跳跃中的行忽略请求。
-`command_cfg.jump_velocity_limits.max_abs_ang_vel` 限制起跳前实际机身 yaw 角速度的绝对值，默认 2.0 rad/s。
-大于阈值时禁止随机跳跃和即时触发，等于阈值时允许；已经排队的请求保留到后续命令重采样重新检查。
+eval 的 J 使用 `jump.trigger(mask, mode=0, restart=True)`：每次按下都立即从第 0 步重新输入当前所选模式，
+不受恢复状态、已有跳跃、实际 yaw 角速度或特殊地形限制；打断恢复，使用当前键盘 locomotion 命令，保留物理状态和策略记忆。
+`command_cfg.jump_velocity_limits.max_abs_ang_vel` 限制起跳前实际机身 yaw 角速度的绝对值，默认 1.5 rad/s。
+大于阈值时禁止随机跳跃和常规即时触发，等于阈值时允许；eval 的 J 重启不受此限制。已经排队的请求保留到后续命令重采样重新检查。
 移除 `jump_velocity_limits` 或设为 `None` 可关闭该限制；已开始的跳跃继续执行。
 reset 不触发 jump，恢复或跳跃执行中不接受新的命令采样覆盖。
 常规命令重采样仍按回合内的固定周期触发。若 jump 结束恰好遇到采样边界，本拍先应用缓存命令。

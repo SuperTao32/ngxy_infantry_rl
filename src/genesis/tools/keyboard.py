@@ -64,12 +64,10 @@ class KeyboardCommand:
                 self.selected_jump_mode = amount
                 print(f"[eval] jump mode: {MODE_NAMES[amount]}")
             elif axis == "jump":
-                self._write_command()
-                selected = self.env.jump.trigger(~self.env.recovery.buffers.active, self.selected_jump_mode)
-                if selected.any():
-                    print(f"[eval] jump: {MODE_NAMES[self.selected_jump_mode]}")
-                else:
-                    print("[eval] jump ignored: recovery/jump is active or terrain commands take priority")
+                selected = self.env.jump.buffers.active.new_ones(self.env.num_envs)
+                self.env.commands[selected] = self.env.commands.new_tensor(self.command)
+                self.env.jump.trigger(selected, self.selected_jump_mode, restart=True)
+                print(f"[eval] jump: {MODE_NAMES[self.selected_jump_mode]} (restarted)")
             elif axis == "stop":
                 self.command[:2] = [0.0, 0.0]
                 if getattr(self.env, "manual_control", False):

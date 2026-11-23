@@ -50,9 +50,16 @@ class Jump:
             raise ValueError(f"jump mode must be an integer in [0, {len(MODE_NAMES)})")
         self.buffers.pending_mode[mask] = mode
 
-    def trigger(self, mask, mode=0):
-        """立即跳跃；手动 eval 可在特殊地形触发，自动模式仍由地形接管。"""
+    def trigger(self, mask, mode=0, *, restart=False):
+        """立即跳跃；eval 的 restart 跳过门控，每次从第 0 步重新输入。"""
         env = self.env
+        if restart:
+            if not env.evaluation:
+                raise ValueError("jump restart is only available during evaluation")
+            self.request(mask, mode)
+            env.recovery.buffers.reset(mask, active=False)
+            self._start(env, mask, self.buffers.pending_mode[mask].clone(), env.commands[mask, 0].clone())
+            return mask
         terrain_available = ~env.terrain_cross.assigned | getattr(env, "manual_control", False)
         selected = mask & ~env.recovery.buffers.active & ~self.buffers.active & terrain_available
         selected = self._limit_trigger_ang_vel(env, selected)
@@ -81,7 +88,14 @@ class Jump:
             return
         sampled = torch.multinomial(self.mode_probabilities, ids.numel(), replacement=True)
         modes = torch.where(buffers.pending_mode[ids] >= 0, buffers.pending_mode[ids], sampled)
-        buffers.start(env, selected, modes, previous_vx[ids])
+        self._start(env, selected, modes, previous_vx[ids])
+
+    def _start(self, env, selected, modes, previous_vx):
+        ids = selected.nonzero(as_tuple=False).flatten()
+        if not ids.numel():
+            return
+        buffers = self.buffers
+        buffers.start(env, selected, modes, previous_vx)
         self.metrics.start(selected, buffers.mode)
         self._update_reference(env.dt)
         env.commands[ids, 0] = buffers.forward_velocity[ids]
