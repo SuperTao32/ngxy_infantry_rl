@@ -59,7 +59,7 @@ def add_resume_arguments(parser: Any) -> None:
         help="resume from a version (for example 0 or version_0000); omit VERSION to use latest",
     )
     parser.add_argument("--checkpoint", type=int, default=None, help="checkpoint number; default: latest")
-    parser.add_argument(
+    parser.add_argument(    
         "--resume-config",
         choices=("saved", "current"),
         default="saved",

@@ -127,6 +127,8 @@ def get_env_cfg() -> dict:
                 {"preset": "slope_down", "difficulty": 0, "weight": 0.0},
                 {"preset": "square_wave", "difficulty": 0, "weight": 0.0},
                 {"preset": "stairs", "difficulty": 0, "weight": 0.0},
+                {"preset": "stairs_up", "difficulty": 0, "weight": 0.0},
+                {"preset": "platform_ridge_down", "difficulty": 0, "weight": 0.0},
             ],
         },
         "randomization": default_randomization_cfg(dynamics_enabled=True, sensors_enabled=True),
@@ -208,6 +210,9 @@ def get_command_cfg() -> dict:
             "base_height_threshold": 0.32,
             "max_abs_lin_vel": 2.0,
             "max_abs_ang_vel": 3.0,
+        },
+        "jump_velocity_limits": {
+            "max_abs_ang_vel": 1.5,  # 起跳前实际机身 yaw 角速度绝对值上限，rad/s。
         },
     }
 
@@ -386,10 +391,26 @@ def get_curriculum_cfg() -> dict:
             },
             {
                 "name": "terrain_cross",
-                "start_iteration": 9000,
+                "start_iteration": 8000,
                 "targets": {
                     "tof": {"enabled": True},
                     "terrain_weights": {"plane": 0.6, "stairs": 0.1, "slope_down": 0.1, "slope_up": 0.1, "square_wave": 0.1},
+                },
+            },
+            {
+                "name": "terrain_cross_2",
+                "start_iteration": 8500,
+                "targets": {
+                    "tof": {"enabled": True},
+                    "terrain_weights": {
+                        "plane": 0.6,
+                        "stairs": 0.05,
+                        "stairs_up": 0.1,
+                        "slope_down": 0.05,
+                        "slope_up": 0.1,
+                        "square_wave": 0.0,
+                        "platform_ridge_down": 0.1,
+                    },
                 },
             },
         ],

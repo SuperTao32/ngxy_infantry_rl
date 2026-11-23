@@ -5,6 +5,38 @@ import math
 import torch
 
 
+class StairsUpRetraction:
+    """入台时固定平均腿长，只累计新的最大缩腿量，整回合最多一个台阶高度。"""
+
+    def __init__(self, env):
+        self.steps = env.commands.new_tensor([
+            [geometry.start_x, geometry.step_height] if name == "stairs_up" else [0., 0.]
+            for name, geometry in zip(env.terrain.tile_types, env.terrain.geometries)
+        ])
+        self.started = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+        self.entry_length = env.commands.new_zeros(env.num_envs)
+        self.max_retraction = torch.zeros_like(self.entry_length)
+        self.delta = torch.zeros_like(self.entry_length)
+
+    def reset(self, mask):
+        for value in (self.started, self.entry_length, self.max_retraction, self.delta):
+            value[mask] = 0
+
+    def update(self, env, buffers, in_lane):
+        moving = ~env._standing_command_mask()
+        valid = buffers.assigned & buffers.was_active & in_lane & ~env.terminated_buf & moving
+        steps = self.steps[env.terrain_tile_index]
+        local_x = env.base_pos[:, 0] - env.terrain_spawn_centers[:, 0]
+        above_step = (local_x >= steps[:, 0]) & (env.base_height > 0.0)
+        entered = valid & above_step & ~self.started
+        length = env.leg_length.mean(dim=1)
+        self.entry_length.copy_(torch.where(entered, length, self.entry_length))
+        self.started.logical_or_(entered)
+        retraction = torch.minimum((self.entry_length - length).clamp_min(0.0), steps[:, 1])
+        self.delta.copy_(torch.where(valid & self.started, (retraction - self.max_retraction).clamp_min(0.0), 0.0))
+        self.max_retraction.add_(self.delta)
+
+
 class StairsDownLanding:
     """首次接触最后一级下方地面后，独立计满落地振荡窗口。"""
 
@@ -43,8 +75,9 @@ class StairsDownLanding:
 
 
 class TerrainCrossBuffers:
-    def __init__(self, env, config, *, landing_config=None):
+    def __init__(self, env, config, *, landing_config=None, stairs_up_retraction=False):
         self.landing = StairsDownLanding(env, landing_config) if landing_config is not None else None
+        self.retraction = StairsUpRetraction(env) if stairs_up_retraction else None
         self.hold_steps = max(1, math.ceil(config["success_hold_s"] / env.dt - 1e-9))
         self.min_upright_cos = math.cos(math.radians(config["max_tilt_deg"]))
         bool_names = ("assigned", "started", "active", "was_active", "success", "failure", "started_event")
@@ -62,6 +95,8 @@ class TerrainCrossBuffers:
     def reset(self, env, mask, assigned, goals):
         if self.landing is not None:
             self.landing.reset(mask)
+        if self.retraction is not None:
+            self.retraction.reset(mask)
         for value in self._episode_buffers:
             value[mask] = 0
         self.assigned[mask] = assigned[mask]

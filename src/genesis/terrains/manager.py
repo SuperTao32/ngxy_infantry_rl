@@ -15,7 +15,7 @@ from .curriculum import TerrainDifficultyCurriculum
 class TerrainManager:
     """管理静态地形、并行环境出生 patch 和地面高度查询。"""
 
-    def __init__(self, config: dict):
+    def __init__(self, config: dict, *, curriculum_cfg=None):
         self.config = resolve_terrain_cfg(config)
         self.preset = self.config["preset"]
         self.is_plane = self.preset == "plane"
@@ -27,6 +27,7 @@ class TerrainManager:
             "parameters": self.config["subterrain_parameters"].get(TERRAIN_REGISTRY[self.preset].PARAMETER_KEY, {}),
         }]
         self.sampling_types = tuple(tile["preset"] for tile in tiles)
+        self._validate_curriculum(curriculum_cfg)
         adaptive = self.config["curriculum"]["enabled"]
         level_sets = {tile["preset"]: tuple(sorted(int(level) for level in tile["resolved_levels"]))
                       for tile in tiles if adaptive and tile["preset"] != "plane"}
@@ -65,12 +66,44 @@ class TerrainManager:
         if "_weights" in self.__dict__:
             self._weights.copy_(self._weights.new_tensor(self.weights))
 
-    def set_weights(self, values):
-        """课程按类型给出权重；未列出的类型为 0，仅更新后续 reset 的采样。"""
+    def _validate_weights(self, values):
         values = {name: float(weight) for name, weight in values.items()}
         valid = all(math.isfinite(weight) and weight >= 0 for weight in values.values())
-        if values.keys() - TERRAIN_REGISTRY.keys() or not valid or not any(values.get(name, 0) > 0 for name in self.sampling_types):
+        if values.keys() - TERRAIN_REGISTRY.keys() or not valid:
             raise ValueError("terrain_weights requires registered presets, finite non-negative weights and a positive weight for an available type")
+        missing = sorted(name for name, weight in values.items() if weight > 0 and name not in self.sampling_types)
+        if missing:
+            raise ValueError(
+                f"terrain_weights enables terrains missing from terrain.tiles: {missing}. "
+                "Add these presets to env_cfg['terrain']['tiles'] (weight=0.0 is allowed) "
+                "and restart training; use --resume-config current when resuming with updated config."
+            )
+        if not any(values.get(name, 0) > 0 for name in self.sampling_types):
+            raise ValueError("terrain_weights requires a positive weight for an available type")
+        return values
+
+    def _validate_curriculum(self, config):
+        """场景创建前检查全部阶段，避免训练到后期才发现缺少地形。"""
+        if not self.is_mixture or not config or not config.get("enabled", False):
+            return
+        weights = {}
+        for stage in config.get("stages", []):
+            overrides = stage.get("targets", {}).get("terrain_weights")
+            if overrides is None:
+                continue
+            # 与总课程一致，后续阶段累计覆盖，未提及的类型继承之前的值。
+            weights.update(overrides)
+            try:
+                self._validate_weights(weights)
+            except ValueError as exc:
+                raise ValueError(
+                    f"Curriculum stage {stage['name']!r} "
+                    f"(start_iteration={stage['start_iteration']}): {exc}"
+                ) from exc
+
+    def set_weights(self, values):
+        """课程按类型给出权重；未列出的类型为 0，仅更新后续 reset 的采样。"""
+        values = self._validate_weights(values)
         totals = {name: sum(weight for kind, weight in zip(self.sampling_types, self._base_weights) if kind == name)
                   for name in self.sampling_types}
         weights = [values.get(name, 0.0) * (base / totals[name] if totals[name] else 1 / self.sampling_types.count(name))

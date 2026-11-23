@@ -17,6 +17,10 @@ class Jump:
     def __init__(self, env, config):
         self.env = env
         self.config = deepcopy(config)
+        velocity_limits = env.command_cfg.get("jump_velocity_limits")
+        self.max_abs_ang_vel = None if velocity_limits is None else float(velocity_limits["max_abs_ang_vel"])
+        if self.max_abs_ang_vel is not None and (not math.isfinite(self.max_abs_ang_vel) or self.max_abs_ang_vel < 0.0):
+            raise ValueError("jump_velocity_limits.max_abs_ang_vel must be finite and non-negative")
         self.metrics = TaskMetrics(env.device, MODE_NAMES)
         self.apply_curriculum({"probability": self.config["probability"]})
         self.phase_durations = validate_phase_durations(self.config["jump_phase_durations_s"])
@@ -51,12 +55,22 @@ class Jump:
         env = self.env
         terrain_available = ~env.terrain_cross.assigned | getattr(env, "manual_control", False)
         selected = mask & ~env.recovery.buffers.active & ~self.buffers.active & terrain_available
+        selected = self._limit_trigger_ang_vel(env, selected)
         self.request(selected, mode)
         self.on_resample(env, selected, env.commands[:, 0].clone())
         return selected
 
+    def _limit_trigger_ang_vel(self, env, mask):
+        """只限制起跳前的实际 yaw 角速度，不干预已开始的跳跃。"""
+        if self.max_abs_ang_vel is None:
+            return mask
+        return mask & (env.base_ang_vel[:, 2].abs() <= self.max_abs_ang_vel)
+
     def on_resample(self, env, mask, previous_vx):
         """缓存已采样的新命令，沿用重采样前的 vx 插入 jump。"""
+        mask = self._limit_trigger_ang_vel(env, mask)
+        if not mask.any():
+            return
         if self.config["probability"] == 0.0 and not (self.buffers.pending_mode[mask] >= 0).any():
             return
         # mask 由 env 排除 recovery、已激活 jump 及本拍结束的回合。

@@ -6,10 +6,12 @@ from ...terrains.registry import TERRAIN_REGISTRY
 # stairs_down 对应当前 stairs；未列出的共享项继续继承 locomotion。
 TERRAIN_REWARD_OVERRIDES = {
     "stairs_up": {
+        "stairs_up_leg_retraction": 50.0,  # 入台后的平均缩腿量，仅奖励新纪录，累计上限为一级台阶高度；不乘 dt。
         "task_lateral": 0,
         "task_heading": 0,
         "base_height": 0.0,
         "height_gate": 0.0,
+        "base_balance": -100.0,
         "base_contact": 0.0,
         "wheel_airborne": 0.0,
     },
@@ -18,25 +20,29 @@ TERRAIN_REWARD_OVERRIDES = {
         "base_height": 0.0,
         "height_gate": 0.0,
         "wheel_airborne": 0.0,
+        "base_balance": -100.0,
         "base_contact": -100.0,
     },
     "slope_up": {
         "base_height": 0.0,
         "height_gate": 0.0,
+        "base_balance": -100.0,
         "base_contact": -100.0,
     },
     "slope_down": {
         "base_height": 0.0,
         "height_gate": 0.0,
+        "base_balance": -100.0,
         "base_contact": -100.0,
     },
     "square_wave": {
-        "square_wave_wheel_wall_force": -0.1,  # 两轮与小台阶立面的法向力之和，N；按 dt 积分。
+        "square_wave_wheel_wall_force": -1.0,  # 两轮与小台阶立面的法向力之和，N；按 dt 积分。
         "task_lateral": 0,
         "task_heading": 0,
         "base_height": 0.0,
         "height_gate": 0.0,
         "wheel_airborne": 0.0,
+        "base_balance": -100.0,
         "base_contact": -100.0,
     },
     "platform_ridge_down": {
@@ -44,6 +50,7 @@ TERRAIN_REWARD_OVERRIDES = {
         "task_heading": 0,
         "base_height": 0.0,
         "height_gate": 0.0,
+        "base_balance": -100.0,
         "base_contact": -100.0,
         "wheel_airborne": 0.0,
     },
@@ -52,6 +59,7 @@ TERRAIN_REWARD_OVERRIDES = {
         "task_heading": 0,
         "base_height": 0.0,
         "height_gate": 0.0,
+        "base_balance": -100.0,
         "base_contact": 0.0,
         "wheel_airborne": 0.0,
     },
@@ -80,9 +88,9 @@ def get_cfg():
                 "tracking_gate": {
                     "height_full_error": 0.05,
                     "height_zero_error": 0.10,
-                    "attitude_full_angle_deg": 5.0,
-                    "attitude_zero_angle_deg": 30.0,
-                    "floor": 0.30,
+                    "attitude_full_angle_deg": 1.0,
+                    "attitude_zero_angle_deg": 5.0,
+                    "floor": 0.20,
                 },
                 # 同名 locomotion 项覆盖全局权重（0 表示关闭）；其余项作为越障附加奖励。
                 "reward_scales": {
@@ -107,4 +115,13 @@ def get_cfg():
         "normal_x_min": 0.5,  # 接触单位法向的 |nx| 下限，包含入口棱边，排除顶部和侧面。
         "surface_tolerance_m": 0.01,  # 接触点距入口立面及高度范围的容差。
     }
+    # stairs_up 专属 commands
+    config["terrains"]["stairs_up"]["commands"].update(
+        {
+            "lin_vel_range": [0.2, 2.0],
+            "ang_vel_range": [0.0, 0.0],
+            "base_height_range": [0.38, 0.38],
+            "standing_probability": None,
+        }
+    )
     return config

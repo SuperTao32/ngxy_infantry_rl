@@ -68,7 +68,7 @@ class WheelLegInfantryEnv(LocomotionRewards, EnvironmentConfiguration):
         self.steps_per_iteration = int(steps_per_iteration)  # PPO runner 每采满 steps_per_iteration 个控制步完成一轮
         self.tracking_gate_cfg = {}
         self._apply_tracking_gate(reward_cfg.get("tracking_gate", DEFAULT_TRACKING_GATE_CFG))
-        self.terrain = TerrainManager(env_cfg["terrain"])
+        self.terrain = TerrainManager(env_cfg["terrain"], curriculum_cfg=self.curriculum_cfg)
         # 记录 TerrainManager 补齐后的配置，保证课程、日志与运行状态一致。
         self.env_cfg["terrain"] = self.terrain.config
 
@@ -510,7 +510,6 @@ class WheelLegInfantryEnv(LocomotionRewards, EnvironmentConfiguration):
             self.recovery.metrics.clear()
             self.jump.metrics.clear()
             self.terrain_cross.metrics.clear()
-            self.terrain_cross.level_metrics.clear()
             for count in self.termination_counts.values():
                 count.zero_()
             self._reset_idx()
@@ -792,7 +791,6 @@ class WheelLegInfantryEnv(LocomotionRewards, EnvironmentConfiguration):
             metrics = self.recovery.metrics.collect("recovery")
             metrics.update(self.jump.metrics.collect("jump"))
             metrics.update(self.terrain_cross.metrics.collect("terrain_cross"))
-            metrics.update(self.terrain_cross.level_metrics.collect("terrain_cross"))
             metrics.update(self.terrain.update_curriculum())
             for name, count in self.termination_counts.items():
                 metrics[f"termination/{name}"] = count.clone()

@@ -37,6 +37,7 @@ class TerrainCross:
             name: TerrainCrossBuffers(
                 env, self.config,
                 landing_config=self.config["terrains"][name].get("landing_stability") if name == "stairs" else None,
+                stairs_up_retraction=name == "stairs_up",
             )
             for name in self.names
         }
@@ -48,17 +49,10 @@ class TerrainCross:
             for name in self.names
         }
         self.metrics = TaskMetrics(env.device, self.names)
-        level_keys = tuple(dict.fromkeys((name, level) for name, level in zip(env.terrain.tile_types, env.terrain.tile_difficulties) if name != "plane"))
-        self.level_metrics = TaskMetrics(env.device, tuple(f"{name}/level_{level}" if level is not None else f"{name}/default"
-                                                        for name, level in level_keys))
         self.value = torch.zeros_like(env.reward_buf)
         self.terrain_ids = torch.full((env.num_envs,), -1, dtype=torch.long, device=env.device)
         self._tile_groups = self.terrain_ids.new_tensor([
             self.names.index(name) if name != "plane" else -1 for name in env.terrain.tile_types
-        ])
-        self._tile_level_groups = self.terrain_ids.new_tensor([
-            level_keys.index((name, level)) if name != "plane" else -1
-            for name, level in zip(env.terrain.tile_types, env.terrain.tile_difficulties)
         ])
         self.reset_sampler = TerrainResetSampler(env, self.config["terrains"], self.names, self._tile_groups)
         self.commands = torch.zeros_like(env.commands)
@@ -144,17 +138,16 @@ class TerrainCross:
         half_y = env.terrain.tile_size[1] / 2 - (env.terrain.config["boundary_margin"] or 0.0)
         in_lane = ((wheels[..., 1] - env.terrain_spawn_centers[:, 1:2]).abs() < half_y).all(dim=1)
         in_lane &= ~env.terrain.out_of_bounds(env.base_pos[:, :2], env.terrain_spawn_centers)
-        level_ids = self._tile_level_groups[env.terrain_tile_index]
         for buffers in self.buffers.values():
             buffers.update(env, rear_x, in_lane)
+            if buffers.retraction is not None:
+                buffers.retraction.update(env, buffers, in_lane)
             if buffers.landing is not None:
                 edge_x = self._tile_goals[env.terrain_tile_index] - self.config["finish_distance_m"]
                 buffers.landing.update(env, buffers, wheels, edge_x)
             self.metrics.start(buffers.started_event, self.terrain_ids)
             finished = (buffers.success_event > 0) | (buffers.failure_event > 0)
             self.metrics.finish(finished, buffers.success, invalid=env.terminated_buf, modes=self.terrain_ids)
-            self.level_metrics.start(buffers.started_event, level_ids)
-            self.level_metrics.finish(finished, buffers.success, invalid=env.terminated_buf, modes=level_ids)
             if not env.evaluation:
                 env.terrain.record_results(env.terrain_tile_index, finished, buffers.success)
 

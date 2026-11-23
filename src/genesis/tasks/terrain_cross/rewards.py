@@ -18,7 +18,7 @@ class TerrainCrossRewards(RewardBuffer):
         super().__init__(
             env.num_envs, env.device, env.dt,
             lambda name: getattr(self, "_reward_" + name, None) or getattr(env, "_reward_" + name),
-            scales, event_rewards={"progress", "success", "failure"},
+            scales, event_rewards={"progress", "success", "failure", "stairs_up_leg_retraction"},
         )
 
     def configure_wheel_wall_force(self, config):
@@ -64,6 +64,10 @@ class TerrainCrossRewards(RewardBuffer):
         vertical_velocity = (self.env.base_lin_vel * self.env.projected_gravity).sum(dim=1)
         oscillation = vertical_velocity.square() + self.buffers.landing.angular_weight * self.env.base_ang_vel[:, :2].square().sum(dim=1)
         return self.buffers.landing.gate * oscillation
+
+    def _reward_stairs_up_leg_retraction(self):
+        """缩腿新纪录的增量，单位 m；事件奖励不乘 dt，伸缩或退回台阶不重新计奖。"""
+        return self.buffers.retraction.delta
 
     def _reward_progress(self):
         return self.buffers.progress_delta

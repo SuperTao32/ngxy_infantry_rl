@@ -85,7 +85,8 @@ configs["env_cfg"]["terrain_cross"]["terrains"]["stairs"]["reward_scales"] = {
 或在某类地形的 `reward_scales` 中显式配置 env 的共享奖励项。
 课程可通过 `targets.terrain_cross.terrains.<地形名>.reward_scales` 覆盖对应权重。
 每轮 PPO 输出 `terrain_cross/<地形名>/attempts`、`completed`、`success_rate`、`failure_rate` 等，
-回合日志另记录该地形的奖励累计、最大进度和耗时；成功率只统计已结束的尝试。
+同类地形的各难度合并统计，不按 level 单独输出。回合日志另记录该地形的奖励累计、
+最大进度和耗时；成功率只统计已结束的尝试。
 checkpoint 保存各地形奖励权重、当前难度和未满判定窗口的累计样本，加载后物理回合和运行 buffer 按统一 reset 流程重建。
 
 ### Reset 恢复
@@ -126,12 +127,15 @@ recovery 的 `config.py` 中，`RESET_POSE_FILES` 指定 `reset_pos/` 内的文�
 ### Jump 命令输入
 
 1. env 在控制步内判断命令重采样时间，先保存上一条命令的 `vx`，再采样新的 locomotion 命令。
-2. `jump.on_resample` 消费请求或按概率决定是否跳跃。命中时缓存本次新命令，沿用上一条命令的 `vx`，将 yaw 设为 0、高度列换成 jump 轨迹；未命中时直接使用新命令。
+2. `jump.on_resample` 先检查实际机身 yaw 角速度，再消费请求或按概率决定是否跳跃。命中时缓存本次新命令，沿用上一条命令的 `vx`，将 yaw 设为 0、高度列换成 jump 轨迹；未命中时直接使用新命令。
 3. jump 自行推进计时、模式 one-hot、相位编码、高度参考和接触事件，期间保持该 `vx` 目标。
 4. jump 输入窗口结束后编码归零，整个跳跃周期结束后应用本次缓存的新 locomotion 命令，不额外采样。
 
 `jump.request(mask, mode=0)` 只排队，下一次命令重采样时触发。
 `jump.trigger(mask, mode=0)` 立即开始跳跃并缓存当前 locomotion 命令，恢复或跳跃中的行忽略请求。
+`command_cfg.jump_velocity_limits.max_abs_ang_vel` 限制起跳前实际机身 yaw 角速度的绝对值，默认 2.0 rad/s。
+大于阈值时禁止随机跳跃和即时触发，等于阈值时允许；已经排队的请求保留到后续命令重采样重新检查。
+移除 `jump_velocity_limits` 或设为 `None` 可关闭该限制；已开始的跳跃继续执行。
 reset 不触发 jump，恢复或跳跃执行中不接受新的命令采样覆盖。
 常规命令重采样仍按回合内的固定周期触发。若 jump 结束恰好遇到采样边界，本拍先应用缓存命令。
 
@@ -181,6 +185,12 @@ jump 权重支持标量或按 `JUMP_20/JUMP_40` 排列的列表。
 缩放沿用旧版：recovery 的成功、速度和失败事件不乘 `dt`；jump 只有 `death` 不乘 `dt`，
 其余项（包括起跳、成功和失败事件）均乘 `dt`，避免迁移后事件奖励放大 100 倍。
 
+stairs_up 的 `stairs_up_leg_retraction` 仅在非静止命令下生效：baselink 首次越过
+台阶入口且位于台面上方时，固定双腿虚拟腿长的平均值作为基准。此后只奖励平均
+腿长缩短量的新纪录，入台前收腿不计，反复伸缩或退出再进入不能重复领取。
+每回合累计缩腿量上限为所属地块的一级台阶高度，reset 后重新记录；越障结束后停止计分。
+该项不乘 `dt`，默认权重为 `50.0`，位于 `tasks/terrain_cross/config.py`。
+
 ## 配置与入口
 
 训练默认预建各等级地形并按成功率调级。在 `config.py` 的 `env_cfg.terrain` 中配置：
@@ -214,7 +224,7 @@ tile 的 `difficulty` 为初始等级。每个待 reset 环境先按权重选类
 尚未结束的尝试不计失败，未通关的终止/timeout 计失败。旧等级回合完成后仍按原等级记录指标，
 不进入新等级的判定窗口。升降级只修改后续 reset 的出生地块，运行中的机器人和碰撞几何保持原样。
 多 GPU 在调级前汇总完成/成功数，保持相同目标等级；eval 的单地形 `--difficulty` 保持固定。
-TensorBoard 的 `terrain_cross/<地形>/level_<等级>/...` 记录分级结果，
+TensorBoard 的 `terrain_cross/<地形>/...` 记录该地形所有难度的汇总结果，
 `terrain_curriculum/<地形>/level` 和 `window_completed` 记录目标等级与当前窗口样本数。
 设置 `curriculum.enabled=False` 可只创建指定 `difficulty` 的固定地形；自动课程每种类型配置一项即可。
 需要覆盖某一块的几何参数时，在该 tile 中添加 `parameters` 字典，其优先于 `difficulty`。
@@ -238,6 +248,9 @@ TensorBoard 的 `terrain_cross/<地形>/level_<等级>/...` 记录分级结果�
 首次设置 `{"plane": 1.0}` 即屏蔽所有特殊地形；后续阶段遵循课程的累计覆盖语义，
 关闭已开启的类型需显式写 0。零权重地形仍预建，可在后期启用；重新启用时保留已学习的难度等级。
 课程切换只影响后续 reset，当前各类环境数量会随回合结束逐步接近目标比例。
+在课程中启用新地形前，必须先将其加入 `env_cfg.terrain.tiles`；仅设置 `terrain_weights` 不会创建地形。
+启动时检查所有已启用课程阶段，正权重类型缺少 tile 时会报出阶段名、轮次和缺失类型；运行时设置权重也会校验。
+修改配置后续训需使用 `--resume-config current`，否则仍读取原运行保存的配置。
 续训按保存轮次恢复阶段占比，单地形 eval 保持 `--terrain` 指定地形。
 TensorBoard 的 `terrain_sampling/<地形>/probability` 记录当前目标比例。
 
