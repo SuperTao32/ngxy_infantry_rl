@@ -38,7 +38,7 @@ def get_reward_cfg():
         "reward_scales": {
             "base_balance": -10.0,
             "leg_symmetry": -10.0,
-            "leg_symmetry_bonus": 5.0,
+            "leg_symmetry_bonus": 10.0,
             "tracking_lin_vel": 10.0,
             "tracking_ang_vel": 10.0,
             "joint_vel": -0.005,

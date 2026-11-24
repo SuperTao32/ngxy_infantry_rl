@@ -111,10 +111,11 @@ class WheelLegInfantryEnv(LocomotionRewards, EnvironmentConfiguration):
 
         # 气弹簧配置
         self.spring_names = tuple(env_cfg.get("spring_names", ("left_spring2_joint", "right_spring2_joint")))
-        self.gas_spring_preload_force = float(env_cfg.get("gas_spring_preload_force", 420.0))
-        self.gas_spring_stiffness = float(env_cfg.get("gas_spring_stiffness", 1400.0))
-        self.gas_spring_damping = float(env_cfg.get("gas_spring_damping", 50.0))
-        self.gas_spring_max_compression = float(env_cfg.get("gas_spring_max_compression", 0.06))
+        self.gas_spring_preload_force = float(env_cfg.get("gas_spring_preload_force", 400.0))
+        self.gas_spring_stiffness = float(env_cfg.get("gas_spring_stiffness", 368.573))
+        self.gas_spring_quadratic_stiffness = float(env_cfg.get("gas_spring_quadratic_stiffness", 39671.64))
+        self.gas_spring_damping = float(env_cfg.get("gas_spring_damping", 0.0))
+        self.gas_spring_max_compression = float(env_cfg.get("gas_spring_max_compression", 0.0675))
 
         # 接触判定和持续终止阈值
         self.wheel_contact_force_threshold = float(env_cfg.get("wheel_contact_force_threshold", 1.0))
@@ -760,7 +761,10 @@ class WheelLegInfantryEnv(LocomotionRewards, EnvironmentConfiguration):
         self.tof_observation_enabled = enabled
 
     def _apply_terrain_cross_curriculum(self, values):
-        for name, options in values["terrains"].items():
+        self.env_cfg["terrain_cross"].setdefault("standing_reward_scales", {}).update(
+            deepcopy(values.get("standing_reward_scales", {})),
+        )
+        for name, options in values.get("terrains", {}).items():
             for section, overrides in options.items():
                 self.env_cfg["terrain_cross"]["terrains"][name][section].update(deepcopy(overrides))
         terrain_cross = self.__dict__.get("terrain_cross")
@@ -963,15 +967,16 @@ class WheelLegInfantryEnv(LocomotionRewards, EnvironmentConfiguration):
         return constrained
 
     def _apply_gas_spring_compensation(self):
-        """根据弹簧压缩量和速度施加预载、刚度及阻尼补偿力。"""
+        """以实际滑动关节位移（m）计算二次拟合力，工作区间外保持边界值。"""
         spring_pos = self.robot.get_dofs_position(self.springs_dof_idx)
         spring_vel = self.robot.get_dofs_velocity(self.springs_dof_idx)
-        compression = torch.clamp(
-            self.gas_spring_max_compression - spring_pos,
-            0.0,
-            self.gas_spring_max_compression,
+        q = torch.clamp(spring_pos, 0.0, self.gas_spring_max_compression)
+        force = (
+            self.gas_spring_preload_force
+            + self.gas_spring_stiffness * q
+            + self.gas_spring_quadratic_stiffness * q.square()
+            - self.gas_spring_damping * spring_vel
         )
-        force = self.gas_spring_preload_force + self.gas_spring_stiffness * compression - self.gas_spring_damping * spring_vel
         self.gas_spring_force.copy_(force)
         self.robot.control_dofs_force(force, self.springs_dof_idx)
 

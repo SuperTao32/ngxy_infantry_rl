@@ -102,11 +102,12 @@ def get_env_cfg() -> dict:
         "leg_upper_link_length": 0.21,
         "leg_lower_link_length": 0.25,
         "upper_links_min_angle": 0.5 * math.pi,
-        # 气弹簧：F = F0 + k * compression - c * velocity。
-        "gas_spring_preload_force": 420.0,
-        "gas_spring_stiffness": 0.0,
+        # 气弹簧：F(q) = F0 + k1*q + k2*q² - c*dq，q 为实际滑动关节位移（m）。
+        "gas_spring_preload_force": 400.0,  # N
+        "gas_spring_stiffness": 368.573,  # N/m
+        "gas_spring_quadratic_stiffness": 39671.64,  # N/m²
         "gas_spring_damping": 0.0,
-        "gas_spring_max_compression": 0.06,
+        "gas_spring_max_compression": 0.0675,  # 正常工作行程上限，保留末端 10%。
         # 电机参数与动作映射。
         "joint_kp": 50.0,
         "joint_kd": 2.0,

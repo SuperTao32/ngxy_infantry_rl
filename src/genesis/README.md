@@ -16,6 +16,22 @@
 提供 locomotion 奖励项。`reward_buffer.py` 只复用结算和累计逻辑；env、recovery、
 jump、terrain_cross 各自创建实例，不共享奖励 buffer 或回合累计。
 
+### 气弹簧
+
+默认使用 400 N 初始弹压力的拟合曲线：
+`F(q) = 400 + 368.573*q + 39671.64*q²`，力单位为 N，
+`q` 直接取 `left_spring2_joint` / `right_spring2_joint` 的实际位移（m）。
+正常工作区间为 `0 ≤ q ≤ 0.0675 m`，末端 10% 行程保留；
+主机器人 MJCF 的两个滑动关节使用相同范围。计算拟合力时将位移截断到此区间，
+避免求解器短暂越界时外推曲线；关节限位由物理求解器处理。
+区间端点的标称力分别为 400 N 和约 605.63 N。
+
+配置中的 `gas_spring_preload_force`、`gas_spring_stiffness`、
+`gas_spring_quadratic_stiffness` 分别对应常数项、一次项和二次项；
+`gas_spring_damping` 默认 0，启用后额外叠加 `-c*dq`。
+域随机化支持上述四项，二次项倍率默认固定为 1。
+这组参数用于 Genesis 训练/评估；`tools/sysid/` 的历史恒力实验配置独立维护。
+
 ### Terrain cross 越障
 
 `tasks/terrain_cross/` 与 jump/recovery 一样分为 `config.py`、`buffers.py`、`rewards.py`、`task.py`。
@@ -187,11 +203,33 @@ jump 权重支持标量或按 `JUMP_20/JUMP_40` 排列的列表。
 缩放沿用旧版：recovery 的成功、速度和失败事件不乘 `dt`；jump 只有 `death` 不乘 `dt`，
 其余项（包括起跳、成功和失败事件）均乘 `dt`，避免迁移后事件奖励放大 100 倍。
 
+所有特殊地形的静止命令统一使用 locomotion 奖励与跟踪门控，不使用各地形的行进权重，
+也不结算越障附加奖励（包括独立的落地稳定窗口）。公共静止权重位于
+`tasks/terrain_cross/config.py` 的 `TERRAIN_REWARD_OVERRIDES["standing"]`，默认留空：
+未列出的项实时继承 locomotion 当前课程权重；填入同名项即可对所有特殊地形统一覆盖，
+例如 `"base_balance": -20.0`，权重 `0.0` 表示关闭。平地不受该配置影响。
+课程可通过 `terrain_cross.standing_reward_scales` 更新覆盖，覆盖值随组件状态保存和恢复。
+
+stairs_up 的 `stairs_up_wheel_support` 是双轮台面支撑奖励：两轮都在入口之后的
+升高台阶面上产生超过接触阈值的向上法向支撑力时取 1，允许分别位于不同级台阶。
+入口前地面、仅单轮上台、撞立面或墙面摩擦不计；机身接触、失败和静止命令不计。
+默认权重为 `5.0`，逐拍按 `dt` 累计，越障结束后停止；权重位于
+`TERRAIN_REWARD_OVERRIDES["stairs_up"]`，台面高度容差复用 `wheel_wall_force.surface_tolerance_m`。
+
+stairs_up 的 `stairs_up_wheel_airborne` 在非静止命令、有效越障且机身无接触时生效：
+先有轮子支撑，再首次双轮失去地面支撑时奖励一次，每回合最多一次，reset 后重新计奖。
+任一轮仍有地面支撑时不触发；撞台阶立面和墙面摩擦不算地面支撑，出生腾空不计奖。
+该项不乘 `dt`，默认权重为 `5.0`，位于 `tasks/terrain_cross/config.py`。
+
 stairs_up 的 `stairs_up_leg_retraction` 仅在非静止命令下生效：baselink 首次越过
 台阶入口且位于台面上方时，固定双腿虚拟腿长的平均值作为基准。此后只奖励平均
 腿长缩短量的新纪录，入台前收腿不计，反复伸缩或退出再进入不能重复领取。
 每回合累计缩腿量上限为所属地块的一级台阶高度，reset 后重新记录；越障结束后停止计分。
 该项不乘 `dt`，默认权重为 `50.0`，位于 `tasks/terrain_cross/config.py`。
+`stairs_up_wheel_wall_force` 在双轮都无地面支撑时，惩罚两轮对各级台阶竖直面的
+法向力之和（N），默认权重 `-1.0`，按 `dt` 积分。支撑由非立面接触的向上法向力判定，
+任一轮有地面支撑即关闭该项；撞墙接触和墙面摩擦不视为地面支撑。
+立面筛选由 stairs_up 的 `wheel_wall_force.normal_x_min/surface_tolerance_m` 配置。
 
 ## 配置与入口
 

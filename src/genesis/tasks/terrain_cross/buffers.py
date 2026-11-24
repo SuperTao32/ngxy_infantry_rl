@@ -37,6 +37,26 @@ class StairsUpRetraction:
         self.max_retraction.add_(self.delta)
 
 
+class StairsUpWheelAirborne:
+    """先有轮子支撑再双轮离地，每回合只发一次事件。"""
+
+    def __init__(self, env):
+        self.supported_seen = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+        self.rewarded = torch.zeros_like(self.supported_seen)
+        self.event = torch.zeros_like(self.supported_seen)
+
+    def reset(self, mask):
+        for value in (self.supported_seen, self.rewarded, self.event):
+            value[mask] = False
+
+    def update(self, env, buffers, in_lane, airborne):
+        valid = (buffers.assigned & buffers.was_active & in_lane & ~env.reset_buf
+                 & ~env.terminated_buf & ~env._standing_command_mask() & (env.base_contact < 0.5))
+        self.event.copy_(valid & self.supported_seen & airborne & ~self.rewarded)
+        self.rewarded.logical_or_(self.event)
+        self.supported_seen.logical_or_(valid & ~airborne)
+
+
 class StairsDownLanding:
     """首次接触最后一级下方地面后，独立计满落地振荡窗口。"""
 
@@ -75,9 +95,10 @@ class StairsDownLanding:
 
 
 class TerrainCrossBuffers:
-    def __init__(self, env, config, *, landing_config=None, stairs_up_retraction=False):
+    def __init__(self, env, config, *, landing_config=None, stairs_up_retraction=False, stairs_up_airborne=False):
         self.landing = StairsDownLanding(env, landing_config) if landing_config is not None else None
         self.retraction = StairsUpRetraction(env) if stairs_up_retraction else None
+        self.wheel_airborne = StairsUpWheelAirborne(env) if stairs_up_airborne else None
         self.hold_steps = max(1, math.ceil(config["success_hold_s"] / env.dt - 1e-9))
         self.min_upright_cos = math.cos(math.radians(config["max_tilt_deg"]))
         bool_names = ("assigned", "started", "active", "was_active", "success", "failure", "started_event")
@@ -97,6 +118,8 @@ class TerrainCrossBuffers:
             self.landing.reset(mask)
         if self.retraction is not None:
             self.retraction.reset(mask)
+        if self.wheel_airborne is not None:
+            self.wheel_airborne.reset(mask)
         for value in self._episode_buffers:
             value[mask] = 0
         self.assigned[mask] = assigned[mask]

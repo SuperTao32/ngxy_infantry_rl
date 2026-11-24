@@ -8,7 +8,7 @@ import torch
 
 GAIN_NAMES = ("joint_kp", "joint_kd", "wheel_kd")
 MOTOR_NAMES = (*GAIN_NAMES, "joint_force_limit", "wheel_force_limit")
-SPRING_NAMES = ("preload_force", "stiffness", "damping")
+SPRING_NAMES = ("preload_force", "stiffness", "quadratic_stiffness", "damping")
 EXTENDED_GROUPS = ("base_mass", "com_displacement", "motor_strength", "motor_offset", "gas_spring", "passive_joints", "push")
 
 
@@ -45,6 +45,7 @@ def default_dynamics_randomization_cfg(*, enabled=False):
             "enabled": True,
             "preload_force_range": [0.95, 1.05],
             "stiffness_range": [1.0, 1.0],
+            "quadratic_stiffness_range": [1.0, 1.0],
             "damping_range": [1.0, 1.0],
         },
         "motor_gains": {

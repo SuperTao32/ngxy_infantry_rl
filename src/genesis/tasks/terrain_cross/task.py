@@ -16,6 +16,7 @@ from ...utils.tracking_gate import DEFAULT_TRACKING_GATE_CFG, merge_tracking_gat
 class TerrainCross:
     def __init__(self, env, config):
         self.env, self.config = env, deepcopy(config)
+        self.config.setdefault("standing_reward_scales", {})
         self.names = tuple(dict.fromkeys(name for name in env.terrain.tile_types if name != "plane"))
         goals = []
         errors = []
@@ -38,6 +39,7 @@ class TerrainCross:
                 env, self.config,
                 landing_config=self.config["terrains"][name].get("landing_stability") if name == "stairs" else None,
                 stairs_up_retraction=name == "stairs_up",
+                stairs_up_airborne=name == "stairs_up",
             )
             for name in self.names
         }
@@ -92,11 +94,11 @@ class TerrainCross:
         ])
 
     def tracking_gate_parameters(self, defaults):
-        """平地跟随全局课程，特殊地形使用独立门控，持续至物理回合结束。"""
+        """平地和静止命令跟随 locomotion 门控；特殊地形行进时使用独立门控。"""
         if not self.names:
             return defaults
         parameters = self._tracking_gate_table[self.terrain_ids.clamp_min(0)]
-        assigned = self.assigned
+        assigned = self.assigned & ~self.env._standing_command_mask()
         return {key: torch.where(assigned, parameters[:, index], defaults[key])
                 for index, key in enumerate(DEFAULT_TRACKING_GATE_CFG)}
 
@@ -141,10 +143,12 @@ class TerrainCross:
         half_y = env.terrain.tile_size[1] / 2 - (env.terrain.config["boundary_margin"] or 0.0)
         in_lane = ((wheels[..., 1] - env.terrain_spawn_centers[:, 1:2]).abs() < half_y).all(dim=1)
         in_lane &= ~env.terrain.out_of_bounds(env.base_pos[:, :2], env.terrain_spawn_centers)
-        for buffers in self.buffers.values():
+        for name, buffers in self.buffers.items():
             buffers.update(env, rear_x, in_lane)
             if buffers.retraction is not None:
                 buffers.retraction.update(env, buffers, in_lane)
+            if buffers.wheel_airborne is not None:
+                buffers.wheel_airborne.update(env, buffers, in_lane, self.rewards[name].stairs_up_wheels_airborne())
             if buffers.landing is not None:
                 edge_x = self._tile_goals[env.terrain_tile_index] - self.config["finish_distance_m"]
                 buffers.landing.update(env, buffers, wheels, edge_x)
@@ -155,21 +159,30 @@ class TerrainCross:
                 env.terrain.record_results(env.terrain_tile_index, finished, buffers.success)
 
     def reward_scale_overrides(self, scales):
-        """整回合按所属地形覆盖同名 locomotion 权重；未配置的项继承全局。"""
+        """行进按地形覆盖，静止使用统一覆盖；未配置项实时继承 locomotion。"""
         overrides = {}
+        standing = self.env._standing_command_mask()
         for index, name in enumerate(self.names):
             terrain_scales = self.rewards[name].scales
             for key in terrain_scales.keys() & scales.keys():
                 overrides[key] = torch.where(
-                    self.terrain_ids == index, terrain_scales[key], overrides.get(key, scales[key]),
+                    (self.terrain_ids == index) & ~standing, terrain_scales[key], overrides.get(key, scales[key]),
                 )
+        standing_scales = self.config["standing_reward_scales"]
+        for key in standing_scales.keys() & scales.keys():
+            overrides[key] = torch.where(
+                self.assigned & standing, standing_scales[key], overrides.get(key, scales[key]),
+            )
         return overrides
 
     def compute_rewards(self, *, exclude=()):
         self.value.zero_()
+        standing = self.env._standing_command_mask()
         for name, rewards in self.rewards.items():
             buffers = self.buffers[name]
-            self.value.add_(rewards.compute(buffers.was_active | (buffers.failure_event > 0), exclude=exclude))
+            self.value.add_(rewards.compute(
+                buffers.was_active | (buffers.failure_event > 0), exclude=exclude, standing_mask=standing,
+            ))
         return self.value
 
     def episode_metrics(self, mask):
@@ -189,7 +202,8 @@ class TerrainCross:
         return result
 
     def apply_curriculum(self, values):
-        for name, options in values["terrains"].items():
+        self.config["standing_reward_scales"].update(deepcopy(values.get("standing_reward_scales", {})))
+        for name, options in values.get("terrains", {}).items():
             for section, overrides in options.items():
                 self.config["terrains"][name][section].update(deepcopy(overrides))
             if name not in self.buffers:
@@ -204,13 +218,18 @@ class TerrainCross:
                 self.buffers[name].landing.configure(self.config["terrains"][name]["landing_stability"])
             if "wheel_wall_force" in options:
                 self.rewards[name].configure_wheel_wall_force(self.config["terrains"][name]["wheel_wall_force"])
-        if any("tracking_gate" in options for options in values["terrains"].values()):
+        if any("tracking_gate" in options for options in values.get("terrains", {}).values()):
             self._configure_tracking_gate()
 
     def state_dict(self):
-        return {name: rewards.state_dict() for name, rewards in self.rewards.items()}
+        return {
+            **{name: rewards.state_dict() for name, rewards in self.rewards.items()},
+            "standing_reward_scales": deepcopy(self.config["standing_reward_scales"]),
+        }
 
     def load_state_dict(self, state):
+        if "standing_reward_scales" in state:
+            self.config["standing_reward_scales"] = deepcopy(state["standing_reward_scales"])
         for name, rewards in self.rewards.items():
             if name in state:
                 rewards.load_state_dict(state[name])

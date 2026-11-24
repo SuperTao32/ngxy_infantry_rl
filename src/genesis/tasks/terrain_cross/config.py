@@ -5,8 +5,16 @@ from ...terrains.registry import TERRAIN_REGISTRY
 # 迁自旧版 multi_terrain；仅保留当前已有同名实现的奖励。
 # stairs_down 对应当前 stairs；未列出的共享项继续继承 locomotion。
 TERRAIN_REWARD_OVERRIDES = {
+    "standing": {
+        # 所有特殊地形的静止命令共用；未列出的权重实时继承 locomotion（含课程）。
+        "base_height": 0.0,
+        "height_gate": 0.0,
+    },
     "stairs_up": {
-        "stairs_up_leg_retraction": 50.0,  # 入台后的平均缩腿量，仅奖励新纪录，累计上限为一级台阶高度；不乘 dt。
+        "stairs_up_wheel_support": 10.0,  # 双轮均在台阶面上承重时为 1；按 dt 积分，静止时不生效。
+        "stairs_up_wheel_airborne": 5.0,  # 先有轮子支撑再双轮离地，每回合只奖励一次；不乘 dt。
+        "stairs_up_leg_retraction": 200.0,  # 入台后的平均缩腿量，仅奖励新纪录，累计上限为一级台阶高度；不乘 dt。
+        "stairs_up_wheel_wall_force": -0.05,  # 双轮无地面支撑时，轮子撞压各级立面的法向力之和，N；按 dt 积分。
         "task_lateral": 0,
         "task_heading": 0,
         "base_height": 0.0,
@@ -68,6 +76,7 @@ TERRAIN_REWARD_OVERRIDES = {
 
 def get_cfg():
     config = {
+        "standing_reward_scales": dict(TERRAIN_REWARD_OVERRIDES["standing"]),
         "finish_distance_m": 0.3,  # 双轮越过几何终点后再前进的距离。
         "success_hold_s": 0.2,  # 双轮支撑、无机身接触且正立的连续时间。
         "max_tilt_deg": 30.0,
@@ -92,7 +101,7 @@ def get_cfg():
                     "attitude_zero_angle_deg": 5.0,
                     "floor": 0.20,
                 },
-                # 同名 locomotion 项覆盖全局权重（0 表示关闭）；其余项作为越障附加奖励。
+                # 非静止命令下，同名 locomotion 项覆盖全局权重；其余项作为越障附加奖励。
                 "reward_scales": {
                     "progress": 5.0,
                     "success": 50.0,
@@ -114,6 +123,10 @@ def get_cfg():
     config["terrains"]["square_wave"]["wheel_wall_force"] = {
         "normal_x_min": 0.5,  # 接触单位法向的 |nx| 下限，包含入口棱边，排除顶部和侧面。
         "surface_tolerance_m": 0.01,  # 接触点距入口立面及高度范围的容差。
+    }
+    config["terrains"]["stairs_up"]["wheel_wall_force"] = {
+        "normal_x_min": 0.5,  # 立面接触单位法向的 |nx| 下限。
+        "surface_tolerance_m": 0.01,  # 接触点距各级立面及该级高度范围的容差。
     }
     # stairs_up 专属 commands
     config["terrains"]["stairs_up"]["commands"].update(
