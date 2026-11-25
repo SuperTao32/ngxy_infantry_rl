@@ -15,7 +15,7 @@ from .curriculum import TerrainDifficultyCurriculum
 class TerrainManager:
     """管理静态地形、并行环境出生 patch 和地面高度查询。"""
 
-    def __init__(self, config: dict, *, curriculum_cfg=None):
+    def __init__(self, config: dict, *, curriculum_cfg=None, build_weights=None):
         self.config = resolve_terrain_cfg(config)
         self.preset = self.config["preset"]
         self.is_plane = self.preset == "plane"
@@ -28,6 +28,9 @@ class TerrainManager:
         }]
         self.sampling_types = tuple(tile["preset"] for tile in tiles)
         self._validate_curriculum(curriculum_cfg)
+        self.staged_build = build_weights is not None
+        if self.staged_build:
+            build_weights = self._validate_weights(build_weights)
         adaptive = self.config["curriculum"]["enabled"]
         level_sets = {tile["preset"]: tuple(sorted(int(level) for level in tile["resolved_levels"]))
                       for tile in tiles if adaptive and tile["preset"] != "plane"}
@@ -38,6 +41,9 @@ class TerrainManager:
         # 采样先按地形权重选类型，再按该类型的目标等级选预建地块。
         variants, self._family_tiles = [], []
         for tile in tiles:
+            if self.staged_build and build_weights.get(tile["preset"], 0.0) == 0:
+                self._family_tiles.append({})
+                continue
             levels = ([(int(level), parameters) for level, parameters in sorted(tile["resolved_levels"].items(), key=lambda item: int(item[0]))]
                       if adaptive else [(tile.get("difficulty"), tile["parameters"])])
             lookup = {}
@@ -46,6 +52,7 @@ class TerrainManager:
                 variants.append((tile["preset"], level, parameters))
             self._family_tiles.append(lookup)
         self.tile_types = tuple(name for name, _, _ in variants)
+        self.built_types = frozenset(self.tile_types)
         self.tile_difficulties = tuple(level for _, level, _ in variants)
         # 每块沿 y 排列，保留地形自身的 +x 行进方向；边界复位隔开相邻任务。
         self.centers = tuple((0.0, index * self.tile_size[1]) for index in range(len(variants)))
@@ -58,7 +65,10 @@ class TerrainManager:
         )
         largest_weight = max(tile["weight"] for tile in tiles)
         self._base_weights = tuple(tile["weight"] / largest_weight for tile in tiles)
-        self._set_weights(self._base_weights)
+        if self.staged_build:
+            self.set_weights(build_weights)
+        else:
+            self._set_weights(self._base_weights)
 
     def _set_weights(self, weights):
         largest = max(weights)
@@ -104,6 +114,9 @@ class TerrainManager:
     def set_weights(self, values):
         """课程按类型给出权重；未列出的类型为 0，仅更新后续 reset 的采样。"""
         values = self._validate_weights(values)
+        unbuilt = {name for name, weight in values.items() if weight > 0} - self.built_types
+        if unbuilt:
+            raise ValueError(f"Terrain types {sorted(unbuilt)} require a scene rebuild at the PPO iteration boundary")
         totals = {name: sum(weight for kind, weight in zip(self.sampling_types, self._base_weights) if kind == name)
                   for name in self.sampling_types}
         weights = [values.get(name, 0.0) * (base / totals[name] if totals[name] else 1 / self.sampling_types.count(name))
@@ -147,7 +160,8 @@ class TerrainManager:
         return self._centers[tile_indices], tile_indices
 
     def _refresh_spawn_tiles(self):
-        indices = [lookup[self.curriculum.levels[name]] if name in self.curriculum.levels else next(iter(lookup.values()))
+        indices = [-1 if not lookup else lookup[self.curriculum.levels[name]]
+                   if name in self.curriculum.levels else next(iter(lookup.values()))
                    for name, lookup in zip(self.sampling_types, self._family_tiles)]
         self._spawn_tiles = torch.tensor(indices, device=self._centers.device, dtype=torch.long)
 

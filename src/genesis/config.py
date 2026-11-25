@@ -59,6 +59,7 @@ def get_train_cfg(exp_name: str) -> dict:
         "max_iterations": 10000,
         "seed": 42,
         "clip_actions": None,
+        "stage_terrain_build": True,  # 只构建当前正权重地形，类型变化时在 PPO 轮间重建场景。
         # 日志与 checkpoint。
         "experiment_name": exp_name,
         "run_name": exp_name,
@@ -118,7 +119,7 @@ def get_env_cfg() -> dict:
         "wheel_vel_scale": 30.0,
         # 固定一拍动作延迟；不属于 domain_rand。
         "simulate_action_latency": True,
-        # 预建各等级地块；按成功率升降级，仅影响后续 reset。eval 仍选择固定单地形。
+        # 当前阶段参与训练的类型预建各等级；类型随课程切换，等级按成功率升降。
         "terrain": {
             **default_terrain_cfg("mixture"),
             "curriculum": {"enabled": True, "min_completed": 100, "promote_threshold": 0.95, "demote_threshold": 0.1},
@@ -130,6 +131,7 @@ def get_env_cfg() -> dict:
                 {"preset": "stairs", "difficulty": 0, "weight": 0.0},
                 {"preset": "stairs_up", "difficulty": 0, "weight": 0.0},
                 {"preset": "platform_ridge_down", "difficulty": 0, "weight": 0.0},
+                {"preset": "platform_ridge_up", "difficulty": 0, "weight": 0.0},
             ],
         },
         "randomization": default_randomization_cfg(dynamics_enabled=True, sensors_enabled=True),

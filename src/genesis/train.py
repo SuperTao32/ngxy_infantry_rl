@@ -7,6 +7,7 @@ import sys
 
 from .config import FRAMEWORK, env_kwargs, get_cfgs
 from .tools.distributed import launch_training, training_workers
+from .terrains.stages import terrain_weights_at_iteration
 from .robust.randomization_config import add_randomization_arguments, apply_randomization_arguments
 from .tools.run_utils import (
     add_resume_arguments,
@@ -94,15 +95,23 @@ def _train(args, parser, workers):
     gs.init(backend=gs.cpu if args.cpu else gs.gpu, precision="32", logging_level="warning", seed=args.seed + workers.rank, performance_mode=True)
     completed = False
     try:
-        env = WheelLegInfantryEnv(
-            args.num_envs,
-            **env_kwargs(configs),
-            steps_per_iteration=configs["train_cfg"]["num_steps_per_env"],
-            show_viewer=args.vis and workers.rank == 0,
-            initial_training_iteration=plan.next_iteration if plan else 0,
-        )
+        staged = configs["train_cfg"].get("stage_terrain_build", True) and configs["env_cfg"]["terrain"]["preset"] == "mixture"
+
+        def make_env(iteration):
+            build_weights = terrain_weights_at_iteration(
+                configs["env_cfg"]["terrain"], configs["curriculum_cfg"], iteration,
+            ) if staged else None
+            return WheelLegInfantryEnv(
+                args.num_envs, **env_kwargs(deepcopy(configs)),
+                steps_per_iteration=configs["train_cfg"]["num_steps_per_env"],
+                show_viewer=args.vis and workers.rank == 0,
+                initial_training_iteration=iteration, terrain_build_weights=build_weights,
+            )
+
+        env = make_env(plan.next_iteration if plan else 0)
         runner = PolicyRunner(
             env, configs["train_cfg"], str(run_dir), device=str(gs.device), workers=workers,
+            terrain_env_factory=make_env if staged else None,
         )
         remaining = args.max_iterations
         if plan:
@@ -117,6 +126,8 @@ def _train(args, parser, workers):
                 map_location=runner.device,
             )
             print(f"[load-weight] checkpoint={args.load_weight}; iteration=0; optimizer and environment curriculum start fresh")
+        # 只保留 runner 对当前环境的引用，允许阶段切换时及时释放旧环境。
+        del env
         runner.learn(num_learning_iterations=remaining, init_at_random_ep_len=False)
         completed = True
     finally:

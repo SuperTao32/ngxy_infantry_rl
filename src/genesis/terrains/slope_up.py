@@ -8,11 +8,9 @@ PARAMETER_KEY = "slope_up"
 PARAMETERS = dict(height=0.25, slope_angle_deg=23.0, approach_length=1.0, base_thickness=0.10)
 
 LEVELS = {
-    0: dict(slope_angle_deg=10.0),
-    1: dict(slope_angle_deg=15.0),
-    2: dict(slope_angle_deg=20.0),
-    3: dict(slope_angle_deg=23.0),
-    4: dict(slope_angle_deg=25.0),
+    0: dict(slope_angle_deg=20.0),
+    1: dict(slope_angle_deg=23.0),
+    2: dict(slope_angle_deg=25.0),
 }
 
 

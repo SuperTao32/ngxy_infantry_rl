@@ -9,9 +9,7 @@ PRESET = "stairs"
 PARAMETER_KEY = "box_stairs"
 PARAMETERS = dict(step_depth=2.0, step_height=0.20, num_steps=1, approach_length=1.0, base_thickness=0.10)
 LEVELS = {
-    0: {"step_height": 0.15},
-    1: {"step_height": 0.20},
-    2: {"step_height": 0.25},
+    0: {"step_height": 0.20},
 }
 
 

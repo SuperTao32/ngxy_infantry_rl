@@ -27,6 +27,7 @@ from .sensors.tof import GenesisToF, ToFHistory, ToFSamplingClock, resolve_tof_c
 from .utils.kinematics import compute_leg_angle, compute_leg_length, constrain_leg_targets
 from .utils.tensor_utils import as_gain_tensor, as_range_tensors
 from .terrains.manager import TerrainManager
+from .terrains.stages import active_terrain_types, terrain_weights_at_iteration
 from .configuration import EnvironmentConfiguration
 from .rewards import LocomotionRewards
 from .reward_buffer import RewardBuffer
@@ -53,6 +54,7 @@ class WheelLegInfantryEnv(LocomotionRewards, EnvironmentConfiguration):
         *,
         evaluation=False,
         initial_training_iteration=0,
+        terrain_build_weights=None,
     ):
         self.evaluation = evaluation
         ############################# 配置阶段 ###############################
@@ -68,7 +70,9 @@ class WheelLegInfantryEnv(LocomotionRewards, EnvironmentConfiguration):
         self.steps_per_iteration = int(steps_per_iteration)  # PPO runner 每采满 steps_per_iteration 个控制步完成一轮
         self.tracking_gate_cfg = {}
         self._apply_tracking_gate(reward_cfg.get("tracking_gate", DEFAULT_TRACKING_GATE_CFG))
-        self.terrain = TerrainManager(env_cfg["terrain"], curriculum_cfg=self.curriculum_cfg)
+        self.terrain = TerrainManager(
+            env_cfg["terrain"], curriculum_cfg=self.curriculum_cfg, build_weights=terrain_build_weights,
+        )
         # 记录 TerrainManager 补齐后的配置，保证课程、日志与运行状态一致。
         self.env_cfg["terrain"] = self.terrain.config
 
@@ -799,7 +803,11 @@ class WheelLegInfantryEnv(LocomotionRewards, EnvironmentConfiguration):
                 metrics[f"termination/{name}"] = count.clone()
                 count.zero_()
             self.training_iteration = self.global_step // self.steps_per_iteration
-            if self.curriculum.update(self.training_iteration):
+            # 新地形在 PPO 更新完成后由 runner 重建场景，最后一拍仍使用当前场景的课程。
+            rebuild_pending = self.terrain.staged_build and active_terrain_types(terrain_weights_at_iteration(
+                self.terrain.config, self.curriculum_cfg, self.training_iteration,
+            )) != self.terrain.built_types
+            if not rebuild_pending and self.curriculum.update(self.training_iteration):
                 print(f"[curriculum] stage={self.curriculum.current_stage_name} iteration={self.training_iteration}")
             metrics.update(self.terrain.sampling_metrics())
             self.extras.setdefault("episode", {}).update(metrics)

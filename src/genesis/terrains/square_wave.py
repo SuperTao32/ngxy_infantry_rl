@@ -8,12 +8,9 @@ PARAMETER_KEY = "square_wave"
 PARAMETERS = dict(height=0.05, approach_length=0.8, base_thickness=0.10)
 LEVELS = {
     0: {"height": 0.020},
-    1: {"height": 0.025},
-    2: {"height": 0.030},
-    3: {"height": 0.035},
-    4: {"height": 0.040},
-    5: {"height": 0.045},
-    6: {"height": 0.050},
+    1: {"height": 0.030},
+    2: {"height": 0.040},
+    3: {"height": 0.050},
 }
 
 
