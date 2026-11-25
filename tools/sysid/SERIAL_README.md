@@ -27,37 +27,26 @@ CRC 覆盖偏移 1～29（`txbuf + 1`，`data_len + 1 = 29` 字节），
 CRC 初值固定为 `soft_crc_Init()` 中使用的 0xFFFF。
 用提供的 C 实现交叉验证：`123456789` 的 CRC 为 0x6F91。
 
-安装依赖并运行（项目根目录）：
+在项目根目录安装 `pyserial`，再用 `--target` 选择本次采集对象。
 
 ```bash
 uv pip install pyserial
-.venv/bin/python tools/sysid/record_serial.py --port /dev/ttyUSB0 --baud 921600 --data-len 28 --out logs/sysid/left_forward.csv
+.venv/bin/python tools/sysid/record_serial.py --target left_leg --port /dev/ttyUSB0
+.venv/bin/python tools/sysid/record_serial.py --target right_leg --port /dev/ttyUSB0
+.venv/bin/python tools/sysid/record_serial.py --target wheels --port /dev/ttyUSB0
 ```
 
-Windows 将串口改为 `--port COM3`。输出路径可省略，默认保存到
-`logs/sysid/serial_日期_时间.csv`。按 Ctrl+C 保存退出，已有文件不会被覆盖。
+| `--target` | 默认输出文件 | 28 字节帧的 CSV 表头 |
+| --- | --- | --- |
+| `left_leg` | `logs/sysid/left_leg_YYYYMMDD_HHMMSS.csv` | `time,torque_front,torque_rear,q_front,q_rear,dq_front,dq_rear` |
+| `right_leg` | `logs/sysid/right_leg_YYYYMMDD_HHMMSS.csv` | `time,torque_front,torque_rear,q_front,q_rear,dq_front,dq_rear` |
+| `wheels` | `logs/sysid/wheels_YYYYMMDD_HHMMSS.csv` | `time,torque_left,torque_right,q_left,q_right,dq_left,dq_right` |
 
-错误数据自动保存到同目录的 `<文件名>_errors.csv`，例如 `data.csv` 对应
-`data_errors.csv`，无需额外参数。两个文件每秒刷新，退出时也会刷新，均不覆盖已有文件。
-错误日志包含：
+固件数组下标 0 和 1 分别对应前、后关节，或左、右轮。省略 `--target` 时使用原有的
+`serial_YYYYMMDD_HHMMSS.csv` 文件名和 `front`、`rear` 表头。
+可用 `--out logs/sysid/wheels_forward.csv` 指定路径。Windows 将串口改为
+`--port COM3`。按 Ctrl+C 保存退出，已有文件不会被覆盖。
 
-- `host_time`：电脑记录该错误的本地时间，带时区，不是 MCU 采样时间。
-- `stream_offset`：从本次接收起始位置计数的字节偏移（从 0 开始）。
-- `error`：`crc_error`、`trailer_error`、`invalid_values`、`discarded_bytes` 或 `incomplete_frame`。
-- `byte_count`、`raw_hex`：记录的字节数和原始十六进制数据。
-- `crc_received`、`crc_calculated`：候选帧中的 CRC 与接收端计算的 CRC。
-- `trailer_received`、`trailer_expected`：实际帧尾与预期的 `0x65`。
-
-CRC/帧尾错误保存从候选前缀开始、长度为 `data_len + 5` 的完整字节窗口。
-发生丢字节或失步时，该窗口可能跨越实际发送帧；帧尾错误行的 CRC 值也只是
-按候选位置计算，不能当作已确认帧的 CRC。重新同步时丢弃的字节单独记录，
-可能与前面的错误窗口重叠，可通过 `stream_offset` 对照，日志行数不等于坏帧数。
-找不到前缀的数据也会作为 `discarded_bytes` 保存；退出时的残留数据记为
-`incomplete_frame`。这些字节片段没有 CRC/帧尾字段，相关列留空。
-
-
-CSV 表头为 `time,torque_front,torque_rear,q_front,q_rear,dq_front,dq_rear`。
-数组下标 0 对应 front，1 对应 rear，列名自动生成。
 其他数据长度按 `uint32_t time_ms + float32 数组` 解析，支持 4～252 字节的 4 的倍数，
 列名自动生成为 `time,value_0,value_1,...`，共 `data_len / 4` 列。
 若数据包含其他类型或填充，需要同步修改解析布局，不能只调整长度。
@@ -65,7 +54,8 @@ CSV 表头为 `time,torque_front,torque_rear,q_front,q_rear,dq_front,dq_rear`。
 供现有 SysID 使用时，固件力矩单位应为 Nm、角度为 rad、速度为 rad/s。
 
 接收端处理拆包和粘包，CRC 或帧尾校验失败后重新寻找前缀，丢弃非有限浮点数。
-每秒刷新文件并报告保存帧数、CRC 错误、帧尾错误、非法数值、丢弃字节、时间回退次数。
+每次采集只生成一个数据 CSV，每秒刷新文件，并在终端汇总保存帧数、CRC 错误、帧尾错误、
+非法数值、丢弃字节和时间回退次数。
 不严格检查 2 ms 间隔，接受重复时间戳、周期抖动和缺帧造成的正向时间跳变。
 仅统计时间回退，仍保留对应数据；正常 uint32 回绕不计为回退。CSV 保留原始 MCU 时间，
 回绕或重启后时间会回退，需分段用于辨识。

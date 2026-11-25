@@ -1,7 +1,7 @@
 # 悬空双轮阻尼与摩擦辨识
 
 实验条件：车身和腿部机械固定，轮子离地，只有左右轮可以转动。
-使用轮轴输出端力矩 torque 和轮角度/角速度，联合辨识四个参数：
+输入轮轴输出端力矩，仅拟合左右轮的角速度，联合辨识四个参数：
 
 | 参数 | 含义 | 单位 |
 | --- | --- | --- |
@@ -39,13 +39,14 @@ time,torque_left,torque_right,q_left,q_right,dq_left,dq_right
 
 - `time`：时间 [s]，严格递增，每段至少 10 个样本。
 - `torque_left`、`torque_right`：左右轮轴输出端力矩 [Nm]。
-- `q_left`、`q_right`：连续累计轮角度 [rad]，坐标方向与 MJCF 一致。
+- `q_left`、`q_right`：轮角度 [rad]，零位和正方向与 MJCF 一致。
+  有对应角速度列时，仅首帧需填写，后续角度可留空。
 - `dq_left`、`dq_right`：可选角速度 [rad/s]；缺失时对相应角度差分估算。
 
-多圈轮角不能直接使用每圈跳变的编码器读数；先解包角度再写入 CSV。
+用角度估算速度时，对应角度列须记录整段连续累计角度，先解包每圈跳变的编码器读数。
 若原始速度为 rpm，先乘 `2*pi/60` 转成 rad/s。力矩方向可通过
 `left_torque_sign` / `right_torque_sign` 设置为 ±1；角度和速度也需事先
-转换到模型的关节方向。缺失值或非有限值会报错。
+转换到模型的关节方向。参与计算的值必须有限。
 旧 CSV 中的电流数值不能直接改列名当作力矩使用。
 
 建议从静止开始做正转、反转和多个速度档的激励，并记录断电滑行段，
@@ -81,7 +82,7 @@ python tools/sysid/wheels/sysid_wheels.py
 
 默认以 `sample_rate_hz=1000.0`、`filter_cutoff_hz=50.0` 对力矩和已有速度列
 进行四阶 Butterworth 双向零相位低通滤波（SciPy `sosfiltfilt`）。
-缺少速度列时，先平滑角度再用 `numpy.gradient` 求速度；位置观测保留原始角度。
+缺少速度列时，先平滑角度再用 `numpy.gradient` 求速度。初始化使用未经滤波的首帧角度。
 原始 CSV 不会被修改。上述参数直接在 `CFG = SysIDConfig(...)` 中配置，
 `filter_cutoff_hz=None` 可关闭滤波，恢复原始数据及原始角度差分。
 

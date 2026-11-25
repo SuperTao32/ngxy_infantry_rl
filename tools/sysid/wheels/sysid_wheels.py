@@ -5,8 +5,8 @@
 直接输入轮轴力矩 torque [Nm]，轮子惯量和关节附加转动惯量 armature 保持固定。
 
 每次实验的轮轴姿态由 XML 固定，初始速度为零。
-轮角度使用 CSV 首帧初始化，并采用模型关节坐标系下的连续角度 [rad]，
-不能直接使用编码器计数或每圈跳变的角度。
+轮角取 CSV 首帧的关节角度 [rad]，拟合使用左右轮角速度 [rad/s]。
+缺少某轮的角速度列时，用该轮的连续角度求导。
 """
 
 from __future__ import annotations
@@ -26,11 +26,7 @@ from filtering import lowpass
 WHEEL_JOINTS = {side: f"{side}_wheel_joint" for side in ("left", "right")}
 WHEEL_ACTUATORS = {side: f"{joint}_ctrl" for side, joint in WHEEL_JOINTS.items()}
 OBSERVATIONS = [
-    (f"{joint}_{suffix}", signal_type)
-    for suffix, signal_type in (
-        ("qpos", sysid.SignalType.MjStateQPos),
-        ("qvel", sysid.SignalType.MjStateQVel),
-    )
+    (f"{joint}_qvel", sysid.SignalType.MjStateQVel)
     for joint in WHEEL_JOINTS.values()
 ]
 
@@ -82,44 +78,48 @@ def load_wheel_spec(cfg: SysIDConfig) -> mujoco.MjSpec:
 
 
 def load_log(path: Path, model: mujoco.MjModel, cfg: SysIDConfig):
-    """读取并低通滤波力矩和速度；缺少 dq 时对平滑后的角度求导。"""
+    """读取力矩和速度观测，并用首帧角度构造初始状态。"""
     raw = np.atleast_1d(np.genfromtxt(path, delimiter=",", names=True, dtype=float))
     columns = raw.dtype.names or ()
-    required = ("time", "torque_left", "torque_right", "q_left", "q_right")
+    input_columns = ("time", "torque_left", "torque_right")
+    required = (*input_columns, *(f"q_{side}" for side in WHEEL_JOINTS))
     missing = [name for name in required if name not in columns]
     if missing:
         raise ValueError(f"{path}: missing columns: {missing}")
     if len(raw) < 10:
         raise ValueError(f"{path}: trajectory needs at least 10 rows")
-    used = (*required, *(name for name in ("dq_left", "dq_right") if name in columns))
+    speed_sources = {
+        side: f"dq_{side}" if f"dq_{side}" in columns else f"q_{side}"
+        for side in WHEEL_JOINTS
+    }
+    used = (*input_columns, *speed_sources.values())
     if any(not np.all(np.isfinite(raw[name])) for name in used):
         raise ValueError(f"{path}: input columns contain NaN or infinity")
     t = raw["time"] - raw["time"][0]
     if np.any(np.diff(t) <= 0):
         raise ValueError(f"{path}: time must be strictly increasing")
 
-    q = {side: raw[f"q_{side}"] for side in WHEEL_JOINTS}
-    dq = {
-        side: lowpass(t, raw[f"dq_{side}"], cfg.sample_rate_hz, cfg.filter_cutoff_hz)
-        if f"dq_{side}" in columns else np.gradient(
-            lowpass(t, q[side], cfg.sample_rate_hz, cfg.filter_cutoff_hz), t
-        )
-        for side in WHEEL_JOINTS
-    }
+    q0 = model.qpos0.copy()
+    speeds = []
+    for side, joint in WHEEL_JOINTS.items():
+        angle_column = f"q_{side}"
+        initial_angle = raw[angle_column][0]
+        if not np.isfinite(initial_angle):
+            raise ValueError(f"{path}: first {angle_column} must be finite")
+        q0[model.joint(joint).qposadr[0]] = initial_angle
+
+        source = speed_sources[side]
+        values = lowpass(t, raw[source], cfg.sample_rate_hz, cfg.filter_cutoff_hz)
+        speeds.append(np.gradient(values, t) if source == angle_column else values)
+
     ctrl = np.zeros((len(t), model.nu))
     for side, sign in (("left", cfg.left_torque_sign), ("right", cfg.right_torque_sign)):
         ctrl[:, model.actuator(WHEEL_ACTUATORS[side]).id] = sign * lowpass(
             t, raw[f"torque_{side}"], cfg.sample_rate_hz, cfg.filter_cutoff_hz
         )
     control = sysid.TimeSeries.from_control_names(t, ctrl, model)
-    measured = sysid.TimeSeries.from_names(
-        t, np.column_stack([q["left"], q["right"], dq["left"], dq["right"]]),
-        model, names=OBSERVATIONS,
-    )
+    measured = sysid.TimeSeries.from_names(t, np.column_stack(speeds), model, names=OBSERVATIONS)
 
-    q0 = model.qpos0.copy()
-    for side, name in WHEEL_JOINTS.items():
-        q0[model.joint(name).qposadr[0]] = q[side][0]
     # 与实机流程一致：两个轮子开始驱动前就开始记录，初始速度为零。
     state = sysid.create_initial_state(model, q0, np.zeros(model.nv))
     return control, measured, state
@@ -207,7 +207,7 @@ def main(cfg: SysIDConfig = CFG) -> None:
         residual_kwargs["n_threads"] = cfg.threads
     residual_fn = sysid.build_residual_fn(**residual_kwargs)
     params = build_params(cfg)
-    print("[sysid] optimizing damping_left/right and friction_left/right")
+    print("[sysid] 仅拟合左右轮角速度，辨识 damping_left/right 和 friction_left/right")
     opt_params, opt_result = sysid.optimize(
         initial_params=params,
         residual_fn=residual_fn,

@@ -9,9 +9,14 @@ from pathlib import Path
 import struct
 import time
 
-COLUMNS_7 = "time,torque_front,torque_rear,q_front,q_rear,dq_front,dq_rear".split(",")
 PAYLOAD = struct.Struct("<I6f")
 DEFAULT_DATA_LEN = PAYLOAD.size
+LEG_CHANNELS = ("front", "rear")
+TARGET_CHANNELS = {
+    "left_leg": LEG_CHANNELS,
+    "right_leg": LEG_CHANNELS,
+    "wheels": ("left", "right"),
+}
 
 
 def payload_for_length(data_len):
@@ -32,22 +37,15 @@ def crc16_firmware(data):
 
 
 class CsvRecorder:
-    def __init__(self, output, data_len=DEFAULT_DATA_LEN, error_output=None):
+    def __init__(self, output, data_len=DEFAULT_DATA_LEN, *, channels=LEG_CHANNELS):
         self.payload = payload_for_length(data_len)
-        self.data_len = data_len
         self.frame_size = data_len + 5
-        width = data_len // 4
-        columns = COLUMNS_7 if data_len == DEFAULT_DATA_LEN else ["time", *[f"value_{i}" for i in range(width - 1)]]
+        if data_len == DEFAULT_DATA_LEN:
+            columns = [f"{quantity}_{channel}" for quantity in ("torque", "q", "dq") for channel in channels]
+        else:
+            columns = [f"value_{i}" for i in range(data_len // 4 - 1)]
         self.writer = csv.writer(output)
-        self.writer.writerow(columns)
-        self.error_output = error_output
-        self.error_writer = csv.writer(error_output) if error_output is not None else None
-        if self.error_writer is not None:
-            self.error_writer.writerow([
-                "host_time", "stream_offset", "error", "byte_count", "raw_hex",
-                "crc_received", "crc_calculated", "trailer_received", "trailer_expected",
-            ])
-        self.bytes_received = 0
+        self.writer.writerow(["time", *columns])
         self.header = b"s" + bytes([data_len])
         self.pending = bytearray()
         self.rows = 0
@@ -59,7 +57,6 @@ class CsvRecorder:
         self.previous_ms = None
 
     def accept(self, chunk):
-        self.bytes_received += len(chunk)
         self.pending.extend(chunk)
         while True:
             start = self.pending.find(self.header)
@@ -67,20 +64,16 @@ class CsvRecorder:
                 # 保留可能被拆开的前缀首字节。
                 keep = 1 if self.pending.endswith(self.header[:1]) else 0
                 discard = len(self.pending) - keep
-                if discard:
-                    self.log_error("discarded_bytes", self.pending[:discard])
                 self.discarded_bytes += discard
                 del self.pending[:discard]
                 return
             if start:
-                self.log_error("discarded_bytes", self.pending[:start])
-            self.discarded_bytes += start
-            del self.pending[:start]
+                self.discarded_bytes += start
+                del self.pending[:start]
             if len(self.pending) < self.frame_size:
                 return
             frame = self.pending[:self.frame_size]
             if frame[-1] != ord("e"):
-                self.log_error("trailer_error", frame, full_frame=True)
                 self.trailer_errors += 1
                 self.discarded_bytes += 1
                 del self.pending[:1]
@@ -88,15 +81,11 @@ class CsvRecorder:
             expected = int.from_bytes(frame[-3:-1], "little")
             # 对应固件 txbuf + 1，长度 data_len + 1；不包含 txbuf[0]。
             if crc16_firmware(frame[1:-3]) != expected:
-                self.log_error("crc_error", frame, full_frame=True)
                 self.crc_errors += 1
                 self.discarded_bytes += 1
                 del self.pending[:1]
                 continue
             time_ms, *values = self.payload.unpack(frame[2:-3])
-            finite = all(math.isfinite(value) for value in values)
-            if not finite:
-                self.log_error("invalid_values", frame, full_frame=True)
             del self.pending[:self.frame_size]
             if self.previous_ms is not None:
                 delta = (time_ms - self.previous_ms) & 0xFFFFFFFF
@@ -104,28 +93,12 @@ class CsvRecorder:
                 if delta > 0x7FFFFFFF:
                     self.timestamp_backtracks += 1
             self.previous_ms = time_ms
-            if not finite:
+            if not all(math.isfinite(value) for value in values):
                 self.invalid_values += 1
                 continue
             # 毫秒转秒，保留 MCU 时间戳，不重采样、不滤波。
             self.writer.writerow([f"{time_ms // 1000}.{time_ms % 1000:03d}", *values])
             self.rows += 1
-
-    def log_error(self, reason, raw, full_frame=False):
-        if self.error_writer is None:
-            return
-        self.error_writer.writerow([
-            datetime.now().astimezone().isoformat(timespec="milliseconds"),
-            self.bytes_received - len(self.pending), reason, len(raw), raw.hex(" "),
-            f"0x{int.from_bytes(raw[-3:-1], 'little'):04X}" if full_frame else "",
-            f"0x{crc16_firmware(raw[1:-3]):04X}" if full_frame else "",
-            f"0x{raw[-1]:02X}" if full_frame else "",
-            "0x65" if full_frame else "",
-        ])
-
-    def flush_errors(self):
-        if self.error_output is not None:
-            self.error_output.flush()
 
     def status(self):
         return (f"保存 {self.rows} 帧，CRC 错误 {self.crc_errors}，"
@@ -142,26 +115,29 @@ def receive(port, output, recorder):
             now = time.monotonic()
             if now - last_report >= 1.0:
                 output.flush()
-                recorder.flush_errors()
                 print(recorder.status(), flush=True)
                 last_report = now
     except KeyboardInterrupt:
         pass
     finally:
-        if recorder.pending:
-            recorder.log_error("incomplete_frame", recorder.pending)
         output.flush()
-        recorder.flush_errors()
         print(f"采集结束：{recorder.status()}，残留 {len(recorder.pending)} 字节")
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--target", choices=TARGET_CHANNELS, help="采集对象，决定默认文件名前缀和 28 字节格式的 CSV 表头")
     parser.add_argument("--port", default="/dev/ttyUSB0", help="串口，例如 /dev/ttyUSB0 或 COM3")
     parser.add_argument("--baud", type=int, default=921600, help="波特率，默认 921600")
     parser.add_argument("--data-len", type=int, default=DEFAULT_DATA_LEN, help="固件 config.data_len，默认 28；数据为 uint32 时间戳 + float 数组")
-    parser.add_argument("--out", type=Path, default=Path("logs/sysid") / datetime.now().strftime("serial_%Y%m%d_%H%M%S.csv"))
+    parser.add_argument("--out", type=Path, help="输出 CSV 路径，默认写入 logs/sysid/采集对象_日期_时间.csv")
     args = parser.parse_args()
+    out = args.out
+    if out is None:
+        prefix = args.target or "serial"
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        out = Path("logs/sysid") / f"{prefix}_{timestamp}.csv"
+    channels = TARGET_CHANNELS.get(args.target, LEG_CHANNELS)
     try:
         payload_for_length(args.data_len)
     except ValueError as exc:
@@ -174,16 +150,11 @@ def main():
     except ImportError:
         parser.exit(1, "缺少 pyserial，请先运行：uv pip install pyserial\n")
     try:
-        args.out.parent.mkdir(parents=True, exist_ok=True)
-        error_path = args.out.with_name(args.out.stem + "_errors.csv")
-        if error_path.exists():
-            raise FileExistsError(f"错误日志已存在：{error_path}")
-        with args.out.open("x", newline="", encoding="utf-8", buffering=65536) as output, \
-                error_path.open("x", newline="", encoding="utf-8", buffering=65536) as error_output:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        with out.open("x", newline="", encoding="utf-8", buffering=65536) as output:
             with serial.Serial(args.port, args.baud, timeout=0.1) as port:
-                print(f"接收 {args.port} @ {args.baud}，500 Hz / {frame_size} 字节 → {args.out}，按 Ctrl+C 保存退出", flush=True)
-                print(f"错误日志 → {error_path}", flush=True)
-                receive(port, output, CsvRecorder(output, args.data_len, error_output))
+                print(f"接收 {args.port} @ {args.baud}，500 Hz / {frame_size} 字节 → {out}，按 Ctrl+C 保存退出", flush=True)
+                receive(port, output, CsvRecorder(output, args.data_len, channels=channels))
     except (OSError, ValueError, serial.SerialException) as exc:
         parser.exit(1, f"采集停止：{exc}\n")
 
