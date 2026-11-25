@@ -9,7 +9,7 @@
 | --- | --- | --- |
 | env | `reset()`、`step(actions)`、`_resample_commands(mask)` | 物理状态、locomotion 奖励与回合统计 |
 | recovery | `sample_reset_pose(...)`、`reset(env, mask)`、`update(env)` | 姿态模板/采样编号、`RecoveryBuffers`、`RecoveryRewards` |
-| jump | `on_resample(env, mask, previous_vx)`、`update(env)`、`apply_commands(commands)` | `JumpBuffers`、`JumpRewards` |
+| jump | `on_resample(env, mask)`、`update(env)`、`apply_commands(commands)` | `JumpBuffers`、`JumpRewards` |
 | terrain_cross | `reset(env, mask)`、`update(env)`、`compute_rewards()` | 各地形的 `TerrainCrossBuffers`、`TerrainCrossRewards` 与分组指标 |
 
 `configuration.py` 提供环境的 locomotion 命令/重置配置方法，`rewards.py`
@@ -142,25 +142,22 @@ recovery 的 `config.py` 中，`RESET_POSE_FILES` 指定 `reset_pos/` 内的文�
 
 ### Jump 命令输入
 
-1. env 在控制步内判断命令重采样时间，先保存上一条命令的 `vx`，再采样新的 locomotion 命令。
-2. `jump.on_resample` 先检查实际机身 yaw 角速度，再消费请求或按概率决定是否跳跃。命中时缓存本次新命令，沿用上一条命令的 `vx`，将 yaw 设为 0、高度列换成 jump 轨迹；未命中时直接使用新命令。
-3. jump 自行推进计时、模式 one-hot、相位编码、高度参考和接触事件，期间保持该 `vx` 目标。
-4. jump 输入窗口结束后编码归零，整个跳跃周期结束后应用本次缓存的新 locomotion 命令，不额外采样。
+1. env 在控制步内判断命令重采样时间，先采样新的 locomotion 命令。
+2. `jump.on_resample` 消费请求或按概率选择 jump 和模式，无角速度门控。命中后保持本次采样的 `vx`，将 yaw 设为 0、高度设为 `jump_height_reference.min_distance_m`；未命中时直接使用新命令。
+3. 在当前 8 s 命令窗口末尾留出完整 jump 周期：默认先直行 6.9 s，最后 1.1 s 执行 jump。recovery 完成后的重采样也对齐下一固定采样边界，剩余时间不足时下一控制步开始输入。准备阶段 jump 模式与相位为零，使用 locomotion 奖励。
+4. 到时才输入模式 one-hot、相位编码与高度轨迹，保持准备阶段的 `vx` 和零 yaw；模式输入分别持续 0.6/0.8 s，jump 周期结束后恢复直行命令，并在采样边界正常重采样。
 
-`jump.request(mask, mode=0)` 只排队，下一次命令重采样时触发。
+`jump.request(mask, mode=0)` 只排队，下一次命令重采样时安排在窗口末尾触发。
 `jump.trigger(mask, mode=0)` 立即开始跳跃并缓存当前 locomotion 命令，恢复或跳跃中的行忽略请求。
 eval 的 J 使用 `jump.trigger(mask, mode=0, restart=True)`：每次按下都立即从第 0 步重新输入当前所选模式，
-不受恢复状态、已有跳跃、实际 yaw 角速度或特殊地形限制；打断恢复，使用当前键盘 locomotion 命令，保留物理状态和策略记忆。
-`command_cfg.jump_velocity_limits.max_abs_ang_vel` 限制起跳前实际机身 yaw 角速度的绝对值，默认 1.5 rad/s。
-大于阈值时禁止随机跳跃和常规即时触发，等于阈值时允许；eval 的 J 重启不受此限制。已经排队的请求保留到后续命令重采样重新检查。
-移除 `jump_velocity_limits` 或设为 `None` 可关闭该限制；已开始的跳跃继续执行。
-reset 不触发 jump，恢复或跳跃执行中不接受新的命令采样覆盖。
-常规命令重采样仍按回合内的固定周期触发。若 jump 结束恰好遇到采样边界，本拍先应用缓存命令。
+不受恢复状态、已有跳跃或特殊地形限制；打断恢复，使用当前键盘 locomotion 命令，保留物理状态和策略记忆。
+reset 不触发 jump，并清除待执行的跳跃；准备、恢复或跳跃执行中不接受新的命令采样覆盖。
+常规命令重采样仍按回合内的固定周期触发。jump 结束恰好遇到采样边界时，本拍正常采样下一窗口命令。
 
 jump buffer 保留起跳/落地历史、连续与累计腾空计数、奖励峰值及追回状态。
 `rebound_seen` 记录首次落地后再次双轮离地，直到本次 jump 重置，供二次起跳相关奖励读取。
 轮心位置、当前成功结果和冲击速度按需计算；模式与相位观测直接由当前状态生成。
-跳跃命令只缓存旧 `vx`，同时保留完整的新 locomotion 命令供 jump 结束后使用。
+跳跃开始时缓存准备阶段的直行命令，供 jump 结束后使用。
 
 每个控制步只结算实际执行阶段的奖励：recovery、jump 或 locomotion。
 组件完成的最后一步仍归该组件，奖励先结算，再发布下一步命令。
@@ -230,6 +227,17 @@ stairs_up 的 `stairs_up_leg_retraction` 仅在非静止命令下生效：baseli
 法向力之和（N），默认权重 `-1.0`，按 `dt` 积分。支撑由非立面接触的向上法向力判定，
 任一轮有地面支撑即关闭该项；撞墙接触和墙面摩擦不视为地面支撑。
 立面筛选由 stairs_up 的 `wheel_wall_force.normal_x_min/surface_tolerance_m` 配置。
+
+`platform_ridge_up` 同样启用双轮台面支撑、首次双轮离地、入台后缩腿和腾空撞立面四项奖励，
+名称依次为 `platform_ridge_up_wheel_support/wheel_airborne/leg_retraction/wheel_wall_force`。
+默认权重与当前 stairs_up 一致，为 `5.0/5.0/200.0/-0.05`，可在
+`TERRAIN_REWARD_OVERRIDES["platform_ridge_up"]` 独立调整，支撑与撞立面按 `dt` 积分，
+离地与缩腿不乘 `dt`。入口低平台已移除，其原位置为平地；窄凸台和后方平台的位置、高度保持不变。
+支撑覆盖窄凸台和后方平台的真实顶面，允许双轮位于不同台面；
+撞立面只计算各段实际外露的高度范围，任一轮有地面支撑时关闭。
+缩腿基准在 baselink 首次越过凸台入口且位于台面上方时固定，每回合累计上限为凸台高度。
+事件防重复、部分 reset、静止命令和越障结束的计分规则与 stairs_up 相同；接触容差使用本地形的
+`wheel_wall_force.normal_x_min/surface_tolerance_m`。
 
 ## 配置与入口
 

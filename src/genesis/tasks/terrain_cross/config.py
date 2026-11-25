@@ -11,7 +11,7 @@ TERRAIN_REWARD_OVERRIDES = {
         "height_gate": 0.0,
     },
     "stairs_up": {
-        "stairs_up_wheel_support": 10.0,  # 双轮均在台阶面上承重时为 1；按 dt 积分，静止时不生效。
+        "stairs_up_wheel_support": 5.0,  # 双轮均在台阶面上承重时为 1；按 dt 积分，静止时不生效。
         "stairs_up_wheel_airborne": 5.0,  # 先有轮子支撑再双轮离地，每回合只奖励一次；不乘 dt。
         "stairs_up_leg_retraction": 200.0,  # 入台后的平均缩腿量，仅奖励新纪录，累计上限为一级台阶高度；不乘 dt。
         "stairs_up_wheel_wall_force": -0.05,  # 双轮无地面支撑时，轮子撞压各级立面的法向力之和，N；按 dt 积分。
@@ -63,6 +63,10 @@ TERRAIN_REWARD_OVERRIDES = {
         "wheel_airborne": 0.0,
     },
     "platform_ridge_up": {
+        "platform_ridge_up_wheel_support": 5.0,  # 双轮在平台或凸台顶面承重；按 dt 积分。
+        "platform_ridge_up_wheel_airborne": 5.0,  # 支撑后首次双轮离地；每回合一次，不乘 dt。
+        "platform_ridge_up_leg_retraction": 200.0,  # 入台后的缩腿新纪录，上限为凸台高度；不乘 dt。
+        "platform_ridge_up_wheel_wall_force": -0.05,  # 双轮无支撑时撞压外露立面的法向力，N；按 dt 积分。
         "task_lateral": 0,
         "task_heading": 0,
         "base_height": 0.0,
@@ -89,7 +93,7 @@ def get_cfg():
                     "standing_tof_margin_m": 0.02,  # 停车出生时，前向 ToF 光心和落点距地形边缘的余量。
                 },
                 "commands": {
-                    "lin_vel_range": [0.5, 2.0],
+                    "lin_vel_range": [0.5, 2.5],
                     "ang_vel_range": [-0.1, 0.1],
                     "base_height_range": [0.22, 0.28],
                     "standing_probability": None,  # None 跟随全局课程；特殊地形仅在 reset 抽停车回合。
@@ -115,6 +119,7 @@ def get_cfg():
             if name != "plane"
         },
     }
+
     config["terrains"]["stairs"]["landing_stability"] = {
         "duration_s": 0.3,  # 首次触地下方地面起，独立于越障通关状态计时。
         "ang_vel_weight": 0.25,  # vz² + 系数 × (wx² + wy²)。
@@ -124,17 +129,19 @@ def get_cfg():
         "normal_x_min": 0.5,  # 接触单位法向的 |nx| 下限，包含入口棱边，排除顶部和侧面。
         "surface_tolerance_m": 0.01,  # 接触点距入口立面及高度范围的容差。
     }
-    config["terrains"]["stairs_up"]["wheel_wall_force"] = {
-        "normal_x_min": 0.5,  # 立面接触单位法向的 |nx| 下限。
-        "surface_tolerance_m": 0.01,  # 接触点距各级立面及该级高度范围的容差。
-    }
-    # stairs_up 专属 commands
-    config["terrains"]["stairs_up"]["commands"].update(
-        {
-            "lin_vel_range": [0.2, 2.0],
-            "ang_vel_range": [0.0, 0.0],
-            "base_height_range": [0.38, 0.38],
-            "standing_probability": None,
+
+    # stairs_up 和 platform_ridge_up 专属
+    for name in ("stairs_up", "platform_ridge_up"):
+        config["terrains"][name]["wheel_wall_force"] = {
+            "normal_x_min": 0.5,  # 立面接触单位法向的 |nx| 下限。
+            "surface_tolerance_m": 0.01,  # 接触点距外露立面及其高度范围的容差，也用于台面支撑判定。
         }
-    )
+        config["terrains"][name]["commands"].update(
+            {
+                "lin_vel_range": [1.5, 2.5],
+                "ang_vel_range": [0.0, 0.0],
+                "base_height_range": [0.38, 0.38],
+                "standing_probability": None,
+            }
+        )
     return config

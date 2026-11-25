@@ -212,9 +212,6 @@ def get_command_cfg() -> dict:
             "max_abs_lin_vel": 2.0,
             "max_abs_ang_vel": 3.0,
         },
-        "jump_velocity_limits": {
-            "max_abs_ang_vel": 1.5,  # 起跳前实际机身 yaw 角速度绝对值上限，rad/s。
-        },
     }
 
 
@@ -392,7 +389,7 @@ def get_curriculum_cfg() -> dict:
             },
             {
                 "name": "terrain_cross",
-                "start_iteration": 8000,
+                "start_iteration": 7000,
                 "targets": {
                     "tof": {"enabled": True},
                     "terrain_weights": {"plane": 0.6, "stairs": 0.1, "slope_down": 0.1, "slope_up": 0.1, "square_wave": 0.1},
@@ -400,7 +397,7 @@ def get_curriculum_cfg() -> dict:
             },
             {
                 "name": "terrain_cross_2",
-                "start_iteration": 8500,
+                "start_iteration": 7500,
                 "targets": {
                     "tof": {"enabled": True},
                     "terrain_weights": {
@@ -411,6 +408,23 @@ def get_curriculum_cfg() -> dict:
                         "slope_up": 0.1,
                         "square_wave": 0.0,
                         "platform_ridge_down": 0.1,
+                    },
+                },
+            },
+            {
+                "name": "terrain_cross_3",
+                "start_iteration": 8000,
+                "targets": {
+                    "tof": {"enabled": True},
+                    "terrain_weights": {
+                        "plane": 0.55,
+                        "stairs": 0.05,
+                        "stairs_up": 0.1,
+                        "slope_down": 0.05,
+                        "slope_up": 0.1,
+                        "platform_ridge_down": 0.1,
+                        "platform_ridge_up": 0.05,
+                        "square_wave": 0.0,
                     },
                 },
             },

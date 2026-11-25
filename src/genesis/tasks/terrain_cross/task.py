@@ -38,8 +38,8 @@ class TerrainCross:
             name: TerrainCrossBuffers(
                 env, self.config,
                 landing_config=self.config["terrains"][name].get("landing_stability") if name == "stairs" else None,
-                stairs_up_retraction=name == "stairs_up",
-                stairs_up_airborne=name == "stairs_up",
+                stairs_up_retraction=name in ("stairs_up", "platform_ridge_up"),
+                stairs_up_airborne=name in ("stairs_up", "platform_ridge_up"),
             )
             for name in self.names
         }

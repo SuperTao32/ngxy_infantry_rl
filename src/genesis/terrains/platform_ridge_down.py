@@ -28,18 +28,21 @@ class PlatformRidgeDown(TerrainGeometry):
         self.boxes = self._box_bounds(parameters)
         self.travel_direction = 1.0
         self.start_x = self.boxes[1 if self.ascending else 2][0][0]
-        # 上行越过凸台后落到第二平台；下行经过第一平台后落到地面。
-        self.traversal_end = self.boxes[2 if self.ascending else 1][1][0]
+        # 上行越过凸台后落到后方平台；下行经过第一平台后落到地面。
+        self.traversal_end = self.boxes[1][1][0]
 
     def _box_bounds(self, parameters):
-        """三个连续、无重叠的固定箱体，避免高度场把 15 cm 窄凸台插值成斜坡。"""
+        """上行保留凸台和后方平台，下行使用三个箱体；固定箱体保留窄凸台的竖直面。"""
         values = {}
-        for name in ("first_height", "first_length", "ridge_height", "ridge_width", "second_height", "base_thickness"):
+        names = ("ridge_height", "ridge_width", "second_height", "base_thickness")
+        if not self.ascending:
+            names += ("first_height", "first_length")
+        for name in names:
             value = float(parameters[name])
             values[name] = value
         approach = float(parameters["approach_length"])
-        if values["ridge_height"] <= max(values["first_height"], values["second_height"]):
-            raise ValueError(f"{self.preset}.ridge_height must exceed both platform heights")
+        if values["ridge_height"] <= max(values.get("first_height", 0.0), values["second_height"]):
+            raise ValueError(f"{self.preset}.ridge_height must exceed adjacent platform heights")
         min_x, min_y, base_z = self.origin
         max_x, max_y = min_x + self.tile_size[0], min_y + self.tile_size[1]
         second_length = parameters["second_length"]
@@ -47,8 +50,7 @@ class PlatformRidgeDown(TerrainGeometry):
             second_length = float(second_length)
         margin = self.boundary_margin or 0.0
         if self.ascending:
-            first_start = approach
-            first_end = ridge_start = first_start + values["first_length"]
+            ridge_start = approach
             ridge_end = second_start = ridge_start + values["ridge_width"]
             second_end = max_x if second_length is None else second_start + second_length
             if second_start >= max_x - margin:
@@ -65,12 +67,14 @@ class PlatformRidgeDown(TerrainGeometry):
                 raise ValueError(f"{self.preset} must leave ground after the first platform inside tile_size and boundary_margin")
         if second_start < min_x or second_end > max_x:
             raise ValueError(f"{self.preset}.second_length extends beyond terrain.tile_size")
-        return (
-            ((min_x, min_y, base_z - values["base_thickness"]), (max_x, max_y, base_z)),
-            ((first_start, min_y, base_z), (first_end, max_y, base_z + values["first_height"])),
+        boxes = [((min_x, min_y, base_z - values["base_thickness"]), (max_x, max_y, base_z))]
+        if not self.ascending:
+            boxes.append(((first_start, min_y, base_z), (first_end, max_y, base_z + values["first_height"])))
+        boxes.extend((
             ((ridge_start, min_y, base_z), (ridge_end, max_y, base_z + values["ridge_height"])),
             ((second_start, min_y, base_z), (second_end, max_y, base_z + values["second_height"])),
-        )
+        ))
+        return tuple(boxes)
 
     def add_to_scene(self, scene, *, offset=(0.0, 0.0, 0.0)):
         return tuple(

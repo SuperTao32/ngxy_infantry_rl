@@ -610,8 +610,7 @@ class WheelLegInfantryEnv(LocomotionRewards, EnvironmentConfiguration):
         self.jump.apply_commands(self.commands)
         self.terrain_cross.apply_commands(self.commands)
         resample_commands = (self.episode_length_buf % self.resample_step == 0) | self.recovery.buffers.just_completed
-        # 刚结束 jump 的行已应用缓存命令，本拍不再次采样。
-        self._resample_commands(resample_commands & ~self.reset_buf & ~self.jump.buffers.just_completed)
+        self._resample_commands(resample_commands & ~self.reset_buf)
 
         ########### 计算timeout ###########
         # 失败与截断同拍发生时按失败处理，不对终止状态 bootstrap。
@@ -927,12 +926,12 @@ class WheelLegInfantryEnv(LocomotionRewards, EnvironmentConfiguration):
     def _resample_commands(self, mask, *, allow_jump=True):
         """仅平地周期采样普通命令/跳跃；特殊地形持有 reset 时的命令。"""
         selected = mask & ~self.terrain_cross.assigned & ~self.recovery.buffers.active & ~self.jump.buffers.active
+        selected &= self.jump.buffers.scheduled_mode < 0
         if selected.any():
-            previous_vx = self.commands[:, 0].clone() if allow_jump else None
             commands = self._sample_commands(self.command_cfg, self.commands_limit)
             self.commands[selected] = commands[selected]
             if allow_jump:
-                self.jump.on_resample(self, selected, previous_vx)
+                self.jump.on_resample(self, selected)
         self.terrain_cross.apply_commands(self.commands)
         self.recovery.apply_commands(self.commands)
 

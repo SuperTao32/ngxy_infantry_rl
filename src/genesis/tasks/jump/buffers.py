@@ -23,7 +23,7 @@ class JumpBuffers:
             "active", "was_active", "just_completed", "has_taken_off", "has_landed",
             "success_seen", "failure_seen", "landing_support", "rebound_seen",
         )
-        long_names = ("elapsed_steps", "mode", "flight_airtime_steps")
+        long_names = ("elapsed_steps", "mode", "flight_airtime_steps", "start_step")
         float_names = (
             "height_reference", "forward_velocity", "ground_height", "base_height_target",
             "jump_base_height", "wheel_clearance", "max_wheel_clearance",
@@ -36,6 +36,7 @@ class JumpBuffers:
             for name in names:
                 setattr(self, name, torch.zeros(env.num_envs, dtype=dtype, device=env.device))
         self.pending_mode = torch.full_like(self.mode, -1)
+        self.scheduled_mode = torch.full_like(self.mode, -1)
         self.locomotion_commands = torch.zeros_like(env.commands)
         self.wheel_airborne = torch.zeros((env.num_envs, 2), dtype=torch.bool, device=env.device)
         self.base_link_velocity = env.commands.new_zeros((env.num_envs, 3))
@@ -51,15 +52,16 @@ class JumpBuffers:
         for value in self._episode_buffers:
             value[mask] = 0
         self.pending_mode[mask] = -1
+        self.scheduled_mode[mask] = -1
         self.jump_reward_state.reset(mask)
 
-    def start(self, env, mask, modes, previous_vx):
-        """缓存本次新命令，并锁存起跳地面和上一条命令的 vx。"""
+    def start(self, env, mask, modes, forward_velocity):
+        """缓存当前直行命令，并锁存起跳地面和 vx。"""
         self.reset(mask)
         self.mode[mask] = modes
         self.active[mask] = True
         self.locomotion_commands[mask] = env.commands[mask]
-        self.forward_velocity[mask] = previous_vx
+        self.forward_velocity[mask] = forward_velocity
         self.ground_height[mask] = env.terrain_height[mask]
         self.base_height_target[mask] = self.mode_targets[modes]
         velocity = env.robot.get_vel()[mask]

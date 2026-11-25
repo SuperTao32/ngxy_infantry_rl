@@ -6,11 +6,13 @@ import torch
 
 
 class StairsUpRetraction:
-    """入台时固定平均腿长，只累计新的最大缩腿量，整回合最多一个台阶高度。"""
+    """入台时固定平均腿长，只累计新的最大缩腿量，整回合最多一级台阶或凸台高度。"""
 
     def __init__(self, env):
         self.steps = env.commands.new_tensor([
-            [geometry.start_x, geometry.step_height] if name == "stairs_up" else [0., 0.]
+            [geometry.start_x, geometry.step_height] if name == "stairs_up" else
+            [geometry.start_x, geometry.boxes[1][1][2] - geometry.origin[2]]
+            if name == "platform_ridge_up" else [0., 0.]
             for name, geometry in zip(env.terrain.tile_types, env.terrain.geometries)
         ])
         self.started = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)

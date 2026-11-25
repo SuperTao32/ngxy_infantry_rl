@@ -17,10 +17,6 @@ class Jump:
     def __init__(self, env, config):
         self.env = env
         self.config = deepcopy(config)
-        velocity_limits = env.command_cfg.get("jump_velocity_limits")
-        self.max_abs_ang_vel = None if velocity_limits is None else float(velocity_limits["max_abs_ang_vel"])
-        if self.max_abs_ang_vel is not None and (not math.isfinite(self.max_abs_ang_vel) or self.max_abs_ang_vel < 0.0):
-            raise ValueError("jump_velocity_limits.max_abs_ang_vel must be finite and non-negative")
         self.metrics = TaskMetrics(env.device, MODE_NAMES)
         self.apply_curriculum({"probability": self.config["probability"]})
         self.phase_durations = validate_phase_durations(self.config["jump_phase_durations_s"])
@@ -45,13 +41,13 @@ class Jump:
         self.rewards.reset(mask)
 
     def request(self, mask, mode=0):
-        """排队显式跳跃请求，下一次命令重采样消费；active 中的请求留待下一轮。"""
+        """排队显式跳跃请求，下一次命令重采样安排；active 中的请求留待下一轮。"""
         if type(mode) is not int or not 0 <= mode < len(MODE_NAMES):
             raise ValueError(f"jump mode must be an integer in [0, {len(MODE_NAMES)})")
         self.buffers.pending_mode[mask] = mode
 
     def trigger(self, mask, mode=0, *, restart=False):
-        """立即跳跃；eval 的 restart 跳过门控，每次从第 0 步重新输入。"""
+        """立即跳跃；eval 的 restart 每次从第 0 步重新输入。"""
         env = self.env
         if restart:
             if not env.evaluation:
@@ -62,20 +58,12 @@ class Jump:
             return mask
         terrain_available = ~env.terrain_cross.assigned | getattr(env, "manual_control", False)
         selected = mask & ~env.recovery.buffers.active & ~self.buffers.active & terrain_available
-        selected = self._limit_trigger_ang_vel(env, selected)
         self.request(selected, mode)
-        self.on_resample(env, selected, env.commands[:, 0].clone())
+        self._start(env, selected, self.buffers.pending_mode[selected].clone(), env.commands[selected, 0].clone())
         return selected
 
-    def _limit_trigger_ang_vel(self, env, mask):
-        """只限制起跳前的实际 yaw 角速度，不干预已开始的跳跃。"""
-        if self.max_abs_ang_vel is None:
-            return mask
-        return mask & (env.base_ang_vel[:, 2].abs() <= self.max_abs_ang_vel)
-
-    def on_resample(self, env, mask, previous_vx):
-        """缓存已采样的新命令，沿用重采样前的 vx 插入 jump。"""
-        mask = self._limit_trigger_ang_vel(env, mask)
+    def on_resample(self, env, mask):
+        """抽中 jump 后先直行，在当前命令窗口末尾执行完整跳跃。"""
         if not mask.any():
             return
         if self.config["probability"] == 0.0 and not (self.buffers.pending_mode[mask] >= 0).any():
@@ -88,14 +76,19 @@ class Jump:
             return
         sampled = torch.multinomial(self.mode_probabilities, ids.numel(), replacement=True)
         modes = torch.where(buffers.pending_mode[ids] >= 0, buffers.pending_mode[ids], sampled)
-        self._start(env, selected, modes, previous_vx[ids])
+        buffers.scheduled_mode[ids] = modes
+        buffers.pending_mode[ids] = -1
+        remaining_steps = env.resample_step - env.episode_length_buf[ids] % env.resample_step
+        buffers.start_step[ids] = env.episode_length_buf[ids] + (remaining_steps - self.duration_steps[modes]).clamp_min(0)
+        env.commands[ids, 1] = 0.0
+        env.commands[ids, 2] = self.min_height
 
-    def _start(self, env, selected, modes, previous_vx):
+    def _start(self, env, selected, modes, forward_velocity):
         ids = selected.nonzero(as_tuple=False).flatten()
         if not ids.numel():
             return
         buffers = self.buffers
-        buffers.start(env, selected, modes, previous_vx)
+        buffers.start(env, selected, modes, forward_velocity)
         self.metrics.start(selected, buffers.mode)
         self._update_reference(env.dt)
         env.commands[ids, 0] = buffers.forward_velocity[ids]
@@ -116,6 +109,12 @@ class Jump:
     def apply_commands(self, commands):
         buffers = self.buffers
         commands[buffers.just_completed] = buffers.locomotion_commands[buffers.just_completed]
+        # 在本拍物理与奖励结算后开始输入，准备阶段仍按 locomotion 训练。
+        env = self.env
+        ready = (buffers.scheduled_mode >= 0) & (env.episode_length_buf >= buffers.start_step)
+        ready &= ~env.reset_buf & ~env.recovery.buffers.active & ~buffers.active & ~env.terrain_cross.assigned
+        if ready.any():
+            self._start(env, ready, buffers.scheduled_mode[ready].clone(), commands[ready, 0].clone())
         commands[buffers.active, 0] = buffers.forward_velocity[buffers.active]
         commands[buffers.active, 1] = 0.0
         commands[buffers.active, 2] = buffers.height_reference[buffers.active]
