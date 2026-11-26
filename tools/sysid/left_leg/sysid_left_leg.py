@@ -16,7 +16,7 @@ wheelbipeV14_2 左腿闭链机构的 MuJoCo 系统辨识脚本。
 - 从动关节的阻尼和摩擦参数保持 MJCF 中的定义。
 - 保留模型中的闭链等式约束。
 - left_leg.xml 仅包含左腿，基座已固定在 z=1 m。
-- 气弹簧执行器沿滑动关节轴向施加恒定 +420 N；CSV 无需记录气弹簧力。
+- 气弹簧由 MuJoCo 按滑动关节状态计算；CSV 无需记录气弹簧力。
 - 每条轨迹均从保存的悬空姿态开始，所有初始速度为零。
   CSV 中的 q/dq 是测量输出，不用于设置初始状态。
 """
@@ -38,8 +38,9 @@ from mujoco import sysid
 # ---------------------------------------------------------------------------
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(PROJECT_ROOT / "tools/sysid"))
-from filtering import lowpass
+sys.path.insert(0, str(PROJECT_ROOT))
+from tools.sysid.filtering import lowpass
+from tools.sysid.gas_spring import configure_gas_spring
 
 
 @dataclass(frozen=True)
@@ -71,6 +72,7 @@ class SysIDConfig:
 
     max_iters: int = 100
     threads: int = 0  # <= 0 时由 SysID 库选择线程数。
+    timestamp_grid_tolerance_s: float | None = None  # 设定后按采样帧序号对齐时间轴。
 
 
 # 运行前编辑此配置块。路径可使用绝对路径，或相对于当前工作目录的路径。
@@ -78,11 +80,13 @@ class SysIDConfig:
 CFG = SysIDConfig(
     model=PROJECT_ROOT / "assets/robot/wheelbipeV14_2/mjcf/left_leg.xml",
     data=(
-        # PROJECT_ROOT / "logs/sysid/slow_forward.csv",
+        PROJECT_ROOT / "logs/sysid/left_leg_20261125_221943.csv",
         # PROJECT_ROOT / "logs/sysid/slow_reverse.csv",
     ),
     out=PROJECT_ROOT / "tools/sysid/results/left_leg",
     initial_state=PROJECT_ROOT / "tools/sysid/results/suspended_initial_state.npz",
+    sample_rate_hz=500.0,
+    timestamp_grid_tolerance_s=0.001,
 )
 
 
@@ -100,10 +104,7 @@ ACTIVE_ACTUATORS = {
     "rear": "left_rear1_joint_ctrl",
 }
 
-# 气弹簧执行器的增益和传动比均为 1，因此 ctrl 表示力，单位为 N。
-# 正向力使气弹簧沿 left_spring2_joint 的轴向 (-1, 0, 0) 伸长。
-SPRING_ACTUATOR = "left_spring2_joint_ctrl"
-GAS_SPRING_FORCE = 420.0
+SPRING_JOINT = "left_spring2_joint"
 
 # ---------------------------------------------------------------------------
 # 辅助函数
@@ -161,8 +162,10 @@ def load_log(
     model: mujoco.MjModel,
     front_torque_sign: float,
     rear_torque_sign: float,
-    sample_rate_hz: float = 1000.0,
+    sample_rate_hz: float = 500.0,
     filter_cutoff_hz: float | None = 50.0,
+    *,
+    timestamp_grid_tolerance_s: float | None = None,
 ):
     """
     CSV 必需列：
@@ -190,9 +193,24 @@ def load_log(
     t = np.asarray(raw["time"], dtype=float)
     if len(t) < 10:
         raise ValueError(f"{path}: trajectory is too short ({len(t)} rows).")
-    if np.any(np.diff(t) <= 0):
-        raise ValueError(f"{path}: time must be strictly increasing.")
+    if not np.all(np.isfinite(t)) or np.any(np.diff(t) <= 0):
+        raise ValueError(f"{path}: time must be finite and strictly increasing.")
     t = t - t[0]
+
+    if timestamp_grid_tolerance_s is not None:
+        if not np.isfinite(sample_rate_hz) or sample_rate_hz <= 0:
+            raise ValueError("sample_rate_hz must be positive and finite")
+        if not 0 <= timestamp_grid_tolerance_s <= 0.5 / sample_rate_hz:
+            raise ValueError("timestamp_grid_tolerance_s must be between zero and half the sampling period")
+        grid = np.arange(len(t)) / sample_rate_hz
+        max_offset = float(np.max(np.abs(t - grid)))
+        if max_offset > timestamp_grid_tolerance_s + 1e-9:
+            raise ValueError(
+                f"{path}: max timestamp offset from {sample_rate_hz:g} Hz grid is "
+                f"{max_offset * 1000:.3f} ms, allowed {timestamp_grid_tolerance_s * 1000:g} ms; "
+                "check for dropped frames or a different sample rate"
+            )
+        t = grid
 
     q_front = np.asarray(raw["q_front"], dtype=float)
     q_rear = np.asarray(raw["q_rear"], dtype=float)
@@ -211,12 +229,9 @@ def load_log(
     torque_rear = rear_torque_sign * lowpass(t, raw["torque_rear"], sample_rate_hz, filter_cutoff_hz)
 
     # 两个电机通道直接输入关节输出端力矩 [Nm]，不再进行电流换算。
-    # 气弹簧通道输入恒定力 [N]。
     ctrl = np.zeros((len(t), model.nu), dtype=float)
     ctrl[:, actuator_id(model, ACTIVE_ACTUATORS["front"])] = torque_front
     ctrl[:, actuator_id(model, ACTIVE_ACTUATORS["rear"])] = torque_rear
-
-    ctrl[:, actuator_id(model, SPRING_ACTUATOR)] = GAS_SPRING_FORCE
 
     control_ts = sysid.TimeSeries.from_control_names(t, ctrl, model)
 
@@ -333,13 +348,14 @@ def main(cfg: SysIDConfig = CFG):
     print(f"[model] SysID MJCF: {cfg.model}")
     spec = mujoco.MjSpec.from_file(str(cfg.model.resolve()))
     configure_torque_inputs(spec)
+    configure_gas_spring(spec, SPRING_JOINT)
     model = spec.compile()
 
     print(
         f"[model] nq={model.nq}, nv={model.nv}, nu={model.nu}, "
         f"neq={model.neq}, nsensordata={model.nsensordata}"
     )
-    print(f"[model] constant gas spring force: {GAS_SPRING_FORCE:g} N")
+    print(f"[model] nominal gas spring law on {SPRING_JOINT}")
     print("[model] 输入为关节输出端力矩 torque [Nm]")
 
     initial_state = make_initial_state(model, cfg.initial_state)
@@ -358,6 +374,7 @@ def main(cfg: SysIDConfig = CFG):
             rear_torque_sign=cfg.rear_torque_sign,
             sample_rate_hz=cfg.sample_rate_hz,
             filter_cutoff_hz=cfg.filter_cutoff_hz,
+            timestamp_grid_tolerance_s=cfg.timestamp_grid_tolerance_s,
         )
         controls.append(control_ts)
         measurements.append(measurement_ts)

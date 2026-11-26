@@ -16,6 +16,7 @@ from contextlib import nullcontext
 from dataclasses import dataclass
 import json
 from pathlib import Path
+import sys
 import time
 
 import mujoco
@@ -23,8 +24,10 @@ import numpy as np
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-SPRING_ACTUATORS = ("left_spring2_joint_ctrl", "right_spring2_joint_ctrl")
-GAS_SPRING_FORCE = 420.0  # 每个气弹簧沿伸长方向施加 +420 N。
+sys.path.insert(0, str(PROJECT_ROOT))
+from tools.sysid.gas_spring import configure_gas_spring
+
+SPRING_JOINTS = ("left_spring2_joint", "right_spring2_joint")
 
 
 @dataclass(frozen=True)
@@ -47,6 +50,8 @@ def make_suspended_model(cfg: SettleConfig) -> mujoco.MjModel:
     spec = mujoco.MjSpec.from_file(str(cfg.model.resolve()))
     spec.delete(spec.joint("floating_base"))
     spec.body("base_link").pos = cfg.base_pos
+    for name in SPRING_JOINTS:
+        configure_gas_spring(spec, name)
     model = spec.compile()
 
     # 导出格式针对当前模型的一维转动/滑动关节。
@@ -56,25 +61,6 @@ def make_suspended_model(cfg: SettleConfig) -> mujoco.MjModel:
     return model
 
 
-def make_spring_control(model: mujoco.MjModel) -> np.ndarray:
-    """所有电机力矩为零，仅两个气弹簧输出恒力。"""
-    ctrl = np.zeros(model.nu)
-    for name in SPRING_ACTUATORS:
-        ctrl[model.actuator(name).id] = GAS_SPRING_FORCE
-
-    # 验证 MJCF 中气弹簧的增益、传动比和限幅没有改变实际输出力。
-    probe = mujoco.MjData(model)
-    probe.ctrl[:] = ctrl
-    mujoco.mj_forward(model, probe)
-    for name in SPRING_ACTUATORS:
-        aid = model.actuator(name).id
-        jid = model.actuator_trnid[aid, 0]
-        dof = model.jnt_dofadr[jid]
-        if not np.isclose(probe.qfrc_actuator[dof], GAS_SPRING_FORCE):
-            raise ValueError(f"{name} 的实际关节力不是 420 N，请检查执行器定义。")
-    return ctrl
-
-
 def settle(
     model: mujoco.MjModel,
     cfg: SettleConfig,
@@ -82,8 +68,6 @@ def settle(
 ) -> mujoco.MjData:
     """从 XML 的默认姿态和零速度开始，等待系统自然静止。"""
     data = mujoco.MjData(model)
-    ctrl = make_spring_control(model)
-    data.ctrl[:] = ctrl
     mujoco.mj_forward(model, data)
 
     viewer_context = nullcontext(None)
@@ -104,7 +88,7 @@ def settle(
             if viewer is not None and not viewer.is_running():
                 raise RuntimeError("窗口已关闭，尚未得到静止状态；未保存结果。")
 
-            data.ctrl[:] = ctrl
+            data.ctrl.fill(0.0)
             mujoco.mj_step(model, data)
             # 更新到当前 qpos/qvel，使加速度和约束误差与保存的姿态对应。
             mujoco.mj_forward(model, data)
@@ -166,10 +150,15 @@ def save_initial_state(
         left_qvel=np.zeros(len(left_ids)),
     )
 
+    spring_forces = {}
+    for name in SPRING_JOINTS:
+        dof = model.joint(name).dofadr[0]
+        spring_forces[name] = float(data.qfrc_spring[dof] + data.qfrc_actuator[dof])
+
     report = {
         "model": str(cfg.model.resolve()),
         "base_pos": list(cfg.base_pos),
-        "gas_spring_force_N_each": GAS_SPRING_FORCE,
+        "gas_spring_force_N_at_settle": spring_forces,
         "settled_time_s": float(data.time),
         "velocity_tol": cfg.velocity_tol,
         "accel_tol": cfg.accel_tol,
@@ -211,7 +200,7 @@ def main(cfg: SettleConfig = CFG, view: bool = False) -> None:
         raise ValueError("输出文件后缀必须为 .npz。")
     model = make_suspended_model(cfg)
     print(f"[model] fixed base={cfg.base_pos}, nq={model.nq}, nv={model.nv}")
-    print("[control] motors=0 Nm, gas springs=420 N each")
+    print("[control] motors=0 Nm, gas springs use nominal force law")
     data = settle(model, cfg, view=view)
     save_initial_state(model, data, cfg)
 

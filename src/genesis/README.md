@@ -21,16 +21,16 @@ jump、terrain_cross 各自创建实例，不共享奖励 buffer 或回合累计
 默认使用 400 N 初始弹压力的拟合曲线：
 `F(q) = 400 + 368.573*q + 39671.64*q²`，力单位为 N，
 `q` 直接取 `left_spring2_joint` / `right_spring2_joint` 的实际位移（m）。
-正常工作区间为 `0 ≤ q ≤ 0.0675 m`，末端 10% 行程保留；
-主机器人 MJCF 的两个滑动关节使用相同范围。计算拟合力时将位移截断到此区间，
-避免求解器短暂越界时外推曲线；关节限位由物理求解器处理。
+拟合曲线的工作区间为 `0 ≤ q ≤ 0.0675 m`。计算拟合力时将位移截断到此区间，
+避免区间外外推曲线。机械关节限位使用 MJCF 中的定义，由物理求解器处理。
 区间端点的标称力分别为 400 N 和约 605.63 N。
 
 配置中的 `gas_spring_preload_force`、`gas_spring_stiffness`、
 `gas_spring_quadratic_stiffness` 分别对应常数项、一次项和二次项；
 `gas_spring_damping` 默认 0，启用后额外叠加 `-c*dq`。
 域随机化支持上述四项，二次项倍率默认固定为 1。
-这组参数用于 Genesis 训练/评估；`tools/sysid/` 的历史恒力实验配置独立维护。
+Genesis 训练/评估与 `tools/sysid/` 的左右腿辨识、悬空静置共用
+`assets/robot/wheelbipeV14_2/gas_spring.py` 中的标称参数。
 
 ### Terrain cross 越障
 

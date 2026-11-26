@@ -26,8 +26,8 @@
 - `dq_rear`：后主动关节角速度 [rad/s]。
 
 缺少 dq 列时，脚本使用 `numpy.gradient` 根据角度估算速度。
-气弹簧执行器沿滑动关节轴向施加恒定 +420 N，与位置和速度无关。
-CSV 无需提供气弹簧力。
+气弹簧使用与 Genesis 共用的标称模型。MuJoCo 按当前滑动关节位移和速度
+计算轴向力，CSV 无需提供气弹簧数据。
 力矩方向可通过 `front_torque_sign` / `rear_torque_sign` 设置为 ±1。
 旧 CSV 中的电流数值不能直接改列名当作力矩使用。
 
@@ -59,15 +59,16 @@ CFG = SysIDConfig(
 然后直接运行，无需命令行参数：
 
 ```bash
-# 首次运行时先生成悬空初态，详见下文；已有结果时可跳过。
+# 首次运行或仍使用旧恒力初态时，先生成悬空初态。
 python tools/sysid/settle_suspended_robot.py
 python tools/sysid/left_leg/sysid_left_leg.py
 ```
 
 脚本直接加载 `left_leg.xml`。该模型仅包含左腿，车身已固定在 z=1 m。
-两个主动电机使用关节力矩作为输入；`left_spring2_joint_ctrl` 在每个采样点
-接收 420 N 恒力。轮关节没有执行器。从动关节参数、等式约束和接触设置
-保持 MJCF 中的定义，不会另外生成修改后的输入 MJCF。
+两个主动电机使用关节力矩作为输入。气弹簧的轴向力为
+`400 + 368.573*q + 39671.64*q² - c*dq` N，其中 `q` 取
+`left_spring2_joint` 位移并截断到 `[0, 0.0675]` m，`dq` 为实际速度，
+标称 `c = 0`。轮关节没有执行器，从动关节参数、等式约束和接触设置沿用 MJCF。
 
 每条 CSV 轨迹都使用 `CFG.initial_state` 中的同一份初始姿态，所有初始速度
 设为零。每次实机实验应从该悬空静止姿态开始记录，编码器角度需转换到模型
@@ -91,7 +92,7 @@ python tools/sysid/settle_suspended_robot.py --view
 ```
 
 脚本在内存中加载整车 `wheelbipeV14_2.xml`，移除浮动基座自由度，
-将车身固定在 z=1 m。两个气弹簧各施加 +420 N，其余执行器输入均为零；
+将车身固定在 z=1 m。两个气弹簧都按与辨识回放相同的曲线加载，电机力矩为零；
 重力、关节摩擦、阻尼和闭链约束保留。原 XML 不会被修改。
 
 从 XML 默认 q 和零速度开始仿真，所有关节速度与加速度绝对值均低于
@@ -107,7 +108,7 @@ python tools/sysid/settle_suspended_robot.py --view
   `qvel`、`ctrl`，以及左腿的 `left_joint_names`、`left_qpos`、`left_qvel`。
   `qvel_before_zero` 保留实际停止时的微小速度供核对。
 - `suspended_initial_state.json`：按关节名列出 q、零速度、单位，并记录
-  仿真时长、闭链误差和软限位越界量。
+  静置时两侧气弹簧力、仿真时长、闭链误差和软限位越界量。
 
 ```python
 with np.load("tools/sysid/results/suspended_initial_state.npz") as state:
@@ -127,13 +128,18 @@ with np.load("tools/sysid/results/suspended_initial_state.npz") as state:
 
 ## 离线滤波
 
-默认以 `sample_rate_hz=1000.0`、`filter_cutoff_hz=50.0` 对力矩和已有速度列
+脚本中的 `CFG` 为当前日志设置 `sample_rate_hz=500.0`、`filter_cutoff_hz=50.0`，对力矩和已有速度列
 进行四阶 Butterworth 双向零相位低通滤波（SciPy `sosfiltfilt`）。
 缺少速度列时，先平滑角度再用 `numpy.gradient` 求速度；位置观测保留原始角度。
 原始 CSV 不会被修改。上述参数直接在 `CFG = SysIDConfig(...)` 中配置，
 `filter_cutoff_hz=None` 可关闭滤波，恢复原始数据及原始角度差分。
 
+已知采集按固定频率连续发帧时，可设置 `timestamp_grid_tolerance_s`。
+当前日志每帧的相对时间与 500 Hz 时间轴最多相差 1 ms，因此设置为 `0.001`。
+脚本逐帧检查偏差，通过后按行号生成 `0, 0.002, 0.004, …` 作为滤波和辨识的共用时间轴，
+保留各帧的原始信号数值和顺序。发现偏差超限时，需检查丢帧、采样率或时钟漂移。
+对其他日志可设为 `None`，使用 CSV 的相对时间并保留滤波器的等间隔校验。
+
 50 Hz 是起始设置，并非针对实测数据调好的值；激励频段应低于截止频率。
 双向滤波的幅频响应是单次滤波的平方，端点可能有瞬态，应保留采集前后的静止段。
-启用时至少需要 16 个样本，时间戳间隔应为 0.001 s（允许 5% 抖动）；
-丢帧或采样率不符会报错，需先整理为等间隔数据。
+启用滤波至少需要 16 个样本，输入时间戳间隔应与配置采样周期一致（允许 5% 抖动）。

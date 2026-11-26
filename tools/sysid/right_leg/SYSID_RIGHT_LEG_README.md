@@ -6,7 +6,10 @@
 - `friction_front`、`friction_rear`：前后主动关节的库仑摩擦。
 
 输入直接使用经过减速器后的关节输出端力矩 torque [Nm]，执行器增益为 1，
-保留 ±54 Nm 力矩限幅。脚本不再配置 K 或进行电流换算，气弹簧恒力为 +420 N。
+保留 ±54 Nm 力矩限幅。气弹簧使用与 Genesis 共用的标称曲线
+`400 + 368.573*q + 39671.64*q² - c*dq` N，其中 `q` 取
+`right_spring2_joint` 位移并截断到 `[0, 0.0675]` m，`dq` 为实际速度，
+标称 `c = 0`。CSV 无需提供气弹簧数据。
 
 ## 模型与初态
 
@@ -18,7 +21,7 @@
 初态复用 `settle_suspended_robot.py` 生成的整车静置结果。默认路径沿用现有的
 `tools/sysid/results/suspended_initial_state.npz`，文件中的
 `joint_names` / `qpos` 包含左右腿。脚本按右腿关节名提取 q，所有初始速度设为 0，
-保留静置结果，不进行闭链投影或限位裁剪。已有该文件时可以直接使用。
+保留静置结果，不进行闭链投影或限位裁剪。初态若由旧恒力模型生成，需重新生成。
 
 每条 CSV 都从相同的静置初态开始。CSV 中的 q/dq 用于与仿真结果比较，
 不覆盖初态；实机编码器角度应与模型关节坐标一致。
@@ -49,7 +52,7 @@ CFG = SysIDConfig(
 ```
 
 ```bash
-# 没有静置结果时先生成一次，左右腿共用。
+# 首次运行或仍使用旧恒力初态时先生成一次，左右腿共用。
 python tools/sysid/settle_suspended_robot.py
 python tools/sysid/right_leg/sysid_right_leg.py
 ```

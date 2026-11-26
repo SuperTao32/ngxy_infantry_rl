@@ -5,6 +5,14 @@ env_cfg.recovery / jump / terrain_cross 分别配置恢复、跳跃和越障，�
 
 import math
 
+from assets.robot.wheelbipeV14_2.gas_spring import (
+    GAS_SPRING_DAMPING,
+    GAS_SPRING_MAX_COMPRESSION,
+    GAS_SPRING_PRELOAD_FORCE,
+    GAS_SPRING_QUADRATIC_STIFFNESS,
+    GAS_SPRING_STIFFNESS,
+)
+
 from .robust.randomization_config import default_randomization_cfg
 from .sensors.tof import default_tof_cfg
 from .terrains import default_terrain_cfg
@@ -103,12 +111,12 @@ def get_env_cfg() -> dict:
         "leg_upper_link_length": 0.21,
         "leg_lower_link_length": 0.25,
         "upper_links_min_angle": 0.5 * math.pi,
-        # 气弹簧：F(q) = F0 + k1*q + k2*q² - c*dq，q 为实际滑动关节位移（m）。
-        "gas_spring_preload_force": 400.0,  # N
-        "gas_spring_stiffness": 368.573,  # N/m
-        "gas_spring_quadratic_stiffness": 39671.64,  # N/m²
-        "gas_spring_damping": 0.0,
-        "gas_spring_max_compression": 0.0675,  # 正常工作行程上限，保留末端 10%。
+        # 气弹簧：F(q) = F0 + k1*q + k2*q² - c*dq，q 为截断后的滑动关节位移（m）。
+        "gas_spring_preload_force": GAS_SPRING_PRELOAD_FORCE,
+        "gas_spring_stiffness": GAS_SPRING_STIFFNESS,
+        "gas_spring_quadratic_stiffness": GAS_SPRING_QUADRATIC_STIFFNESS,
+        "gas_spring_damping": GAS_SPRING_DAMPING,
+        "gas_spring_max_compression": GAS_SPRING_MAX_COMPRESSION,
         # 电机参数与动作映射。
         "joint_kp": 50.0,
         "joint_kd": 2.0,

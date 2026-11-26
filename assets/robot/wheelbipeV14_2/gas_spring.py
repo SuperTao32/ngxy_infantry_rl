@@ -1,0 +1,7 @@
+"""Nominal gas spring parameters for the wheelbipeV14_2 robot."""
+
+GAS_SPRING_PRELOAD_FORCE = 400.0  # N
+GAS_SPRING_STIFFNESS = 368.573  # N/m
+GAS_SPRING_QUADRATIC_STIFFNESS = 39671.64  # N/m²
+GAS_SPRING_DAMPING = 0.0  # N·s/m
+GAS_SPRING_MAX_COMPRESSION = 0.0675  # m

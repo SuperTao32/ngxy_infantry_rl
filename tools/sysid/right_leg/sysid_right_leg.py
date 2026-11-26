@@ -16,7 +16,7 @@ wheelbipeV14_2 右腿闭链机构的 MuJoCo 系统辨识脚本。
 - 从动关节的阻尼和摩擦参数保持 MJCF 中的定义。
 - 保留模型中的闭链等式约束。
 - right_leg.xml 仅包含右腿，基座已固定在 z=1 m。
-- 气弹簧执行器沿滑动关节轴向施加恒定 +420 N；CSV 无需记录气弹簧力。
+- 气弹簧由 MuJoCo 按滑动关节状态计算；CSV 无需记录气弹簧力。
 - 每条轨迹均从保存的悬空姿态开始，所有初始速度为零。
   CSV 中的 q/dq 是测量输出，不用于设置初始状态。
 """
@@ -38,8 +38,9 @@ from mujoco import sysid
 # ---------------------------------------------------------------------------
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(PROJECT_ROOT / "tools/sysid"))
-from filtering import lowpass
+sys.path.insert(0, str(PROJECT_ROOT))
+from tools.sysid.filtering import lowpass
+from tools.sysid.gas_spring import configure_gas_spring
 
 
 @dataclass(frozen=True)
@@ -100,10 +101,7 @@ ACTIVE_ACTUATORS = {
     "rear": "right_rear1_joint_ctrl",
 }
 
-# 气弹簧执行器的增益和传动比均为 1，因此 ctrl 表示力，单位为 N。
-# 正向力使气弹簧沿 right_spring2_joint 的轴向 (-1, 0, 0) 伸长。
-SPRING_ACTUATOR = "right_spring2_joint_ctrl"
-GAS_SPRING_FORCE = 420.0
+SPRING_JOINT = "right_spring2_joint"
 
 # ---------------------------------------------------------------------------
 # 辅助函数
@@ -212,12 +210,9 @@ def load_log(
     torque_rear = rear_torque_sign * lowpass(t, raw["torque_rear"], sample_rate_hz, filter_cutoff_hz)
 
     # 两个电机通道直接输入关节输出端力矩 [Nm]，不再进行电流换算。
-    # 气弹簧通道输入恒定力 [N]。
     ctrl = np.zeros((len(t), model.nu), dtype=float)
     ctrl[:, actuator_id(model, ACTIVE_ACTUATORS["front"])] = torque_front
     ctrl[:, actuator_id(model, ACTIVE_ACTUATORS["rear"])] = torque_rear
-
-    ctrl[:, actuator_id(model, SPRING_ACTUATOR)] = GAS_SPRING_FORCE
 
     control_ts = sysid.TimeSeries.from_control_names(t, ctrl, model)
 
@@ -334,13 +329,14 @@ def main(cfg: SysIDConfig = CFG):
     print(f"[model] SysID MJCF: {cfg.model}")
     spec = mujoco.MjSpec.from_file(str(cfg.model.resolve()))
     configure_torque_inputs(spec)
+    configure_gas_spring(spec, SPRING_JOINT)
     model = spec.compile()
 
     print(
         f"[model] nq={model.nq}, nv={model.nv}, nu={model.nu}, "
         f"neq={model.neq}, nsensordata={model.nsensordata}"
     )
-    print(f"[model] constant gas spring force: {GAS_SPRING_FORCE:g} N")
+    print(f"[model] nominal gas spring law on {SPRING_JOINT}")
     print("[model] 输入为关节输出端力矩 torque [Nm]")
 
     initial_state = make_initial_state(model, cfg.initial_state)

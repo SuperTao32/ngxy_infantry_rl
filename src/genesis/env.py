@@ -17,6 +17,14 @@ from genesis.vis.keybindings import Key, KeyAction, Keybind
 import torch
 from tensordict import TensorDict
 
+from assets.robot.wheelbipeV14_2.gas_spring import (
+    GAS_SPRING_DAMPING,
+    GAS_SPRING_MAX_COMPRESSION,
+    GAS_SPRING_PRELOAD_FORCE,
+    GAS_SPRING_QUADRATIC_STIFFNESS,
+    GAS_SPRING_STIFFNESS,
+)
+
 from .curriculum import CurriculumManager
 from .sensors.base_contact import BaseContactRegions
 from .robust.dynamics_randomization import DynamicsRandomizationManager, MOTOR_NAMES, SPRING_NAMES
@@ -115,11 +123,11 @@ class WheelLegInfantryEnv(LocomotionRewards, EnvironmentConfiguration):
 
         # 气弹簧配置
         self.spring_names = tuple(env_cfg.get("spring_names", ("left_spring2_joint", "right_spring2_joint")))
-        self.gas_spring_preload_force = float(env_cfg.get("gas_spring_preload_force", 400.0))
-        self.gas_spring_stiffness = float(env_cfg.get("gas_spring_stiffness", 368.573))
-        self.gas_spring_quadratic_stiffness = float(env_cfg.get("gas_spring_quadratic_stiffness", 39671.64))
-        self.gas_spring_damping = float(env_cfg.get("gas_spring_damping", 0.0))
-        self.gas_spring_max_compression = float(env_cfg.get("gas_spring_max_compression", 0.0675))
+        self.gas_spring_preload_force = float(env_cfg.get("gas_spring_preload_force", GAS_SPRING_PRELOAD_FORCE))
+        self.gas_spring_stiffness = float(env_cfg.get("gas_spring_stiffness", GAS_SPRING_STIFFNESS))
+        self.gas_spring_quadratic_stiffness = float(env_cfg.get("gas_spring_quadratic_stiffness", GAS_SPRING_QUADRATIC_STIFFNESS))
+        self.gas_spring_damping = float(env_cfg.get("gas_spring_damping", GAS_SPRING_DAMPING))
+        self.gas_spring_max_compression = float(env_cfg.get("gas_spring_max_compression", GAS_SPRING_MAX_COMPRESSION))
 
         # 接触判定和持续终止阈值
         self.wheel_contact_force_threshold = float(env_cfg.get("wheel_contact_force_threshold", 1.0))
