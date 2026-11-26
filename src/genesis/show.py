@@ -54,7 +54,7 @@ class SuspendedRobot:
         self.position_limits = list(zip(lo.tolist(), hi.tolist(), strict=True))
         self._set_gains(cfg, cfg["joint_names"], "joint")
         self._set_gains(cfg, cfg["wheel_names"], "wheel")
-        positions, _ = self.read()
+        positions, _, _ = self.read()
         self.initial_targets = tuple(
             (0, positions[index]) if name in cfg["joint_names"] else (1, 0.0)
             for name, index in zip(self.active_names, self.active_dofs, strict=True)
@@ -80,7 +80,12 @@ class SuspendedRobot:
 
     def read(self):
         # 物理线程发布整帧读数，界面只读取这个快照。
-        self.measured = (tuple(self.robot.get_dofs_position().tolist()), tuple(self.robot.get_dofs_velocity().tolist()))
+        spring_forces = self.robot.get_dofs_control_force(self.springs).tolist()
+        self.measured = (
+            tuple(self.robot.get_dofs_position().tolist()),
+            tuple(self.robot.get_dofs_velocity().tolist()),
+            dict(zip(self.springs, spring_forces, strict=True)),
+        )
         return self.measured
 
     def step(self):
@@ -110,16 +115,19 @@ class SuspendedRobot:
                 reset_scene()
             imgui.same_line()
             imgui.text("Ctrl+click to enter a target.")
-            q, dq = self.measured
+            q, dq, spring_forces = self.measured
             imgui.separator_text("Motors (targets in rad or rad/s)")
             self._draw_motors(imgui, q, dq)
             imgui.separator_text("Passive joints")
-            if _begin_table(imgui, "passive", ("Joint", "Position", "Converted")):
+            if _begin_table(imgui, "passive", ("Joint", "Position", "Converted", "Spring force (N)")):
                 for name, linear in self.passive:
-                    value = q[self.dofs[name]]
+                    index = self.dofs[name]
+                    value = q[index]
                     _cell(imgui, name)
                     _cell(imgui, f"{value:+.4f} {'m' if linear else 'rad'}")
                     _cell(imgui, f"{value * 1000:+.2f} mm" if linear else f"{math.degrees(value):+.2f} deg")
+                    force = spring_forces.get(index)
+                    _cell(imgui, f"{abs(force):.2f}" if force is not None else "")
                 imgui.end_table()
         imgui.end()
 

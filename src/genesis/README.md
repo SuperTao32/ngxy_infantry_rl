@@ -18,16 +18,16 @@ jump、terrain_cross 各自创建实例，不共享奖励 buffer 或回合累计
 
 ### 气弹簧
 
-默认使用 400 N 初始弹压力的拟合曲线：
-`F(q) = 400 + 368.573*q + 39671.64*q²`，力单位为 N，
-`q` 直接取 `left_spring2_joint` / `right_spring2_joint` 的实际位移（m）。
-拟合曲线的工作区间为 `0 ≤ q ≤ 0.0675 m`。计算拟合力时将位移截断到此区间，
-避免区间外外推曲线。机械关节限位使用 MJCF 中的定义，由物理求解器处理。
-区间端点的标称力分别为 400 N 和约 605.63 N。
+`q` 为 `left_spring2_joint` / `right_spring2_joint` 的滑动位移（m），
+实际压缩行程为 `s = 0.054 - q`。关节零位对应 54 mm 压缩行程，伸腿时 `q` 增大、`s` 减小。
+`s < 0` 时气弹簧力为 0 N。`s ≥ 0` 时取 `x = min(s, 0.0675)`，
+拟合力为 `F = 400 + 368.573*x + 39671.64*x²` N。
+关节零位的标称力约为 535.59 N，行程恰为 0 时为 400 N。
+机械关节限位由物理求解器按 MJCF 定义处理。
 
 配置中的 `gas_spring_preload_force`、`gas_spring_stiffness`、
 `gas_spring_quadratic_stiffness` 分别对应常数项、一次项和二次项；
-`gas_spring_damping` 默认 0，启用后额外叠加 `-c*dq`。
+`gas_spring_damping` 默认 0，启用后在 `s ≥ 0` 时额外叠加 `-c*dq`。
 域随机化支持上述四项，二次项倍率默认固定为 1。
 Genesis 训练/评估与 `tools/sysid/` 的左右腿辨识、悬空静置共用
 `assets/robot/wheelbipeV14_2/gas_spring.py` 中的标称参数。

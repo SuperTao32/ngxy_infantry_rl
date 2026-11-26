@@ -6,10 +6,11 @@
 - `friction_front`、`friction_rear`：前后主动关节的库仑摩擦。
 
 输入直接使用经过减速器后的关节输出端力矩 torque [Nm]，执行器增益为 1，
-保留 ±54 Nm 力矩限幅。气弹簧使用与 Genesis 共用的标称曲线
-`400 + 368.573*q + 39671.64*q² - c*dq` N，其中 `q` 取
-`right_spring2_joint` 位移并截断到 `[0, 0.0675]` m，`dq` 为实际速度，
-标称 `c = 0`。CSV 无需提供气弹簧数据。
+保留 ±54 Nm 力矩限幅。气弹簧的实际压缩行程为 `s = 0.054 - q` m，其中 `q` 为
+`right_spring2_joint` 位移。`s < 0` 时力为 0 N，其他情况下轴向力为
+`400 + 368.573*x + 39671.64*x² - c*dq` N，其中 `x = min(s, 0.0675)`，
+`dq` 为滑动速度，标称 `c = 0`。CSV 无需提供气弹簧数据。
+辨识导出的 XML 在 Python 中重新加载后，调用 `tools.sysid.gas_spring.enable_gas_springs(model)` 启用气弹簧。
 
 ## 模型与初态
 

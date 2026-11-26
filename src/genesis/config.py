@@ -111,7 +111,7 @@ def get_env_cfg() -> dict:
         "leg_upper_link_length": 0.21,
         "leg_lower_link_length": 0.25,
         "upper_links_min_angle": 0.5 * math.pi,
-        # 气弹簧：F(q) = F0 + k1*q + k2*q² - c*dq，q 为截断后的滑动关节位移（m）。
+        # 气弹簧：用 0.054 m 减去滑动关节位移得到压缩行程，由行程计算力。
         "gas_spring_preload_force": GAS_SPRING_PRELOAD_FORCE,
         "gas_spring_stiffness": GAS_SPRING_STIFFNESS,
         "gas_spring_quadratic_stiffness": GAS_SPRING_QUADRATIC_STIFFNESS,

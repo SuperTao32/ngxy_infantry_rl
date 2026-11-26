@@ -41,7 +41,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(PROJECT_ROOT))
 from tools.sysid.filtering import lowpass
 from tools.sysid.fit_curves import save_fit_curves
-from tools.sysid.gas_spring import configure_gas_spring
+from tools.sysid.gas_spring import build_model_with_gas_springs, configure_gas_spring
 
 
 @dataclass(frozen=True)
@@ -408,6 +408,7 @@ def main(cfg: SysIDConfig = CFG):
     n_threads = None if cfg.threads <= 0 else cfg.threads
     residual_kwargs = dict(
         models_sequences=[ms],
+        build_model=build_model_with_gas_springs,
         enabled_observations=enabled_observations,
         resample_true=True,
     )

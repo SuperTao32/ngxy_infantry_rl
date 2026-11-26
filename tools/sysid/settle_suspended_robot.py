@@ -25,7 +25,7 @@ import numpy as np
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
-from tools.sysid.gas_spring import configure_gas_spring
+from tools.sysid.gas_spring import configure_gas_spring, enable_gas_springs
 
 SPRING_JOINTS = ("left_spring2_joint", "right_spring2_joint")
 
@@ -52,7 +52,7 @@ def make_suspended_model(cfg: SettleConfig) -> mujoco.MjModel:
     spec.body("base_link").pos = cfg.base_pos
     for name in SPRING_JOINTS:
         configure_gas_spring(spec, name)
-    model = spec.compile()
+    model = enable_gas_springs(spec.compile())
 
     # 导出格式针对当前模型的一维转动/滑动关节。
     scalar_types = [mujoco.mjtJoint.mjJNT_HINGE, mujoco.mjtJoint.mjJNT_SLIDE]

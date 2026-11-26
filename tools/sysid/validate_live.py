@@ -88,6 +88,11 @@ def load_models(target, path):
 
     original = spec.compile()
     identified = sysid.apply_param_modifiers_spec(params, spec).compile()
+    if target != "wheels":
+        from tools.sysid.gas_spring import enable_gas_springs
+
+        enable_gas_springs(original)
+        enable_gas_springs(identified)
     state = None if target == "wheels" else module.make_initial_state(original, cfg.initial_state)
     responses = tuple(
         ModelResponse(model, [joints[c] for c in channels], [actuators[c] for c in channels], state)

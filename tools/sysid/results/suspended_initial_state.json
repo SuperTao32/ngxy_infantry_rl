@@ -1,126 +1,126 @@
 {
-  "model": "/home/tuyuantao/ngxy_infantry_rl/assets/robot/wheelbipeV14_2/mjcf/wheelbipeV14_2.xml",
+  "model": "/home/tt/workspace/ngxy_infantry_rl/assets/robot/wheelbipeV14_2/mjcf/wheelbipeV14_2.xml",
   "base_pos": [
     0.0,
     0.0,
     1.0
   ],
   "gas_spring_force_N_at_settle": {
-    "left_spring2_joint": 518.5317806664623,
-    "right_spring2_joint": 518.5206594677858
+    "left_spring2_joint": 403.64182637666187,
+    "right_spring2_joint": 403.6437699485483
   },
-  "settled_time_s": 26.457999999996215,
+  "settled_time_s": 16.930000000001495,
   "velocity_tol": 0.001,
   "accel_tol": 0.001,
   "hold_time_s": 1.0,
-  "max_velocity_before_zero": 0.000914437139747088,
-  "max_acceleration": 8.185460412506645e-05,
-  "max_equality_error_m": 0.0005384835237453034,
+  "max_velocity_before_zero": 0.000915199976002761,
+  "max_acceleration": 8.116625986967957e-05,
+  "max_equality_error_m": 0.00041518426881981263,
   "joints": {
     "left_front1_joint": {
-      "q": 0.6371407450561314,
+      "q": 0.6091863707528689,
       "dq": 0.0,
       "unit": "rad",
       "limit_violation": 0.0
     },
     "left_front2_joint": {
-      "q": -1.168472091769502,
+      "q": -1.132981048535506,
       "dq": 0.0,
       "unit": "rad",
-      "limit_violation": 0.16847209176950195
+      "limit_violation": 0.13298104853550607
     },
     "left_front3_joint": {
-      "q": 0.6918566385795567,
+      "q": 0.6613570829788298,
       "dq": 0.0,
       "unit": "rad",
       "limit_violation": 0.0
     },
     "left_front4_joint": {
-      "q": -1.1779668187998937,
+      "q": -1.1399183217370374,
       "dq": 0.0,
       "unit": "rad",
       "limit_violation": 0.0
     },
     "left_rear1_joint": {
-      "q": -1.0120162211839474,
+      "q": -0.9984909462093949,
       "dq": 0.0,
       "unit": "rad",
       "limit_violation": 0.0
     },
     "left_rear2_joint": {
-      "q": 1.1883583668621922,
+      "q": 1.1481516317163714,
       "dq": 0.0,
       "unit": "rad",
       "limit_violation": 0.0
     },
     "left_wheel_joint": {
-      "q": 0.014406554617869188,
+      "q": 0.012173493060432071,
       "dq": 0.0,
       "unit": "rad",
       "limit_violation": 0.0
     },
     "left_spring1_joint": {
-      "q": -0.16873402899369006,
+      "q": -0.1695506748870813,
       "dq": 0.0,
       "unit": "rad",
       "limit_violation": 0.0
     },
     "left_spring2_joint": {
-      "q": 0.05021270565416434,
+      "q": 0.04799738458463138,
       "dq": 0.0,
       "unit": "m",
       "limit_violation": 0.0
     },
     "right_front1_joint": {
-      "q": 0.637498233777762,
+      "q": 0.6097275792396946,
       "dq": 0.0,
       "unit": "rad",
       "limit_violation": 0.0
     },
     "right_front2_joint": {
-      "q": -1.1684235942864138,
+      "q": -1.132937048305589,
       "dq": 0.0,
       "unit": "rad",
-      "limit_violation": 0.16842359428641385
+      "limit_violation": 0.13293704830558895
     },
     "right_front3_joint": {
-      "q": 0.6918150166764365,
+      "q": 0.6613195149619722,
       "dq": 0.0,
       "unit": "rad",
       "limit_violation": 0.0
     },
     "right_front4_joint": {
-      "q": -1.1779151775994283,
+      "q": -1.1398716791784986,
       "dq": 0.0,
       "unit": "rad",
       "limit_violation": 0.0
     },
     "right_rear1_joint": {
-      "q": -1.0116022340323916,
+      "q": -0.997898301327604,
       "dq": 0.0,
       "unit": "rad",
       "limit_violation": 0.0
     },
     "right_rear2_joint": {
-      "q": 1.1883042218746915,
+      "q": 1.1481024869288212,
       "dq": 0.0,
       "unit": "rad",
       "limit_violation": 0.0
     },
     "right_wheel_joint": {
-      "q": 0.01902945773564038,
+      "q": 0.01548061238456598,
       "dq": 0.0,
       "unit": "rad",
       "limit_violation": 0.0
     },
     "right_spring1_joint": {
-      "q": -0.1687344676970609,
+      "q": -0.16955056722724707,
       "dq": 0.0,
       "unit": "rad",
       "limit_violation": 0.0
     },
     "right_spring2_joint": {
-      "q": 0.05021015053251079,
+      "q": 0.047995084312954114,
       "dq": 0.0,
       "unit": "m",
       "limit_violation": 0.0
