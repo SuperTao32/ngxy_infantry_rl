@@ -27,10 +27,10 @@ CRC 覆盖偏移 1～29（`txbuf + 1`，`data_len + 1 = 29` 字节），
 CRC 初值固定为 `soft_crc_Init()` 中使用的 0xFFFF。
 用提供的 C 实现交叉验证：`123456789` 的 CRC 为 0x6F91。
 
-在项目根目录安装 `pyserial`，再用 `--target` 选择本次采集对象。
+在项目根目录运行 `uv sync` 安装项目依赖，再用 `--target` 选择本次采集对象。
 
 ```bash
-uv pip install pyserial
+uv sync
 .venv/bin/python tools/sysid/record_serial.py --target left_leg --port /dev/ttyUSB0
 .venv/bin/python tools/sysid/record_serial.py --target right_leg --port /dev/ttyUSB0
 .venv/bin/python tools/sysid/record_serial.py --target wheels --port /dev/ttyUSB0
@@ -63,3 +63,40 @@ uv pip install pyserial
 500 Hz × 33 字节 = 16500 字节/秒，8N1 至少需要 165000 波特率；
 建议使用 230400 或更高，默认 921600，并与固件保持一致。
 500 Hz 由固件每 2 ms 发送一次保证，接收端不主动限速。
+
+## 查看离线辨识的拟合曲线
+
+将采集结果填入对应辨识脚本的 `CFG.data`，并按采集频率设置 `CFG.sample_rate_hz`。
+例如，用 `record_serial.py` 采集的双轮 CSV 对应 500 Hz，配置后运行：
+
+```bash
+.venv/bin/python tools/sysid/wheels/sysid_wheels.py
+```
+
+每条输入 CSV 会在 `tools/sysid/results/<target>/` 下生成一张 `fit_curves_*.png`，
+终端会打印图像路径。图中叠加参与拟合的实测曲线、初始参数的仿真曲线和拟合后参数的仿真曲线。
+左右腿图包含前后关节的角度和角速度，双轮图包含左右轮角速度。
+
+## 实时验证辨识参数
+
+先运行相应的辨识脚本生成 `identified_params.npz`，按辨识时的悬空工况准备实车。
+在电机开始动作前打开实时验证窗口。串口由一个进程独占，先退出同一串口上的采集程序。
+
+```bash
+uv sync
+.venv/bin/python -m tools.sysid.validate_live --target left_leg --port /dev/ttyUSB0
+```
+
+`--target` 支持 `left_leg`、`right_leg`、`wheels`，须与固件正在发送的对象一致。
+默认从对应辨识脚本的输出目录加载参数，也可通过 `--params /path/to/identified_params.npz` 指定。
+串口沿用采集工具的 921600 波特率、CRC 和默认 28 字节数据区。用 `--baud` 调整波特率，
+用 `--window` 调整滚动窗口的秒数，默认 8 秒。关闭图窗退出。
+
+图中叠加实测、原始 MJCF 和辨识后的角度及速度，下方显示送入两个模型的同一组力矩。
+工具从串口接收数据。它沿用辨识脚本的力矩方向、模型约束和初态规则。
+腿从悬空快照和零速度开始，气弹簧使用与左右腿离线辨识共用的标称曲线。轮从首帧角度和零转速开始，连续轮角用 rad。
+后续实测角度和速度用于比较，仿真状态按实测力矩独立推进。横轴按 MCU 时间对齐，
+每个间隔保持上一帧力矩，在线曲线直接使用串口数据。
+MCU 时间回退或相邻有效帧间隔超过 100 ms 时开始新段，清空曲线并重置仿真；
+通过 `--max-gap-ms` 可调整间隔阈值。采集前让实车处于对应的初始姿态并静止，
+可以减少初始条件差异对比较的影响。

@@ -40,6 +40,7 @@ from mujoco import sysid
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(PROJECT_ROOT))
 from tools.sysid.filtering import lowpass
+from tools.sysid.fit_curves import save_fit_curves
 from tools.sysid.gas_spring import configure_gas_spring
 
 
@@ -434,6 +435,7 @@ def main(cfg: SysIDConfig = CFG):
             for name, p in opt_params.parameters.items()
         },
     )
+    save_fit_curves(cfg.out, ms, residual_fn, params, opt_params)
     print(f"\n[done] results saved to: {cfg.out}")
 
 

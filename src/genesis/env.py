@@ -32,6 +32,7 @@ from .robust.randomization_config import normalize_randomization_config
 from .robust.sensor_randomization import SensorRandomizationManager
 from .robust.wheel_slip import WheelSlipRandomizer
 from .sensors.tof import GenesisToF, ToFHistory, ToFSamplingClock, resolve_tof_cfg
+from .utils.gas_spring import gas_spring_force
 from .utils.kinematics import compute_leg_angle, compute_leg_length, constrain_leg_targets
 from .utils.tensor_utils import as_gain_tensor, as_range_tensors
 from .terrains.manager import TerrainManager
@@ -985,12 +986,14 @@ class WheelLegInfantryEnv(LocomotionRewards, EnvironmentConfiguration):
         """以实际滑动关节位移（m）计算二次拟合力，工作区间外保持边界值。"""
         spring_pos = self.robot.get_dofs_position(self.springs_dof_idx)
         spring_vel = self.robot.get_dofs_velocity(self.springs_dof_idx)
-        q = torch.clamp(spring_pos, 0.0, self.gas_spring_max_compression)
-        force = (
-            self.gas_spring_preload_force
-            + self.gas_spring_stiffness * q
-            + self.gas_spring_quadratic_stiffness * q.square()
-            - self.gas_spring_damping * spring_vel
+        force = gas_spring_force(
+            spring_pos,
+            spring_vel,
+            preload_force=self.gas_spring_preload_force,
+            stiffness=self.gas_spring_stiffness,
+            quadratic_stiffness=self.gas_spring_quadratic_stiffness,
+            damping=self.gas_spring_damping,
+            max_compression=self.gas_spring_max_compression,
         )
         self.gas_spring_force.copy_(force)
         self.robot.control_dofs_force(force, self.springs_dof_idx)

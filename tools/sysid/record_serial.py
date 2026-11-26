@@ -11,6 +11,9 @@ import time
 
 PAYLOAD = struct.Struct("<I6f")
 DEFAULT_DATA_LEN = PAYLOAD.size
+DEFAULT_PORT = "/dev/ttyUSB0"
+DEFAULT_BAUD = 921600
+SAMPLE_RATE_HZ = 500
 LEG_CHANNELS = ("front", "rear")
 TARGET_CHANNELS = {
     "left_leg": LEG_CHANNELS,
@@ -36,16 +39,13 @@ def crc16_firmware(data):
     return crc
 
 
-class CsvRecorder:
-    def __init__(self, output, data_len=DEFAULT_DATA_LEN, *, channels=LEG_CHANNELS):
+class FrameDecoder:
+    """Incremental decoder for the SysID wire protocol."""
+
+    def __init__(self, on_frame, data_len=DEFAULT_DATA_LEN):
+        self.on_frame = on_frame
         self.payload = payload_for_length(data_len)
         self.frame_size = data_len + 5
-        if data_len == DEFAULT_DATA_LEN:
-            columns = [f"{quantity}_{channel}" for quantity in ("torque", "q", "dq") for channel in channels]
-        else:
-            columns = [f"value_{i}" for i in range(data_len // 4 - 1)]
-        self.writer = csv.writer(output)
-        self.writer.writerow(["time", *columns])
         self.header = b"s" + bytes([data_len])
         self.pending = bytearray()
         self.rows = 0
@@ -96,15 +96,32 @@ class CsvRecorder:
             if not all(math.isfinite(value) for value in values):
                 self.invalid_values += 1
                 continue
-            # 毫秒转秒，保留 MCU 时间戳，不重采样、不滤波。
-            self.writer.writerow([f"{time_ms // 1000}.{time_ms % 1000:03d}", *values])
+            self.on_frame(time_ms, values)
             self.rows += 1
 
-    def status(self):
-        return (f"保存 {self.rows} 帧，CRC 错误 {self.crc_errors}，"
+    def status(self, verb="接收"):
+        return (f"{verb} {self.rows} 帧，CRC 错误 {self.crc_errors}，"
                 f"帧尾错误 {self.trailer_errors}，"
                 f"非法数值 {self.invalid_values}，丢弃 {self.discarded_bytes} 字节，"
                 f"时间回退 {self.timestamp_backtracks}")
+
+
+class CsvRecorder(FrameDecoder):
+    def __init__(self, output, data_len=DEFAULT_DATA_LEN, *, channels=LEG_CHANNELS):
+        super().__init__(self.write_frame, data_len)
+        if data_len == DEFAULT_DATA_LEN:
+            columns = [f"{quantity}_{channel}" for quantity in ("torque", "q", "dq") for channel in channels]
+        else:
+            columns = [f"value_{i}" for i in range(data_len // 4 - 1)]
+        self.writer = csv.writer(output)
+        self.writer.writerow(["time", *columns])
+
+    def write_frame(self, time_ms, values):
+        # 毫秒转秒，保留 MCU 时间戳，不重采样、不滤波。
+        self.writer.writerow([f"{time_ms // 1000}.{time_ms % 1000:03d}", *values])
+
+    def status(self):
+        return super().status("保存")
 
 
 def receive(port, output, recorder):
@@ -127,8 +144,8 @@ def receive(port, output, recorder):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--target", choices=TARGET_CHANNELS, help="采集对象，决定默认文件名前缀和 28 字节格式的 CSV 表头")
-    parser.add_argument("--port", default="/dev/ttyUSB0", help="串口，例如 /dev/ttyUSB0 或 COM3")
-    parser.add_argument("--baud", type=int, default=921600, help="波特率，默认 921600")
+    parser.add_argument("--port", default=DEFAULT_PORT, help="串口，例如 /dev/ttyUSB0 或 COM3")
+    parser.add_argument("--baud", type=int, default=DEFAULT_BAUD, help="波特率，默认 921600")
     parser.add_argument("--data-len", type=int, default=DEFAULT_DATA_LEN, help="固件 config.data_len，默认 28；数据为 uint32 时间戳 + float 数组")
     parser.add_argument("--out", type=Path, help="输出 CSV 路径，默认写入 logs/sysid/采集对象_日期_时间.csv")
     args = parser.parse_args()
@@ -143,12 +160,12 @@ def main():
     except ValueError as exc:
         parser.error(str(exc))
     frame_size = args.data_len + 5
-    if args.baud < frame_size * 500 * 10:
-        parser.error(f"500 Hz、{frame_size} 字节帧、8N1 至少需要 {frame_size * 500 * 10} 波特率")
+    if args.baud < frame_size * SAMPLE_RATE_HZ * 10:
+        parser.error(f"500 Hz、{frame_size} 字节帧、8N1 至少需要 {frame_size * SAMPLE_RATE_HZ * 10} 波特率")
     try:
         import serial
     except ImportError:
-        parser.exit(1, "缺少 pyserial，请先运行：uv pip install pyserial\n")
+        parser.exit(1, "缺少 pyserial，请在项目根目录运行 uv sync。\n")
     try:
         out.parent.mkdir(parents=True, exist_ok=True)
         with out.open("x", newline="", encoding="utf-8", buffering=65536) as output:

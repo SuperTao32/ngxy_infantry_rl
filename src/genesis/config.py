@@ -394,12 +394,12 @@ def get_curriculum_cfg() -> dict:
                 "name": "jump",
                 "start_iteration": 4000,
                 "targets": {
-                    "jump": {"probability": 0.20},
+                    "jump": {"probability": 0.25},
                 },
             },
             {
                 "name": "terrain_cross",
-                "start_iteration": 7000,
+                "start_iteration": 8000,
                 "targets": {
                     "tof": {"enabled": True},
                     "terrain_weights": {"plane": 0.6, "stairs": 0.1, "slope_down": 0.1, "slope_up": 0.1, "square_wave": 0.1},
@@ -407,7 +407,7 @@ def get_curriculum_cfg() -> dict:
             },
             {
                 "name": "terrain_cross_2",
-                "start_iteration": 7500,
+                "start_iteration": 8500,
                 "targets": {
                     "tof": {"enabled": True},
                     "terrain_weights": {
@@ -423,7 +423,7 @@ def get_curriculum_cfg() -> dict:
             },
             {
                 "name": "terrain_cross_3",
-                "start_iteration": 8000,
+                "start_iteration": 9000,
                 "targets": {
                     "tof": {"enabled": True},
                     "terrain_weights": {

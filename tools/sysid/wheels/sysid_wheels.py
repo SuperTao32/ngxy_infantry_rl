@@ -23,6 +23,7 @@ import numpy as np
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(PROJECT_ROOT / "tools/sysid"))
 from filtering import lowpass
+from fit_curves import save_fit_curves
 WHEEL_JOINTS = {side: f"{side}_wheel_joint" for side in ("left", "right")}
 WHEEL_ACTUATORS = {side: f"{joint}_ctrl" for side, joint in WHEEL_JOINTS.items()}
 OBSERVATIONS = [
@@ -229,6 +230,7 @@ def main(cfg: SysIDConfig = CFG) -> None:
     })
     for name, parameter in opt_params.parameters.items():
         print(f"  {name:20s} = {float(parameter.value[0]):.9g}")
+    save_fit_curves(cfg.out, sequences, residual_fn, params, opt_params)
     print(f"[done] {cfg.out}")
 
 

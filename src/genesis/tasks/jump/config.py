@@ -40,7 +40,7 @@ def get_reward_cfg():
             "leg_symmetry": -10.0,
             "leg_symmetry_bonus": 10.0,
             "tracking_lin_vel": 10.0,
-            "tracking_ang_vel": 10.0,
+            "tracking_ang_vel": 20.0,
             "joint_vel": -0.005,
             "airborne_wheel_vel": -0.05,
             "wheel_action_rate": -1.0,
@@ -67,7 +67,7 @@ def get_reward_cfg():
             "landing_vertical_velocity": 0.0,
             "landing_base_acceleration": -0.01,  # 三轴加速度平方和；100 m/s² 持续一拍扣 1。
             "soft_landing": 0.0,
-            "landing_stability": 1000.0,
+            "landing_stability": 100.0,
             "landing_airborne": -10.0,  # 首次触地后，任一轮仍未着地即逐步惩罚。
             # 任务结果
             "death": -100.0,
